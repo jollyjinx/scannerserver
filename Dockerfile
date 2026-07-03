@@ -52,16 +52,14 @@ RUN mkdir -p /app/sane.d /scans /home/scansnap \
 
 COPY --from=scansnap_wifi_build /usr/local/bin/scansnap-wifi /usr/local/bin/scansnap-wifi
 COPY app.py /app/app.py
-COPY config/topics.json /app/config/topics.json
 COPY scripts/entrypoint.sh /usr/local/bin/scansnap-entrypoint
 COPY scripts/scan_once.sh /usr/local/bin/scan-once
 COPY scripts/ocr_scan.sh /usr/local/bin/ocr-scan
 COPY scripts/scansnap_button_arm.py /usr/local/bin/scansnap-button-arm
 COPY scripts/list_devices.sh /usr/local/bin/list-scanners
-COPY scripts/classify_scan.py /usr/local/bin/classify-scan
 COPY scripts/set_pdf_creator.py /usr/local/bin/set-pdf-creator
 
-RUN chmod +x /usr/local/bin/scansnap-entrypoint /usr/local/bin/scan-once /usr/local/bin/ocr-scan /usr/local/bin/scansnap-button-arm /usr/local/bin/list-scanners /usr/local/bin/classify-scan /usr/local/bin/set-pdf-creator
+RUN chmod +x /usr/local/bin/scansnap-entrypoint /usr/local/bin/scan-once /usr/local/bin/ocr-scan /usr/local/bin/scansnap-button-arm /usr/local/bin/list-scanners /usr/local/bin/set-pdf-creator
 
 EXPOSE 8080
 EXPOSE 80

@@ -99,9 +99,6 @@ PAGE = """
         <label>OCR language
           <input name="SCAN_LANGUAGE" value="{{ defaults.SCAN_LANGUAGE }}">
         </label>
-        <label>Topic override
-          <input name="SCAN_TOPIC" value="" placeholder="automatic">
-        </label>
         <button {% if last_job.status == "running" %}disabled{% endif %}>Start scan</button>
       </form>
     </section>
@@ -127,7 +124,7 @@ PAGE = """
         {% for file in files %}
         <li class="file-row">
           <a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
-          <span class="file-kind">{{ "source scan" if file.name.endswith(".scan.pdf") else "OCR PDF" }}</span>
+          <span class="file-kind">{{ "OCR PDF" if file.name.endswith(".ocr.pdf") else "source scan" }}</span>
           <form class="delete-form" method="post" action="{{ url_for('delete_file', name=file.name) }}">
             <button class="delete-button" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
           </form>
@@ -405,7 +402,7 @@ def scan():
     if job_lock.locked():
         return redirect(url_for("index"))
 
-    allowed = {"SCAN_LANGUAGE", "SCAN_RESOLUTION", "SCAN_MODE", "SCAN_SOURCE", "SCAN_TOPIC"}
+    allowed = {"SCAN_LANGUAGE", "SCAN_RESOLUTION", "SCAN_MODE", "SCAN_SOURCE"}
     env_overrides = {
         key: request.form[key]
         for key in allowed

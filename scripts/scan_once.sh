@@ -9,34 +9,19 @@ source="${SCAN_SOURCE:-ADF Duplex}"
 format="${SCAN_FORMAT:-pdf}"
 backend="${SCAN_BACKEND:-sane}"
 device="${SCAN_DEVICE:-}"
-topic="${SCAN_TOPIC:-}"
-topic_rules="${SCAN_TOPIC_RULES:-/app/config/topics.json}"
-fallback_topic="${SCAN_FALLBACK_TOPIC:-Unsortiert Scan}"
-scan_date="${SCAN_DATE:-$(date +%Y--%m--%d)}"
 scanner_ip="${SCANNER_IP:-}"
 pairing_key="${SCAN_PAIRING_KEY:-${SCANSNAP_PAIRING_KEY:-}}"
 client_ip="${SCANSNAP_CLIENT_IP:-}"
 simplex="${SCAN_SIMPLEX:-false}"
 wifi_debug="${SCAN_WIFI_DEBUG:-false}"
 
-timestamp="$(date +%Y%m%d-%H%M%S)"
+scan_timestamp="${SCAN_TIMESTAMP:-$(date +%Y-%m-%d.%H%M%S)}"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
 mkdir -p "$output_dir"
 
 raw_pdf="$workdir/raw.pdf"
-
-unique_raw_path() {
-  local base="$output_dir/$scan_date.Scan $timestamp.scan.pdf"
-  local candidate="$base"
-  local counter=2
-  while [[ -e "$candidate" ]]; do
-    candidate="$output_dir/$scan_date.Scan $timestamp.$counter.scan.pdf"
-    counter=$((counter + 1))
-  done
-  printf '%s\n' "$candidate"
-}
 
 case "$backend" in
   sane)
@@ -94,11 +79,15 @@ esac
 case "$format" in
   pdf)
     set-pdf-creator "$raw_pdf" --creator "${SCAN_RAW_PDF_CREATOR:-ScanSnap}"
-    final_path="$(unique_raw_path)"
+    final_path="$output_dir/$scan_timestamp.pdf"
+    if [[ -e "$final_path" ]]; then
+      echo "Output file already exists: $final_path" >&2
+      exit 73
+    fi
     mv "$raw_pdf" "$final_path"
     ;;
   image|images)
-    final_path="$output_dir/scan-$timestamp"
+    final_path="$output_dir/scan-$scan_timestamp"
     mkdir -p "$final_path"
     cp "${pages[@]}" "$final_path/"
     ;;
