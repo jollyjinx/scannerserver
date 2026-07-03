@@ -1,0 +1,37 @@
+[
+  {
+    "topic": "TfK Rechnung Wasserwerk",
+    "patterns": [
+      "(gemeinde|gemeine)\\s+taufkirchen",
+      "wasserwerk"
+    ]
+  },
+  {
+    "topic": "SWM Rechnung Strom",
+    "patterns": [
+      "(stadtwerke\\s+muenchen|stadtwerke\\s+munchen|stadtwerke\\s+münchen|\\bswm\\b)",
+      "(stromrechnung|\\bstrom\\b)"
+    ]
+  },
+  {
+    "topic": "EWS Rechnung Strom",
+    "patterns": [
+      "(energiewerke\\s+schoenau|energiewerke\\s+schonau|energiewerke\\s+schönau|\\bews\\b)",
+      "\\bstrom\\b"
+    ]
+  },
+  {
+    "topic": "Bayer Rechnung Malerarbeiten",
+    "patterns": [
+      "(malermeister\\s+bayer|\\bbayer\\b)",
+      "(malerarbeiten|rechnung)"
+    ]
+  },
+  {
+    "topic": "Platanenverein Protokoll",
+    "patterns": [
+      "platanenverein",
+      "protokoll"
+    ]
+  }
+]

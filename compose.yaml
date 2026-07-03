@@ -1,0 +1,22 @@
+services:
+  scansnap:
+    build: .
+    image: scansnap-linux:latest
+    container_name: scansnap-linux
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      SCAN_OUTPUT_DIR: /scans
+      SCAN_LANGUAGE: deu+eng
+      SCAN_RESOLUTION: "300"
+      SCAN_MODE: Color
+      SCAN_SOURCE: ADF Duplex
+      SCAN_FORMAT: pdf
+      TZ: Europe/Berlin
+      # Optional: bypass multicast discovery if needed.
+      # Find the scanner URL with: container compose run --rm scansnap scanimage -L
+      # SCANNER_NAME: ScanSnap iX500
+      # SCANNER_URL: http://192.168.1.50/eSCL
+      # SCANNER_PROTOCOL: escl
+    volumes:
+      - ./scans:/scans
