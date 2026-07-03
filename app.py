@@ -1,6 +1,8 @@
 import os
+import socket
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +19,8 @@ last_job = {
     "output": "",
     "error": "",
 }
+last_scan_completed_at = 0.0
+last_button_started_at = 0.0
 
 
 PAGE = """
@@ -151,9 +155,9 @@ def list_devices():
     return text or "No scanners found."
 
 
-def run_scan(env_overrides):
-    global last_job
-    with job_lock:
+def run_scan_locked(env_overrides):
+    global last_job, last_scan_completed_at
+    try:
         last_job = {
             "started": datetime.now().isoformat(timespec="seconds"),
             "finished": None,
@@ -177,6 +181,106 @@ def run_scan(env_overrides):
             "output": result.stdout.strip(),
             "error": result.stderr.strip(),
         }
+        last_scan_completed_at = time.monotonic()
+    finally:
+        job_lock.release()
+
+
+def start_scan_thread(env_overrides=None):
+    if not job_lock.acquire(blocking=False):
+        return False
+    thread = threading.Thread(target=run_scan_locked, args=(env_overrides or {},), daemon=True)
+    thread.start()
+    return True
+
+
+def is_button_notice(data):
+    return len(data) >= 12 and data[4:8] == b"VENS"
+
+
+def arm_button_client():
+    try:
+        result = subprocess.run(
+            ["scansnap-button-arm"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS", "45")),
+            env=os.environ.copy(),
+        )
+    except Exception as exc:
+        print(f"ScanSnap button arming failed: {exc}", flush=True)
+        return False
+
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout).strip()
+        print(f"ScanSnap button arming failed ({result.returncode}): {details}", flush=True)
+        return False
+
+    details = result.stdout.strip()
+    print(details or "ScanSnap button client armed", flush=True)
+    return True
+
+
+def button_listener():
+    global last_button_started_at
+    scanner_ip = os.environ.get("SCANNER_IP", "")
+    port = int(os.environ.get("SCANSNAP_BUTTON_PORT", "55265"))
+    debounce_seconds = float(os.environ.get("SCANSNAP_BUTTON_DEBOUNCE_SECONDS", "3"))
+    cooldown_seconds = float(os.environ.get("SCANSNAP_BUTTON_COOLDOWN_SECONDS", "10"))
+    arm_interval = float(
+        os.environ.get(
+            "SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS",
+            os.environ.get("SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS", "60"),
+        )
+    )
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", port))
+    sock.settimeout(1.0)
+    print(f"Listening for ScanSnap button notices on UDP {port}", flush=True)
+
+    arm_button_client()
+    next_arm_at = time.monotonic() + arm_interval
+
+    while True:
+        now = time.monotonic()
+        if now >= next_arm_at and not job_lock.locked():
+            arm_button_client()
+            next_arm_at = time.monotonic() + arm_interval
+
+        try:
+            data, address = sock.recvfrom(2048)
+        except socket.timeout:
+            continue
+
+        source_ip = address[0]
+        if scanner_ip and source_ip != scanner_ip:
+            continue
+        if not is_button_notice(data):
+            continue
+
+        now = time.monotonic()
+        if now - last_button_started_at < debounce_seconds:
+            continue
+        if now - last_scan_completed_at < cooldown_seconds:
+            continue
+        if job_lock.locked():
+            continue
+
+        last_button_started_at = now
+        if start_scan_thread({"SCAN_TRIGGER": "button"}):
+            print(f"Started scan from scanner button notice from {source_ip}", flush=True)
+
+
+def maybe_start_button_listener():
+    if os.environ.get("SCAN_BACKEND") != "wifi":
+        return
+    if os.environ.get("SCANSNAP_BUTTON_SCAN_ENABLED", "true").lower() not in {"1", "true", "yes", "on"}:
+        return
+    thread = threading.Thread(target=button_listener, daemon=True)
+    thread.start()
 
 
 @app.get("/")
@@ -207,8 +311,7 @@ def scan():
         for key in allowed
         if key in request.form and request.form[key].strip()
     }
-    thread = threading.Thread(target=run_scan, args=(env_overrides,), daemon=True)
-    thread.start()
+    start_scan_thread(env_overrides)
     return redirect(url_for("index"))
 
 
@@ -229,4 +332,5 @@ def delete_file(name):
 
 
 if __name__ == "__main__":
+    maybe_start_button_listener()
     app.run(host="0.0.0.0", port=int(os.environ.get("WEB_PORT", "8080")))

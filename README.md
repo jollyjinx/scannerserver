@@ -50,6 +50,7 @@ Scanner IP:   10.112.10.11
 Scanner name: iX500-AWRHC08122
 Scanner MAC:  84:25:3f:16:6e:a0
 Client IP:    10.112.10.6
+Client MAC:   da:e0:c0:24:d4:f8
 Protocol:     ScanSnap/VENS Wi-Fi protocol
 ```
 
@@ -76,6 +77,8 @@ http://RASPBERRY_PI_IP/
 ```
 
 Start a scan from the web page. Finished searchable PDFs appear in `./scans`. The web page also lets you download or delete files already on the server.
+
+The scanner's physical scan button is also supported. The container actively arms itself with the scanner by registering over UDP `52217`, completing the TCP `53219` pairing handshake, and running the short TCP `53218` init sequence observed in the working macOS client. It then listens for ScanSnap button notices on UDP `55265`; when a notice arrives from `SCANNER_IP`, it starts the same `scan-once` workflow used by the web button.
 
 For the installed Pi layout where this repo is in `/home/ubuntu/plt/scansnap` and the compose file is `/home/ubuntu/plt/docker-compose.yaml`, use [deploy/raspberry-pi/docker-compose.yaml](deploy/raspberry-pi/docker-compose.yaml) as the compose file. It pins the scanner to:
 
@@ -108,6 +111,8 @@ container compose up -d --build
 The container runs as `${UID:-1000}:${GID:-1000}`. On the Pi this matches the `ubuntu` user, so PDFs written to `/home/ubuntu/plt/scans` are not owned by root.
 
 The web app listens on port `80` through `WEB_PORT=80`. The image grants Python only `cap_net_bind_service`, so the app can bind port 80 while still running as the unprivileged `1000:1000` user.
+
+The button listener also runs in the same non-root app process. UDP `55265` is above the privileged port range, so it does not require extra capabilities.
 
 ## Check scanner access
 
@@ -148,6 +153,15 @@ Common settings are environment variables:
 | `SCANNER_IP` | `10.112.10.11` | Scanner IP for `SCAN_BACKEND=wifi` |
 | `SCANSNAP_PAIRING_KEY` | empty | Required secret for `SCAN_BACKEND=wifi` |
 | `SCANSNAP_CLIENT_IP` | empty | Optional client IP override, useful with macvlan |
+| `SCANSNAP_BUTTON_SCAN_ENABLED` | `true` | Listen for physical scanner button notices |
+| `SCANSNAP_BUTTON_PORT` | `55265` | UDP port used by ScanSnap button notices |
+| `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` | `60` | How often to repeat the active button arming sequence while idle |
+| `SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS` | `45` | Timeout for one button arming attempt |
+| `SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS` | empty | Legacy fallback for `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` |
+| `SCANSNAP_REGISTRATION_SOURCE_PORT` | `55264` | UDP source port used for client registration |
+| `SCANSNAP_REGISTRATION_PORT` | `52217` | Scanner UDP registration port |
+| `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
+| `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `10` | Ignore button notices shortly after a scan finishes |
 | `SCAN_SIMPLEX` | `false` | Set `true` to discard back pages with the Wi-Fi backend |
 | `SCAN_DEVICE` | empty | Optional exact SANE device name |
 | `SCAN_FORMAT` | `pdf` | `pdf` or `images` |
@@ -165,7 +179,9 @@ Then update `SCAN_SOURCE` in `compose.yaml`.
 
 ## Network mode
 
-The Raspberry Pi deployment uses the existing `aservice1010` macvlan network and assigns the container `10.112.10.6`. The scanner is fixed at `10.112.10.11`.
+The Raspberry Pi deployment uses the existing `aservice1010` macvlan network and assigns the container `10.112.10.6`. The scanner is fixed at `10.112.10.11`. The Pi compose file also pins the container MAC to `da:e0:c0:24:d4:f8`, which is the client MAC observed in the known-good ScanSnap capture.
+
+The first ScanSnap button notice capture showed the client registering from UDP `55264` to scanner UDP `52217`, then the scanner sending three identical UDP packets to `10.112.10.6:55265` about half a second apart. A later working macOS capture showed the missing step: after registration, the client opens TCP `53219` for the pairing handshake and TCP `53218` for the init sequence before the hardware button is accepted. The app repeats that full arming sequence periodically while idle, filters notices by `SCANNER_IP`, checks for the VENS packet signature, and debounces/cools down events before starting a scan. If pressing the physical button does nothing, verify that the container keeps MAC `da:e0:c0:24:d4:f8`, remains attached to the `aservice1010` macvlan network, and can receive UDP packets on `10.112.10.6:55265`.
 
 ## References
 
