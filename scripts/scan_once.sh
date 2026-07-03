@@ -27,6 +27,17 @@ mkdir -p "$output_dir"
 
 raw_pdf="$workdir/raw.pdf"
 
+unique_raw_path() {
+  local base="$output_dir/$scan_date.Scan $timestamp.scan.pdf"
+  local candidate="$base"
+  local counter=2
+  while [[ -e "$candidate" ]]; do
+    candidate="$output_dir/$scan_date.Scan $timestamp.$counter.scan.pdf"
+    counter=$((counter + 1))
+  done
+  printf '%s\n' "$candidate"
+}
+
 case "$backend" in
   sane)
     scan_args=(
@@ -82,21 +93,9 @@ esac
 
 case "$format" in
   pdf)
-    ocr_pdf="$workdir/ocr-$timestamp.pdf"
-    sidecar="$workdir/ocr-$timestamp.txt"
-    ocrmypdf --language "$language" --rotate-pages --deskew --optimize 1 --sidecar "$sidecar" "$raw_pdf" "$ocr_pdf"
-    classify_args=(
-      --pdf "$ocr_pdf"
-      --text "$sidecar"
-      --rules "$topic_rules"
-      --output-dir "$output_dir"
-      --fallback-topic "$fallback_topic"
-      --date "$scan_date"
-    )
-    if [[ -n "$topic" ]]; then
-      classify_args+=(--topic "$topic")
-    fi
-    final_path="$(classify-scan "${classify_args[@]}")"
+    set-pdf-creator "$raw_pdf" --creator "${SCAN_RAW_PDF_CREATOR:-ScanSnap}"
+    final_path="$(unique_raw_path)"
+    mv "$raw_pdf" "$final_path"
     ;;
   image|images)
     final_path="$output_dir/scan-$timestamp"

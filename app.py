@@ -3,6 +3,7 @@ import socket
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -12,12 +13,24 @@ from flask import Flask, Response, redirect, render_template_string, request, ur
 app = Flask(__name__)
 OUTPUT_DIR = Path(os.environ.get("SCAN_OUTPUT_DIR", "/scans"))
 job_lock = threading.Lock()
+ocr_lock = threading.Lock()
+ocr_state_lock = threading.Lock()
+ocr_queue = deque()
 last_job = {
     "started": None,
     "finished": None,
     "status": "idle",
     "output": "",
     "error": "",
+}
+last_ocr_job = {
+    "started": None,
+    "finished": None,
+    "status": "idle",
+    "input": "",
+    "output": "",
+    "error": "",
+    "queued": 0,
 }
 last_scan_completed_at = 0.0
 last_button_started_at = 0.0
@@ -50,6 +63,7 @@ PAGE = """
     .file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .delete-form { display: inline; }
     .delete-button { background: #b3261e; padding: 5px 9px; font-size: 13px; }
+    .file-kind { font-size: 12px; font-weight: 700; color: #5f6368; }
     .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f0fe; color: #174ea6; font-size: 13px; font-weight: 700; }
     @media (prefers-color-scheme: dark) {
       body { background: #171717; color: #f1f3f4; }
@@ -98,6 +112,13 @@ PAGE = """
       {% if last_job.finished %}<p>Finished: {{ last_job.finished }}</p>{% endif %}
       {% if last_job.output %}<pre>{{ last_job.output }}</pre>{% endif %}
       {% if last_job.error %}<pre>{{ last_job.error }}</pre>{% endif %}
+      <h2>OCR</h2>
+      <p><span class="status">{{ last_ocr_job.status }}</span> {% if last_ocr_job.queued %}{{ last_ocr_job.queued }} queued{% endif %}</p>
+      {% if last_ocr_job.started %}<p>Started: {{ last_ocr_job.started }}</p>{% endif %}
+      {% if last_ocr_job.finished %}<p>Finished: {{ last_ocr_job.finished }}</p>{% endif %}
+      {% if last_ocr_job.input %}<p>Input: {{ last_ocr_job.input }}</p>{% endif %}
+      {% if last_ocr_job.output %}<pre>{{ last_ocr_job.output }}</pre>{% endif %}
+      {% if last_ocr_job.error %}<pre>{{ last_ocr_job.error }}</pre>{% endif %}
     </section>
     <section>
       <h2>Files</h2>
@@ -106,6 +127,7 @@ PAGE = """
         {% for file in files %}
         <li class="file-row">
           <a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
+          <span class="file-kind">{{ "source scan" if file.name.endswith(".scan.pdf") else "OCR PDF" }}</span>
           <form class="delete-form" method="post" action="{{ url_for('delete_file', name=file.name) }}">
             <button class="delete-button" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
           </form>
@@ -174,14 +196,17 @@ def run_scan_locked(env_overrides):
             text=True,
             env=env,
         )
+        raw_path = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
         last_job = {
             "started": last_job["started"],
             "finished": datetime.now().isoformat(timespec="seconds"),
             "status": "done" if result.returncode == 0 else f"failed ({result.returncode})",
-            "output": result.stdout.strip(),
+            "output": raw_path or result.stdout.strip(),
             "error": result.stderr.strip(),
         }
         last_scan_completed_at = time.monotonic()
+        if result.returncode == 0 and raw_path:
+            enqueue_ocr(raw_path, env_overrides)
     finally:
         job_lock.release()
 
@@ -192,6 +217,80 @@ def start_scan_thread(env_overrides=None):
     thread = threading.Thread(target=run_scan_locked, args=(env_overrides or {},), daemon=True)
     thread.start()
     return True
+
+
+def ocr_queue_length():
+    with ocr_state_lock:
+        return len(ocr_queue)
+
+
+def set_ocr_job(update):
+    global last_ocr_job
+    with ocr_state_lock:
+        last_ocr_job = {
+            **last_ocr_job,
+            **update,
+            "queued": len(ocr_queue),
+        }
+
+
+def enqueue_ocr(raw_path, env_overrides):
+    with ocr_state_lock:
+        ocr_queue.append({"raw_path": raw_path, "env": dict(env_overrides or {})})
+        last_ocr_job["queued"] = len(ocr_queue)
+        if last_ocr_job["status"] == "idle":
+            last_ocr_job["status"] = "queued"
+    start_ocr_worker()
+
+
+def start_ocr_worker():
+    if not ocr_lock.acquire(blocking=False):
+        return
+    thread = threading.Thread(target=ocr_worker, daemon=True)
+    thread.start()
+
+
+def ocr_worker():
+    try:
+        while True:
+            with ocr_state_lock:
+                if not ocr_queue:
+                    last_ocr_job["queued"] = 0
+                    if last_ocr_job["status"] == "queued":
+                        last_ocr_job["status"] = "idle"
+                    return
+                job = ocr_queue.popleft()
+                last_ocr_job.update(
+                    {
+                        "started": datetime.now().isoformat(timespec="seconds"),
+                        "finished": None,
+                        "status": "running",
+                        "input": job["raw_path"],
+                        "output": "",
+                        "error": "",
+                        "queued": len(ocr_queue),
+                    }
+                )
+
+            env = os.environ.copy()
+            env.update(job["env"])
+            result = subprocess.run(
+                ["ocr-scan", job["raw_path"]],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            set_ocr_job(
+                {
+                    "finished": datetime.now().isoformat(timespec="seconds"),
+                    "status": "done" if result.returncode == 0 else f"failed ({result.returncode})",
+                    "output": result.stdout.strip(),
+                    "error": result.stderr.strip(),
+                }
+            )
+    finally:
+        ocr_lock.release()
 
 
 def is_button_notice(data):
@@ -295,6 +394,7 @@ def index():
         PAGE,
         defaults=defaults(),
         last_job=last_job,
+        last_ocr_job={**last_ocr_job, "queued": ocr_queue_length()},
         files=files,
         devices=list_devices(),
     )

@@ -76,7 +76,22 @@ Open:
 http://RASPBERRY_PI_IP/
 ```
 
-Start a scan from the web page. Finished searchable PDFs appear in `./scans`. The web page also lets you download or delete files already on the server.
+Start a scan from the web page. The scanner stage writes the raw source PDF immediately, then OCR runs in a separate background queue. This means a new scan can start while OCR is still processing an earlier scan. The web page lets you download or delete both the raw source PDF and the OCR PDF.
+
+Raw source PDFs are written first with a temporary name like:
+
+```text
+YYYY--MM--DD.Scan TIMESTAMP.scan.pdf
+```
+
+After OCR finishes and the document topic is classified, the pair is renamed to:
+
+```text
+YYYY--MM--DD.<TOPIC>.scan.pdf
+YYYY--MM--DD.<TOPIC>.pdf
+```
+
+The `.scan.pdf` file keeps PDF creator metadata set to `ScanSnap` so tools that look for ScanSnap-created documents can accept it. The `.pdf` file is the OCR/searchable version.
 
 The scanner's physical scan button is also supported. The container actively arms itself with the scanner by registering over UDP `52217`, completing the TCP `53219` pairing handshake, and running the short TCP `53218` init sequence observed in the working macOS client. It then listens for ScanSnap button notices on UDP `55265`; when a notice arrives from `SCANNER_IP`, it starts the same `scan-once` workflow used by the web button.
 
@@ -168,6 +183,7 @@ Common settings are environment variables:
 | `SCAN_TOPIC` | empty | Optional manual topic override |
 | `SCAN_FALLBACK_TOPIC` | `Unsortiert Scan` | Topic when no rule matches |
 | `SCAN_TOPIC_RULES` | `/app/config/topics.json` | JSON classifier rules |
+| `SCAN_RAW_PDF_CREATOR` | `ScanSnap` | PDF `/Creator` value written to raw `.scan.pdf` files |
 
 If `SCAN_BACKEND=sane` and `ADF Duplex` is not accepted, inspect the scanner options:
 
