@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p "${SCAN_OUTPUT_DIR:-/scans}" /run/dbus /run/avahi-daemon /etc/sane.d
+mkdir -p "${SCAN_OUTPUT_DIR:-/scans}" "${SANE_CONFIG_DIR:-/app/sane.d}"
 
 if [[ -n "${SCANNER_URL:-}" ]]; then
   scanner_name="${SCANNER_NAME:-ScanSnap iX500}"
   scanner_protocol="${SCANNER_PROTOCOL:-escl}"
-  cat > /etc/sane.d/airscan.conf <<EOF
+  cat > "${SANE_CONFIG_DIR:-/app/sane.d}/airscan.conf" <<EOF
 [devices]
 "${scanner_name}" = ${scanner_protocol}, ${SCANNER_URL}
 EOF
 fi
 
-if [[ ! -S /run/dbus/system_bus_socket ]]; then
-  dbus-daemon --system --fork
-fi
+if [[ "${SCAN_ENABLE_DISCOVERY_DAEMONS:-false}" == "true" ]]; then
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "SCAN_ENABLE_DISCOVERY_DAEMONS=true requires the container to run as root; skipping dbus/avahi startup." >&2
+  else
+    mkdir -p /run/dbus /run/avahi-daemon
+    if [[ ! -S /run/dbus/system_bus_socket ]]; then
+      dbus-daemon --system --fork
+    fi
 
-if ! pgrep -x avahi-daemon >/dev/null 2>&1; then
-  avahi-daemon --daemonize --no-drop-root || true
+    if ! pgrep -x avahi-daemon >/dev/null 2>&1; then
+      avahi-daemon --daemonize --no-drop-root || true
+    fi
+  fi
 fi
 
 exec "$@"

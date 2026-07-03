@@ -4,19 +4,19 @@ services:
     image: scansnap-linux:latest
     container_name: scansnap-linux
     restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
     network_mode: host
     environment:
       SCAN_OUTPUT_DIR: /scans
+      SCAN_BACKEND: wifi
       SCAN_LANGUAGE: deu+eng
       SCAN_RESOLUTION: "300"
       SCAN_MODE: Color
       SCAN_SOURCE: ADF Duplex
       SCAN_FORMAT: pdf
       TZ: Europe/Berlin
-      # Fixed scanner endpoint. This bypasses multicast discovery, which is
-      # important when the scanner is reached across VLAN routing.
-      SCANNER_NAME: ScanSnap iX500
-      SCANNER_URL: http://10.112.10.11/eSCL
-      SCANNER_PROTOCOL: escl
+      WEB_PORT: "80"
+      SCANNER_IP: 10.112.10.11
+      SCANSNAP_PAIRING_KEY: ${SCANSNAP_PAIRING_KEY:?set SCANSNAP_PAIRING_KEY in .env}
     volumes:
       - ./scans:/scans

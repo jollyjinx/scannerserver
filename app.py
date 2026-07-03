@@ -41,7 +41,11 @@ PAGE = """
     form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
     pre { margin: 0; overflow: auto; white-space: pre-wrap; font-size: 13px; }
     ul { padding-left: 20px; }
+    li { margin-bottom: 8px; }
     a { color: #0b57d0; }
+    .file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .delete-form { display: inline; }
+    .delete-button { background: #b3261e; padding: 5px 9px; font-size: 13px; }
     .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f0fe; color: #174ea6; font-size: 13px; font-weight: 700; }
     @media (prefers-color-scheme: dark) {
       body { background: #171717; color: #f1f3f4; }
@@ -96,7 +100,12 @@ PAGE = """
       {% if files %}
       <ul>
         {% for file in files %}
-        <li><a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a></li>
+        <li class="file-row">
+          <a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
+          <form class="delete-form" method="post" action="{{ url_for('delete_file', name=file.name) }}">
+            <button class="delete-button" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
+          </form>
+        </li>
         {% endfor %}
       </ul>
       {% else %}
@@ -123,6 +132,10 @@ def defaults():
 
 
 def list_devices():
+    if os.environ.get("SCAN_BACKEND") == "wifi":
+        scanner_ip = os.environ.get("SCANNER_IP", "not configured")
+        return f"ScanSnap Wi-Fi backend configured for {scanner_ip}."
+
     try:
         result = subprocess.run(
             ["scanimage", "-L"],
@@ -207,5 +220,13 @@ def download(name):
     return Response(path.read_bytes(), headers={"Content-Disposition": f"attachment; filename={path.name}"})
 
 
+@app.post("/files/<path:name>/delete")
+def delete_file(name):
+    path = OUTPUT_DIR / name
+    if path.is_file() and path.parent == OUTPUT_DIR:
+        path.unlink()
+    return redirect(url_for("index"))
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=int(os.environ.get("WEB_PORT", "8080")))
