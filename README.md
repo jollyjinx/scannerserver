@@ -47,6 +47,27 @@ http://RASPBERRY_PI_IP:8080
 
 Start a scan from the web page. Finished searchable PDFs appear in `./scans`.
 
+For the installed Pi layout where this repo is in `/home/ubuntu/plt/scansnap` and the compose file is `/home/ubuntu/plt/docker-compose.yaml`, use [deploy/raspberry-pi/docker-compose.yaml](deploy/raspberry-pi/docker-compose.yaml) as the compose file. It pins the scanner to:
+
+```text
+http://10.112.10.11/eSCL
+```
+
+and stores scans in:
+
+```text
+/home/ubuntu/plt/scans
+```
+
+Install/update it on the Pi with:
+
+```bash
+cp /home/ubuntu/plt/scansnap/deploy/raspberry-pi/docker-compose.yaml /home/ubuntu/plt/docker-compose.yaml
+mkdir -p /home/ubuntu/plt/scans
+cd /home/ubuntu/plt
+container compose up -d --build
+```
+
 ## Check scanner discovery
 
 ```bash
@@ -63,7 +84,7 @@ You should see a device reported by `airscan`, `escl`, `wsd`, or a Fujitsu backe
 ```yaml
 environment:
   SCANNER_NAME: ScanSnap iX500
-  SCANNER_URL: http://192.168.1.50/eSCL
+  SCANNER_URL: http://10.112.10.11/eSCL
   SCANNER_PROTOCOL: escl
 ```
 

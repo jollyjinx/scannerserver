@@ -1,6 +1,7 @@
 services:
   scansnap:
-    build: .
+    build:
+      context: /home/ubuntu/plt/scansnap
     image: scansnap-linux:latest
     container_name: scansnap-linux
     restart: unless-stopped
@@ -13,10 +14,8 @@ services:
       SCAN_SOURCE: ADF Duplex
       SCAN_FORMAT: pdf
       TZ: Europe/Berlin
-      # Fixed scanner endpoint. This bypasses multicast discovery, which is
-      # important when the scanner is reached across VLAN routing.
       SCANNER_NAME: ScanSnap iX500
       SCANNER_URL: http://10.112.10.11/eSCL
       SCANNER_PROTOCOL: escl
     volumes:
-      - ./scans:/scans
+      - /home/ubuntu/plt/scans:/scans
