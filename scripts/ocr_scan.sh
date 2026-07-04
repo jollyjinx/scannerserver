@@ -4,6 +4,7 @@ set -euo pipefail
 raw_pdf="${1:?raw PDF path required}"
 
 language="${SCAN_LANGUAGE:-deu+eng}"
+rotate_pages_threshold="${SCAN_OCR_ROTATE_PAGES_THRESHOLD:-2.0}"
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
@@ -21,6 +22,14 @@ if [[ -e "$ocr_pdf" ]]; then
   exit 73
 fi
 
-ocrmypdf --language "$language" --rotate-pages --deskew --optimize 1 --sidecar "$sidecar" "$raw_pdf" "$ocr_pdf"
+ocrmypdf \
+  --language "$language" \
+  --rotate-pages \
+  --rotate-pages-threshold "$rotate_pages_threshold" \
+  --deskew \
+  --optimize 1 \
+  --sidecar "$sidecar" \
+  "$raw_pdf" \
+  "$ocr_pdf"
 
 echo "$ocr_pdf"

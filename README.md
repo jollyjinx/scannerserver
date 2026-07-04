@@ -195,6 +195,7 @@ Common environment variables:
 | `SCANSNAP_CLIENT_IP` | empty | Optional client IP override for macvlan/static-IP deployments |
 | `SCAN_SIMPLEX` | `false` | Set `true` to discard back pages with the Wi-Fi backend |
 | `SCAN_RAW_PDF_CREATOR` | `ScanSnap` | PDF `/Creator` value for raw PDFs |
+| `SCAN_OCR_ROTATE_PAGES_THRESHOLD` | `2.0` | OCRmyPDF rotation confidence threshold; lower values rotate pages more aggressively |
 | `SCAN_REMOVE_BLANK_PAGES` | `true` | Remove blank pages from raw PDF before OCR |
 | `SCAN_BLANK_WHITE_THRESHOLD` | `245` | Pixel threshold used for blank detection |
 | `SCAN_BLANK_CONTENT_RATIO_THRESHOLD` | `0.003` | Maximum dark-pixel ratio for a blank page |
@@ -364,6 +365,10 @@ If you see arming timeouts, the scanner is usually offline, asleep, on the wrong
 ### OCR is slow
 
 OCR runs after scanning and can take a while on a Raspberry Pi. This is expected. The raw PDF is available immediately, and the next scan can start while OCR is still running.
+
+### OCR text is correct, but pages are upside down
+
+OCRmyPDF rotates pages only when its orientation confidence is high enough. This project defaults `SCAN_OCR_ROTATE_PAGES_THRESHOLD` to `2.0` so mixed-orientation scans are rotated more aggressively. Increase it if pages are rotated incorrectly, or decrease it if upside-down pages are still not corrected.
 
 ### Blank pages are not removed, or nonblank pages are removed
 
