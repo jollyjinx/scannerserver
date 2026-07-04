@@ -5,13 +5,18 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from itertools import groupby
 from pathlib import Path
 
 from flask import Flask, Response, redirect, render_template_string, request, url_for
+import pikepdf
+from pikepdf import PdfImage
+from PIL import Image
 
 
 app = Flask(__name__)
 OUTPUT_DIR = Path(os.environ.get("SCAN_OUTPUT_DIR", "/scans"))
+PREVIEW_DIR_NAME = ".previews"
 job_lock = threading.Lock()
 ocr_lock = threading.Lock()
 ocr_state_lock = threading.Lock()
@@ -64,16 +69,29 @@ PAGE = """
     .bulk-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
     .checkbox-label { display: inline-flex; gap: 8px; align-items: center; font-weight: 700; }
     .file-check { width: 18px; height: 18px; flex: 0 0 auto; }
-    .file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .file-groups { display: grid; gap: 18px; }
+    .file-day { display: grid; gap: 10px; }
+    .file-day-title { margin: 0; font-size: 16px; }
+    .file-list { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
+    .file-row { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; }
+    .file-preview { width: 112px; height: 148px; object-fit: cover; border: 1px solid #dadce0; border-radius: 6px; background: #f1f3f4; }
+    .file-details { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
+    .file-name { overflow-wrap: anywhere; }
     .delete-button { background: #b3261e; padding: 5px 9px; font-size: 13px; }
     .bulk-delete-button { background: #b3261e; }
     .file-kind { font-size: 12px; font-weight: 700; color: #5f6368; }
     .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f0fe; color: #174ea6; font-size: 13px; font-weight: 700; }
+    @media (max-width: 560px) {
+      .file-row { grid-template-columns: 72px 1fr; }
+      .file-preview { width: 72px; height: 96px; }
+    }
     @media (prefers-color-scheme: dark) {
       body { background: #171717; color: #f1f3f4; }
       section { background: #202124; border-color: #3c4043; }
       input, select { background: #171717; color: #f1f3f4; border-color: #5f6368; }
       a { color: #8ab4f8; }
+      .file-row { border-color: #3c4043; }
+      .file-preview { border-color: #3c4043; background: #171717; }
     }
   </style>
 </head>
@@ -123,22 +141,32 @@ PAGE = """
     </section>
     <section>
       <h2>Files</h2>
-      {% if files %}
+      {% if file_groups %}
       <form class="bulk-delete-form" method="post" action="{{ url_for('delete_selected_files') }}">
         <div class="bulk-actions">
           <label class="checkbox-label"><input class="file-check" id="select-all-files" type="checkbox"> Select all</label>
           <button class="bulk-delete-button" onclick="return confirmBulkDelete()">Delete selected</button>
         </div>
-        <ul>
-          {% for file in files %}
+        <div class="file-groups">
+          {% for group in file_groups %}
+          <div class="file-day">
+            <h3 class="file-day-title">{{ group.day }}</h3>
+            <ul class="file-list">
+              {% for file in group.files %}
           <li class="file-row">
-            <input class="file-check file-select" type="checkbox" name="files" value="{{ file.name }}">
-            <a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
-            <span class="file-kind">{{ "OCR PDF" if file.name.endswith(".ocr.pdf") else "source scan" }}</span>
-            <button class="delete-button" formaction="{{ url_for('delete_file', name=file.name) }}" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
+            <img class="file-preview" src="{{ url_for('preview', name=file.name) }}" alt="">
+            <div class="file-details">
+              <input class="file-check file-select" type="checkbox" name="files" value="{{ file.name }}">
+              <a class="file-name" href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
+              <span class="file-kind">{{ file.kind }}</span>
+              <button class="delete-button" formaction="{{ url_for('delete_file', name=file.name) }}" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
+            </div>
           </li>
+              {% endfor %}
+            </ul>
+          </div>
           {% endfor %}
-        </ul>
+        </div>
       </form>
       {% else %}
       <p>No scans yet.</p>
@@ -417,11 +445,89 @@ def output_file(name):
     return path
 
 
+def scan_day(path):
+    try:
+        return datetime.strptime(path.name[:10], "%Y-%m-%d").strftime("%A, %Y-%m-%d")
+    except ValueError:
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%A, %Y-%m-%d")
+
+
+def scan_sort_key(path):
+    return path.name
+
+
+def scan_entry(path):
+    return {
+        "name": path.name,
+        "day": scan_day(path),
+        "kind": "OCR PDF" if path.name.endswith(".ocr.pdf") else "source scan",
+        "sort_key": scan_sort_key(path),
+    }
+
+
+def grouped_scan_entries(paths):
+    entries = sorted((scan_entry(path) for path in paths), key=lambda entry: entry["sort_key"], reverse=True)
+    return [
+        {"day": day, "files": list(files)}
+        for day, files in groupby(entries, key=lambda entry: entry["day"])
+    ]
+
+
+def preview_path_for(path):
+    preview_dir = OUTPUT_DIR / PREVIEW_DIR_NAME
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    return preview_dir / f"{path.name}.jpg"
+
+
+def create_pdf_preview(path, preview_path):
+    with pikepdf.open(path) as pdf:
+        if not pdf.pages:
+            return False
+        images = list(pdf.pages[0].images.values())
+        if not images:
+            return False
+        image = PdfImage(images[0]).as_pil_image()
+
+    if image.mode not in {"RGB", "L"}:
+        image = image.convert("RGB")
+    elif image.mode == "L":
+        image = image.convert("RGB")
+    image.thumbnail((320, 420), Image.Resampling.LANCZOS)
+    image.save(preview_path, "JPEG", quality=82, optimize=True)
+    return True
+
+
+def placeholder_preview():
+    image = Image.new("RGB", (320, 420), "#f1f3f4")
+    return image
+
+
+def ensure_preview(path):
+    preview_path = preview_path_for(path)
+    if preview_path.exists() and preview_path.stat().st_mtime >= path.stat().st_mtime:
+        return preview_path
+
+    try:
+        if create_pdf_preview(path, preview_path):
+            return preview_path
+    except Exception as exc:
+        print(f"Could not create preview for {path.name}: {exc}", flush=True)
+
+    placeholder_preview().save(preview_path, "JPEG", quality=75)
+    return preview_path
+
+
+def delete_preview(path):
+    preview_path = OUTPUT_DIR / PREVIEW_DIR_NAME / f"{path.name}.jpg"
+    if preview_path.is_file():
+        preview_path.unlink()
+
+
 @app.get("/")
 def index():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(
-        [path for path in OUTPUT_DIR.iterdir() if path.is_file()],
+        [path for path in OUTPUT_DIR.iterdir() if path.is_file() and path.suffix.lower() == ".pdf"],
         key=lambda path: path.name,
     )
     return render_template_string(
@@ -429,7 +535,7 @@ def index():
         defaults=defaults(),
         last_job=last_job,
         last_ocr_job={**last_ocr_job, "queued": ocr_queue_length()},
-        files=files,
+        file_groups=grouped_scan_entries(files),
         devices=list_devices(),
     )
 
@@ -457,10 +563,20 @@ def download(name):
     return Response(path.read_bytes(), headers={"Content-Disposition": f"attachment; filename={path.name}"})
 
 
+@app.get("/files/<path:name>/preview")
+def preview(name):
+    path = output_file(name)
+    if not path or path.suffix.lower() != ".pdf":
+        return Response("Not found", status=404)
+    preview_file = ensure_preview(path)
+    return Response(preview_file.read_bytes(), mimetype="image/jpeg")
+
+
 @app.post("/files/<path:name>/delete")
 def delete_file(name):
     path = output_file(name)
     if path:
+        delete_preview(path)
         path.unlink()
     return redirect(url_for("index"))
 
@@ -470,6 +586,7 @@ def delete_selected_files():
     for name in request.form.getlist("files"):
         path = output_file(name)
         if path:
+            delete_preview(path)
             path.unlink()
     return redirect(url_for("index"))
 

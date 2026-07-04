@@ -7,6 +7,7 @@ It was built for running an iX500 from a Raspberry Pi or other always-on Linux h
 ## Features
 
 - Web UI for starting scans, downloading files, and deleting one or many files at once.
+- Scan list grouped by day with first-page preview thumbnails.
 - Physical iX500 scan button support over the ScanSnap Wi-Fi protocol.
 - Raw PDF is available immediately after the scan.
 - OCR PDF is created asynchronously with OCRmyPDF and Tesseract.
