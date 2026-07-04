@@ -75,6 +75,7 @@ PAGE = """
     .file-day-title { margin: 0; font-size: 16px; }
     .file-list { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
     .file-row { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; }
+    .file-preview-link { display: block; width: 112px; height: 148px; border-radius: 6px; }
     .file-preview { width: 112px; height: 148px; object-fit: cover; border: 1px solid #dadce0; border-radius: 6px; background: #f1f3f4; }
     .file-details { display: grid; gap: 8px; min-width: 0; }
     .file-title { font-weight: 700; overflow-wrap: anywhere; }
@@ -87,7 +88,7 @@ PAGE = """
     .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f0fe; color: #174ea6; font-size: 13px; font-weight: 700; }
     @media (max-width: 560px) {
       .file-row { grid-template-columns: 72px 1fr; }
-      .file-preview { width: 72px; height: 96px; }
+      .file-preview-link, .file-preview { width: 72px; height: 96px; }
     }
     @media (prefers-color-scheme: dark) {
       body { background: #171717; color: #f1f3f4; }
@@ -158,7 +159,9 @@ PAGE = """
             <ul class="file-list">
               {% for document in group.files %}
           <li class="file-row">
-            <img class="file-preview" src="{{ url_for('preview', name=document.preview_name) }}" alt="">
+            <a class="file-preview-link" href="{{ url_for('view_file', name=document.view_name) }}" target="_blank" aria-label="Open {{ document.view_kind }} for {{ document.title }}">
+              <img class="file-preview" src="{{ url_for('preview', name=document.preview_name) }}" alt="">
+            </a>
             <div class="file-details">
               <div class="file-title">{{ document.title }}</div>
               <div class="file-links">
@@ -526,12 +529,16 @@ def scan_file_entry(path):
 def scan_document_entry(base_name, paths):
     sorted_paths = sorted(paths, key=lambda path: 0 if scan_variant(path) == "source" else 1)
     source_path = next((path for path in sorted_paths if scan_variant(path) == "source"), None)
+    ocr_path = next((path for path in sorted_paths if scan_variant(path) == "ocr"), None)
     preview_path = source_path or sorted_paths[0]
+    view_path = ocr_path or preview_path
     return {
         "title": base_name,
         "day": scan_day(preview_path),
         "files": [scan_file_entry(path) for path in sorted_paths],
         "preview_name": preview_path.name,
+        "view_name": view_path.name,
+        "view_kind": "OCR PDF" if scan_variant(view_path) == "ocr" else "source scan",
         "sort_key": max(scan_sort_key(path) for path in sorted_paths),
     }
 
@@ -640,6 +647,18 @@ def download(name):
     if not path:
         return Response("Not found", status=404)
     return Response(path.read_bytes(), headers={"Content-Disposition": f"attachment; filename={path.name}"})
+
+
+@app.get("/view/<path:name>")
+def view_file(name):
+    path = output_file(name)
+    if not path:
+        return Response("Not found", status=404)
+    return Response(
+        path.read_bytes(),
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={path.name}"},
+    )
 
 
 @app.get("/files/<path:name>/preview")
