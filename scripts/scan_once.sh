@@ -17,14 +17,13 @@ wifi_debug="${SCAN_WIFI_DEBUG:-false}"
 remove_blank_pages="${SCAN_REMOVE_BLANK_PAGES:-true}"
 
 scan_timestamp="${SCAN_TIMESTAMP:-$(date +%Y-%m-%d.%H%M%S)}"
-workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT
-
 log_event() {
   printf '%s scan-once.%s\n' "$(date -Iseconds)" "$*" >&2
 }
 
 mkdir -p "$output_dir"
+workdir="$(mktemp -d "$output_dir/.scan-work.XXXXXX")"
+trap 'rm -rf "$workdir"' EXIT
 
 raw_pdf="$workdir/raw.pdf"
 log_event "start backend=$backend format=$format output_dir=$output_dir timestamp=$scan_timestamp"
