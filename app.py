@@ -654,11 +654,12 @@ def scan_document_entry(base_name, paths):
     sorted_paths = sorted(paths, key=lambda path: 0 if scan_variant(path) == "source" else 1)
     source_path = next((path for path in sorted_paths if scan_variant(path) == "source"), None)
     ocr_path = next((path for path in sorted_paths if scan_variant(path) == "ocr"), None)
-    preview_path = source_path or sorted_paths[0]
-    view_path = ocr_path or preview_path
+    view_path = ocr_path or source_path or sorted_paths[0]
+    preview_path = view_path
+    day_path = source_path or view_path
     return {
         "title": base_name,
-        "day": scan_day(preview_path),
+        "day": scan_day(day_path),
         "files": [scan_file_entry(path) for path in sorted_paths],
         "preview_name": preview_path.name,
         "view_name": view_path.name,
@@ -693,15 +694,19 @@ def create_pdf_preview(path, preview_path):
     with pikepdf.open(path) as pdf:
         if not pdf.pages:
             return False
-        images = list(pdf.pages[0].images.values())
+        page = pdf.pages[0]
+        images = list(page.images.values())
         if not images:
             return False
         image = PdfImage(images[0]).as_pil_image()
+        rotation = int(page.get("/Rotate", 0)) % 360
 
     if image.mode not in {"RGB", "L"}:
         image = image.convert("RGB")
     elif image.mode == "L":
         image = image.convert("RGB")
+    if rotation:
+        image = image.rotate(-rotation, expand=True)
     image.thumbnail((320, 420), Image.Resampling.LANCZOS)
     image.save(preview_path, "JPEG", quality=82, optimize=True)
     return True
