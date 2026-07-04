@@ -39,7 +39,7 @@ You need:
 
 - A ScanSnap iX500 with Wi-Fi enabled.
 - A Linux host that can reach the scanner on the network.
-- A container runtime with Compose support.
+- Docker Engine with the Docker Compose plugin.
 - The iX500 pairing key from your ScanSnap setup.
 
 The iX500 does not behave like a normal eSCL/AirScan scanner in this setup. This project uses the reverse-engineered ScanSnap Wi-Fi protocol implemented by [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap), built into the image as `scansnap-wifi`.
@@ -57,7 +57,7 @@ Keep your `SCANSNAP_PAIRING_KEY` out of git. Put it in `.env`.
 
 ## Quick Start
 
-After creating the GitHub repository, clone it on the Linux host:
+Clone the repository on the Linux host:
 
 ```bash
 git clone https://github.com/jollyjinx/scannerserver.git
@@ -81,10 +81,10 @@ SCANSNAP_PAIRING_KEY=your-pairing-key
 Start the service:
 
 ```bash
-container compose up -d --build
+docker compose up -d
 ```
 
-If your system uses a different container CLI, use the equivalent Compose command for that runtime.
+The Compose file uses the published multi-architecture image `ghcr.io/jollyjinx/scannerserver:latest`, so normal installation does not require a local image build.
 
 Open the web UI:
 
@@ -105,14 +105,14 @@ ping SCANNER_IP
 Check that the container starts:
 
 ```bash
-container compose ps
-container compose logs -f scansnap
+docker compose ps
+docker compose logs -f scansnap
 ```
 
 Run one scan from the command line:
 
 ```bash
-container compose run --rm scansnap scan-once
+docker compose run --rm scansnap scan-once
 ```
 
 Expected result: a raw PDF appears in `./scans`, then the web service queues OCR and creates the `.ocr.pdf` file.
@@ -243,25 +243,27 @@ For an existing stack, copy only the `scansnap` service from `deploy/raspberry-p
 
 ```bash
 cd /home/ubuntu/plt
-container compose config --quiet
-container compose up -d --no-deps scansnap
+docker compose config --quiet
+docker compose up -d --no-deps scansnap
 ```
 
 This starts only the scanner service and does not recreate unrelated services.
 
 ## Updating
 
-Pull the latest code, rebuild the image, and recreate only the scanner service:
+Pull the latest Compose file, pull the latest image from GitHub Container Registry, and recreate only the scanner service:
 
 ```bash
 git pull
-container compose up -d --build --no-deps scansnap
+docker compose pull scansnap
+docker compose up -d --no-deps scansnap
 ```
 
 For the simple standalone setup, this is also fine:
 
 ```bash
-container compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 ## Troubleshooting
@@ -271,8 +273,8 @@ container compose up -d --build
 Check whether the container is running:
 
 ```bash
-container compose ps
-container compose logs --tail=100 scansnap
+docker compose ps
+docker compose logs --tail=100 scansnap
 ```
 
 If using port `80`, make sure nothing else is already bound to that IP/port.
@@ -288,7 +290,7 @@ ping SCANNER_IP
 From inside the container:
 
 ```bash
-container compose exec scansnap sh
+docker compose exec scansnap sh
 ```
 
 Then inside the shell:
@@ -304,7 +306,7 @@ For macvlan deployments, confirm the container has the expected IP and MAC, and 
 Check the logs:
 
 ```bash
-container compose logs -f scansnap
+docker compose logs -f scansnap
 ```
 
 You want to see:

@@ -1,7 +1,6 @@
 services:
   scansnap:
-    build: .
-    image: scannerserver:latest
+    image: ghcr.io/jollyjinx/scannerserver:latest
     container_name: scannerserver
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
