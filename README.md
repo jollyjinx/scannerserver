@@ -55,7 +55,15 @@ The important scanner ports are:
 
 Keep your `SCANSNAP_PAIRING_KEY` out of git. Put it in `.env`.
 
-## Quick Start
+## Install With The Published Image
+
+The recommended install path is to use the prebuilt multi-architecture image published by GitHub Actions:
+
+```text
+ghcr.io/jollyjinx/scannerserver:latest
+```
+
+This image supports `linux/amd64` and `linux/arm64`, so it works on typical x86 Linux hosts and Raspberry Pi systems without building locally.
 
 Clone the repository on the Linux host:
 
@@ -84,7 +92,7 @@ Start the service:
 docker compose up -d
 ```
 
-The Compose file uses the published multi-architecture image `ghcr.io/jollyjinx/scannerserver:latest`, so normal installation does not require a local image build.
+The included Compose file pulls `ghcr.io/jollyjinx/scannerserver:latest`. No local image build is needed for normal installation.
 
 Open the web UI:
 
@@ -264,6 +272,38 @@ For the simple standalone setup, this is also fine:
 ```bash
 docker compose pull
 docker compose up -d
+```
+
+## Build From Source
+
+Building locally is only needed if you are changing the application, testing Dockerfile changes, or cannot use the published GHCR image.
+
+Clone the repository and create the same `.env` file described above:
+
+```bash
+git clone https://github.com/jollyjinx/scannerserver.git
+cd scannerserver
+```
+
+Add a small override file so Compose builds from the local checkout instead of pulling the published image:
+
+```yaml
+services:
+  scansnap:
+    build: .
+    image: scannerserver:local
+```
+
+Save it as `compose.override.yaml`, then run:
+
+```bash
+docker compose up -d --build
+```
+
+To rebuild after local changes:
+
+```bash
+docker compose up -d --build --no-deps scansnap
 ```
 
 ## Troubleshooting
