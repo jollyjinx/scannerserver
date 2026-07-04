@@ -14,6 +14,7 @@ pairing_key="${SCAN_PAIRING_KEY:-${SCANSNAP_PAIRING_KEY:-}}"
 client_ip="${SCANSNAP_CLIENT_IP:-}"
 simplex="${SCAN_SIMPLEX:-false}"
 wifi_debug="${SCAN_WIFI_DEBUG:-false}"
+remove_blank_pages="${SCAN_REMOVE_BLANK_PAGES:-true}"
 
 scan_timestamp="${SCAN_TIMESTAMP:-$(date +%Y-%m-%d.%H%M%S)}"
 workdir="$(mktemp -d)"
@@ -78,6 +79,13 @@ esac
 
 case "$format" in
   pdf)
+    if [[ "$remove_blank_pages" == "true" || "$remove_blank_pages" == "1" || "$remove_blank_pages" == "yes" || "$remove_blank_pages" == "on" ]]; then
+      remove-blank-pages "$raw_pdf" \
+        --white-threshold "${SCAN_BLANK_WHITE_THRESHOLD:-245}" \
+        --content-ratio-threshold "${SCAN_BLANK_CONTENT_RATIO_THRESHOLD:-0.003}" \
+        --mean-threshold "${SCAN_BLANK_MEAN_THRESHOLD:-248.0}" \
+        ${SCAN_BLANK_DEBUG:+--debug} >&2
+    fi
     set-pdf-creator "$raw_pdf" --creator "${SCAN_RAW_PDF_CREATOR:-ScanSnap}"
     final_path="$output_dir/$scan_timestamp.pdf"
     if [[ -e "$final_path" ]]; then

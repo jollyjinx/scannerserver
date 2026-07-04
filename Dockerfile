@@ -16,6 +16,8 @@ RUN git clone https://github.com/bramheerink/scansnap.git . \
 
 FROM ubuntu:24.04
 
+LABEL org.opencontainers.image.title="scannerserver"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     SANE_CONFIG_DIR=/app/sane.d
@@ -32,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ocrmypdf \
     python3 \
     python3-flask \
+    python3-pil \
     python3-pikepdf \
     sane-airscan \
     sane-utils \
@@ -57,9 +60,10 @@ COPY scripts/scan_once.sh /usr/local/bin/scan-once
 COPY scripts/ocr_scan.sh /usr/local/bin/ocr-scan
 COPY scripts/scansnap_button_arm.py /usr/local/bin/scansnap-button-arm
 COPY scripts/list_devices.sh /usr/local/bin/list-scanners
+COPY scripts/remove_blank_pages.py /usr/local/bin/remove-blank-pages
 COPY scripts/set_pdf_creator.py /usr/local/bin/set-pdf-creator
 
-RUN chmod +x /usr/local/bin/scansnap-entrypoint /usr/local/bin/scan-once /usr/local/bin/ocr-scan /usr/local/bin/scansnap-button-arm /usr/local/bin/list-scanners /usr/local/bin/set-pdf-creator
+RUN chmod +x /usr/local/bin/scansnap-entrypoint /usr/local/bin/scan-once /usr/local/bin/ocr-scan /usr/local/bin/scansnap-button-arm /usr/local/bin/list-scanners /usr/local/bin/remove-blank-pages /usr/local/bin/set-pdf-creator
 
 EXPOSE 8080
 EXPOSE 80

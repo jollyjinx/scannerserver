@@ -1,31 +1,356 @@
-# ScanSnap Linux
+# scannerserver
 
-Containerized scanning workflow for a Fujitsu/Ricoh ScanSnap iX500 on a Raspberry Pi 4 running Ubuntu 24.04 LTS.
+`scannerserver` is a containerized web scanner service for the Fujitsu/Ricoh ScanSnap iX500.
 
-The container uses the ScanSnap iX500 Wi-Fi protocol for scanner access and OCRmyPDF/Tesseract for searchable PDFs. OCR defaults to German plus English (`deu+eng`). Scans are written to `./scans`.
+It was built for running an iX500 from a Raspberry Pi or other always-on Linux host after the macOS ScanSnap software stopped being a good fit. The scanner is used over Wi-Fi, scanned PDFs are stored in a host directory, and OCR runs in the background so the next scan can start while the previous scan is still being processed.
 
-PDF filenames use:
+## Features
+
+- Web UI for starting scans, downloading files, and deleting one or many files at once.
+- Physical iX500 scan button support over the ScanSnap Wi-Fi protocol.
+- Raw PDF is available immediately after the scan.
+- OCR PDF is created asynchronously with OCRmyPDF and Tesseract.
+- Default OCR languages: German and English (`deu+eng`).
+- Optional blank-page removal before OCR.
+- Raw PDFs are marked with PDF creator metadata `ScanSnap` for tools that expect ScanSnap-created documents.
+- Runs as a non-root user while still binding the web UI to port `80`.
+
+## Output Files
+
+Each scan produces up to two files:
 
 ```text
 YYYY-MM-DD.HHMMSS.pdf
 YYYY-MM-DD.HHMMSS.ocr.pdf
 ```
 
-The first file is the raw source scan. The `.ocr.pdf` file is created by the background OCR stage.
+The plain `.pdf` is the raw source scan and is written as soon as the scanner finishes. The `.ocr.pdf` file is the searchable OCR version and appears later when the background OCR job completes.
 
-## Important hardware note
+Example:
 
-The iX500 does not expose a normal eSCL/AirScan endpoint in this setup. This project uses the reverse-engineered ScanSnap Wi-Fi protocol from [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap), built into the image as `scansnap-wifi`.
+```text
+2026-07-04.103512.pdf
+2026-07-04.103512.ocr.pdf
+```
 
-For the iX500, make sure the Wi-Fi switch on the back of the scanner is on and that the scanner is already joined to the same network/VLAN as the Raspberry Pi container. The pairing key authorizes scanner access; keep it out of git.
+## Hardware And Network Requirements
 
-## How this setup was found
+You need:
 
-This project started with the assumption that the iX500 might work through SANE using eSCL/AirScan or WSD. That did not match the real scanner behavior:
+- A ScanSnap iX500 with Wi-Fi enabled.
+- A Linux host that can reach the scanner on the network.
+- A container runtime with Compose support.
+- The iX500 pairing key from your ScanSnap setup.
 
-1. `scanimage -L` and `airscan-discover` did not find a usable eSCL/AirScan/WSD scanner.
-2. Port checks showed the scanner at `10.112.10.11` had ScanSnap-specific ports open, notably TCP `53218` and `53219`.
-3. Packet captures showed VENS/ScanSnap traffic, not eSCL. The useful protocol ports were:
+The iX500 does not behave like a normal eSCL/AirScan scanner in this setup. This project uses the reverse-engineered ScanSnap Wi-Fi protocol implemented by [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap), built into the image as `scansnap-wifi`.
+
+The important scanner ports are:
+
+| Port | Purpose |
+| --- | --- |
+| UDP `52217` | ScanSnap discovery/registration |
+| TCP `53219` | Pairing/control handshake |
+| TCP `53218` | Scan control/data |
+| UDP `55265` | Button notice listener in this app |
+
+Keep your `SCANSNAP_PAIRING_KEY` out of git. Put it in `.env`.
+
+## Quick Start
+
+After creating the GitHub repository, clone it on the Linux host:
+
+```bash
+git clone https://github.com/jollyjinx/scannerserver.git
+cd scannerserver
+```
+
+Create the output directory and local environment file:
+
+```bash
+mkdir -p scans
+cp .env.example .env
+```
+
+Edit `.env` and set:
+
+```text
+SCANNER_IP=your-scanner-ip-address
+SCANSNAP_PAIRING_KEY=your-pairing-key
+```
+
+Start the service:
+
+```bash
+container compose up -d --build
+```
+
+If your system uses a different container CLI, use the equivalent Compose command for that runtime.
+
+Open the web UI:
+
+```text
+http://YOUR_LINUX_HOST/
+```
+
+Press **Start scan** or press the scanner's physical scan button.
+
+## First Scan Checklist
+
+Before debugging the app, verify the basics:
+
+```bash
+ping SCANNER_IP
+```
+
+Check that the container starts:
+
+```bash
+container compose ps
+container compose logs -f scansnap
+```
+
+Run one scan from the command line:
+
+```bash
+container compose run --rm scansnap scan-once
+```
+
+Expected result: a raw PDF appears in `./scans`, then the web service queues OCR and creates the `.ocr.pdf` file.
+
+## Physical Button Support
+
+Button support is active by default.
+
+The app periodically arms itself with the scanner by:
+
+1. Registering over UDP `52217`.
+2. Completing the TCP `53219` pairing handshake.
+3. Running the TCP `53218` init sequence.
+4. Listening for button notices on UDP `55265`.
+
+When a notice arrives from `SCANNER_IP`, the app starts the same scan workflow as the web button.
+
+Useful log lines:
+
+```text
+Listening for ScanSnap button notices on UDP 55265
+ScanSnap button client armed
+Started scan from scanner button notice from <scanner-ip>
+```
+
+If button arming times out, first check that the scanner is powered on and reachable from the container network.
+
+## Blank Page Removal
+
+Blank-page removal is enabled by default for PDF scans.
+
+The detector looks at page image brightness and the ratio of non-white pixels. If it removes too much or too little for your scanner/paper/background, tune or disable it with environment variables:
+
+```yaml
+environment:
+  SCAN_REMOVE_BLANK_PAGES: "true"
+  SCAN_BLANK_WHITE_THRESHOLD: "245"
+  SCAN_BLANK_CONTENT_RATIO_THRESHOLD: "0.003"
+  SCAN_BLANK_MEAN_THRESHOLD: "248.0"
+```
+
+To see per-page detection details:
+
+```yaml
+environment:
+  SCAN_BLANK_DEBUG: "1"
+```
+
+To disable blank-page removal:
+
+```yaml
+environment:
+  SCAN_REMOVE_BLANK_PAGES: "false"
+```
+
+## Configuration
+
+Common environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SCAN_OUTPUT_DIR` | `/scans` | Output directory inside the container |
+| `SCAN_BACKEND` | `wifi` | `wifi` for iX500 Wi-Fi protocol, `sane` for SANE fallback |
+| `SCAN_LANGUAGE` | `deu+eng` | OCR languages passed to OCRmyPDF/Tesseract |
+| `SCAN_RESOLUTION` | `300` | Resolution for SANE backend |
+| `SCAN_MODE` | `Color` | Mode for SANE backend |
+| `SCAN_SOURCE` | `ADF Duplex` | Source for SANE backend |
+| `SCAN_FORMAT` | `pdf` | `pdf`; `images` is available only with the SANE backend |
+| `SCANNER_IP` | empty | Scanner IP address |
+| `SCANSNAP_PAIRING_KEY` | empty | Required for `SCAN_BACKEND=wifi` |
+| `SCANSNAP_CLIENT_IP` | empty | Optional client IP override for macvlan/static-IP deployments |
+| `SCAN_SIMPLEX` | `false` | Set `true` to discard back pages with the Wi-Fi backend |
+| `SCAN_RAW_PDF_CREATOR` | `ScanSnap` | PDF `/Creator` value for raw PDFs |
+| `SCAN_REMOVE_BLANK_PAGES` | `true` | Remove blank pages from raw PDF before OCR |
+| `SCAN_BLANK_WHITE_THRESHOLD` | `245` | Pixel threshold used for blank detection |
+| `SCAN_BLANK_CONTENT_RATIO_THRESHOLD` | `0.003` | Maximum dark-pixel ratio for a blank page |
+| `SCAN_BLANK_MEAN_THRESHOLD` | `248.0` | Minimum average brightness for a blank page |
+| `WEB_PORT` | `8080` in app, `80` in Compose | Web UI port |
+| `SCANSNAP_BUTTON_SCAN_ENABLED` | `true` | Enable physical scanner button listener |
+| `SCANSNAP_BUTTON_PORT` | `55265` | UDP port for ScanSnap button notices |
+| `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` | `60` | How often to re-arm the button client while idle |
+| `SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS` | `45` | Timeout for one button arming attempt |
+| `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
+| `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `10` | Ignore button notices shortly after a scan finishes |
+
+## Compose Files
+
+This repository includes two Compose examples:
+
+| File | Use |
+| --- | --- |
+| `compose.yaml` | Simple host-network setup for a standalone install |
+| `deploy/raspberry-pi/compose.yaml` | Example service for a Raspberry Pi macvlan deployment |
+
+Important: `deploy/raspberry-pi/compose.yaml` is a scanner service example, not a replacement for your whole home-lab Compose stack. If you already have another large Compose file, merge the `scansnap` service into it instead of overwriting your existing file.
+
+## Raspberry Pi Macvlan Example
+
+The example Pi deployment uses:
+
+```text
+scanner IP:       ${SCANNER_IP}
+container IP:     ${NETWORK_PREFIX}.10.6
+container MAC:    da:e0:c0:24:d4:f8
+macvlan network:  aservice1010
+```
+
+Set these values in the environment used by Compose, usually `/home/ubuntu/plt/.env` for this example:
+
+```text
+NETWORK_PREFIX=10.112
+SCANNER_IP=10.112.10.11
+SCANSNAP_PAIRING_KEY=your-pairing-key
+```
+
+Use this pattern only if you already have the matching macvlan network:
+
+```yaml
+networks:
+  aservice1010:
+    external: true
+    name: plt_aservice1010
+```
+
+If your Compose file defines the macvlan network itself, do not add the `external: true` block. Attach the service to the existing network name instead.
+
+For an existing stack, copy only the `scansnap` service from `deploy/raspberry-pi/compose.yaml` into your full Compose file, then run:
+
+```bash
+cd /home/ubuntu/plt
+container compose config --quiet
+container compose up -d --no-deps scansnap
+```
+
+This starts only the scanner service and does not recreate unrelated services.
+
+## Updating
+
+Pull the latest code, rebuild the image, and recreate only the scanner service:
+
+```bash
+git pull
+container compose up -d --build --no-deps scansnap
+```
+
+For the simple standalone setup, this is also fine:
+
+```bash
+container compose up -d --build
+```
+
+## Troubleshooting
+
+### The web UI does not open
+
+Check whether the container is running:
+
+```bash
+container compose ps
+container compose logs --tail=100 scansnap
+```
+
+If using port `80`, make sure nothing else is already bound to that IP/port.
+
+### The scanner cannot be reached
+
+From the Linux host:
+
+```bash
+ping SCANNER_IP
+```
+
+From inside the container:
+
+```bash
+container compose exec scansnap sh
+```
+
+Then inside the shell:
+
+```bash
+ip addr
+```
+
+For macvlan deployments, confirm the container has the expected IP and MAC, and that the scanner is in the same VLAN/subnet.
+
+### Button press does nothing
+
+Check the logs:
+
+```bash
+container compose logs -f scansnap
+```
+
+You want to see:
+
+```text
+ScanSnap button client armed
+```
+
+If you see arming timeouts, the scanner is usually offline, asleep, on the wrong Wi-Fi/VLAN, or not reachable from the container IP.
+
+### OCR is slow
+
+OCR runs after scanning and can take a while on a Raspberry Pi. This is expected. The raw PDF is available immediately, and the next scan can start while OCR is still running.
+
+### Blank pages are not removed, or nonblank pages are removed
+
+Enable debug logging for one scan:
+
+```yaml
+environment:
+  SCAN_BLANK_DEBUG: "1"
+```
+
+Then inspect the scan log and tune:
+
+- `SCAN_BLANK_CONTENT_RATIO_THRESHOLD`
+- `SCAN_BLANK_WHITE_THRESHOLD`
+- `SCAN_BLANK_MEAN_THRESHOLD`
+
+Disable the feature if your documents have very light content:
+
+```yaml
+environment:
+  SCAN_REMOVE_BLANK_PAGES: "false"
+```
+
+## Security Notes
+
+- Keep `SCANSNAP_PAIRING_KEY` in `.env`; do not commit it.
+- The web UI has no authentication. Run it only on a trusted network or put it behind your own reverse proxy/authentication.
+- The container runs as `${UID:-1000}:${GID:-1000}` by default.
+- Python is granted `cap_net_bind_service` in the image so the app can bind port `80` without running as root.
+
+## Project Background
+
+This setup was built after testing SANE/AirScan discovery against a real iX500. The scanner did not expose a usable eSCL/AirScan endpoint in this environment. Packet captures showed ScanSnap-specific VENS traffic instead:
 
 ```text
 UDP discovery/control: 52217
@@ -33,161 +358,10 @@ TCP control:           53219
 TCP scan data:         53218
 ```
 
-4. The reverse-engineered [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) tool matched that protocol.
-5. A real capture between the working ScanSnap client and the scanner exposed the values needed by the tool:
-
-```text
-Scanner IP:   10.112.10.11
-Scanner name: iX500-AWRHC08122
-Scanner MAC:  84:25:3f:16:6e:a0
-Client IP:    10.112.10.6
-Client MAC:   da:e0:c0:24:d4:f8
-Protocol:     ScanSnap/VENS Wi-Fi protocol
-```
-
-The pairing key was recovered from the TCP `53219` handshake. Treat that key as a secret and store it only in the Pi's local `.env` file as `SCANSNAP_PAIRING_KEY`; do not commit it.
-
-The final deployment therefore uses the iX500 Wi-Fi protocol directly instead of SANE discovery. SANE and `sane-airscan` remain in the image only as an optional fallback path for other setups.
-
-## Raspberry Pi setup
-
-Install the container runtime and compose plugin on Ubuntu 24.04, then clone this repository.
-
-```bash
-git clone https://github.com/YOUR_USER/scansnap-linux.git
-cd scansnap-linux
-mkdir -p scans
-printf 'SCANSNAP_PAIRING_KEY=YOUR_PAIRING_KEY\n' > .env
-container compose up -d --build
-```
-
-Open:
-
-```text
-http://RASPBERRY_PI_IP/
-```
-
-Start a scan from the web page. The scanner stage writes the raw source PDF immediately, then OCR runs in a separate background queue. This means a new scan can start while OCR is still processing an earlier scan. The web page lets you download or delete both the raw source PDF and the OCR PDF.
-
-Raw source PDFs are written immediately using the scan start time:
-
-```text
-YYYY-MM-DD.HHMMSS.pdf
-```
-
-After OCR finishes, the OCR file is written next to the raw scan:
-
-```text
-YYYY-MM-DD.HHMMSS.ocr.pdf
-```
-
-The plain `.pdf` file keeps PDF creator metadata set to `ScanSnap` so tools that look for ScanSnap-created documents can accept it. The `.ocr.pdf` file is the OCR/searchable version.
-
-The scanner's physical scan button is also supported. The container actively arms itself with the scanner by registering over UDP `52217`, completing the TCP `53219` pairing handshake, and running the short TCP `53218` init sequence observed in the working macOS client. It then listens for ScanSnap button notices on UDP `55265`; when a notice arrives from `SCANNER_IP`, it starts the same `scan-once` workflow used by the web button.
-
-For the installed Pi layout where this repo is in `/home/ubuntu/plt/scansnap` and the compose file is `/home/ubuntu/plt/docker-compose.yaml`, use [deploy/raspberry-pi/docker-compose.yaml](deploy/raspberry-pi/docker-compose.yaml) as the compose file. It pins the scanner to:
-
-```text
-10.112.10.11
-```
-
-and stores scans in:
-
-```text
-/home/ubuntu/plt/scans
-```
-
-The `scansnap` service should be attached to the existing `aservice1010` macvlan network so the web frontend is reachable at:
-
-```text
-http://10.112.10.6/
-```
-
-Install/update it on the Pi with:
-
-```bash
-printf 'SCANSNAP_PAIRING_KEY=YOUR_PAIRING_KEY\n' >> /home/ubuntu/plt/.env
-cp /home/ubuntu/plt/scansnap/deploy/raspberry-pi/docker-compose.yaml /home/ubuntu/plt/docker-compose.yaml
-mkdir -p /home/ubuntu/plt/scans
-cd /home/ubuntu/plt
-container compose up -d --build
-```
-
-The container runs as `${UID:-1000}:${GID:-1000}`. On the Pi this matches the `ubuntu` user, so PDFs written to `/home/ubuntu/plt/scans` are not owned by root.
-
-The web app listens on port `80` through `WEB_PORT=80`. The image grants Python only `cap_net_bind_service`, so the app can bind port 80 while still running as the unprivileged `1000:1000` user.
-
-The button listener also runs in the same non-root app process. UDP `55265` is above the privileged port range, so it does not require extra capabilities.
-
-## Check scanner access
-
-```bash
-container compose run --rm scansnap scan-once
-```
-
-If scanning fails:
-
-1. Confirm the Pi container and scanner are on the same subnet.
-2. Confirm the iX500 Wi-Fi switch is on.
-3. Give the scanner a fixed DHCP lease in the router.
-4. Confirm `SCANSNAP_PAIRING_KEY` is present in `.env`.
-5. Restart:
-
-```bash
-container compose up -d --build
-```
-
-## Command-line scanning
-
-Run one scan without the web UI:
-
-```bash
-container compose run --rm scansnap scan-once
-```
-
-Common settings are environment variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `SCAN_OUTPUT_DIR` | `/scans` | Output directory inside the container |
-| `SCAN_BACKEND` | `wifi` | `wifi` for the iX500 protocol or `sane` for SANE |
-| `SCAN_LANGUAGE` | `deu+eng` | Tesseract OCR languages |
-| `SCAN_RESOLUTION` | `300` | Scan resolution in DPI |
-| `SCAN_MODE` | `Color` | SANE scan mode |
-| `SCAN_SOURCE` | `ADF Duplex` | SANE source name |
-| `SCANNER_IP` | `10.112.10.11` | Scanner IP for `SCAN_BACKEND=wifi` |
-| `SCANSNAP_PAIRING_KEY` | empty | Required secret for `SCAN_BACKEND=wifi` |
-| `SCANSNAP_CLIENT_IP` | empty | Optional client IP override, useful with macvlan |
-| `SCANSNAP_BUTTON_SCAN_ENABLED` | `true` | Listen for physical scanner button notices |
-| `SCANSNAP_BUTTON_PORT` | `55265` | UDP port used by ScanSnap button notices |
-| `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` | `60` | How often to repeat the active button arming sequence while idle |
-| `SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS` | `45` | Timeout for one button arming attempt |
-| `SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS` | empty | Legacy fallback for `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` |
-| `SCANSNAP_REGISTRATION_SOURCE_PORT` | `55264` | UDP source port used for client registration |
-| `SCANSNAP_REGISTRATION_PORT` | `52217` | Scanner UDP registration port |
-| `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
-| `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `10` | Ignore button notices shortly after a scan finishes |
-| `SCAN_SIMPLEX` | `false` | Set `true` to discard back pages with the Wi-Fi backend |
-| `SCAN_DEVICE` | empty | Optional exact SANE device name |
-| `SCAN_FORMAT` | `pdf` | `pdf` or `images` |
-| `SCAN_RAW_PDF_CREATOR` | `ScanSnap` | PDF `/Creator` value written to raw source PDF files |
-
-If `SCAN_BACKEND=sane` and `ADF Duplex` is not accepted, inspect the scanner options:
-
-```bash
-container compose run --rm scansnap scanimage --help -d 'DEVICE_NAME_FROM_SCANIMAGE_L'
-```
-
-Then update `SCAN_SOURCE` in `compose.yaml`.
-
-## Network mode
-
-The Raspberry Pi deployment uses the existing `aservice1010` macvlan network and assigns the container `10.112.10.6`. The scanner is fixed at `10.112.10.11`. The Pi compose file also pins the container MAC to `da:e0:c0:24:d4:f8`, which is the client MAC observed in the known-good ScanSnap capture.
-
-The first ScanSnap button notice capture showed the client registering from UDP `55264` to scanner UDP `52217`, then the scanner sending three identical UDP packets to `10.112.10.6:55265` about half a second apart. A later working macOS capture showed the missing step: after registration, the client opens TCP `53219` for the pairing handshake and TCP `53218` for the init sequence before the hardware button is accepted. The app repeats that full arming sequence periodically while idle, filters notices by `SCANNER_IP`, checks for the VENS packet signature, and debounces/cools down events before starting a scan. If pressing the physical button does nothing, verify that the container keeps MAC `da:e0:c0:24:d4:f8`, remains attached to the `aservice1010` macvlan network, and can receive UDP packets on `10.112.10.6:55265`.
+The final implementation uses `bramheerink/scansnap` for the Wi-Fi protocol and adds the server/web workflow around it.
 
 ## References
 
-- [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) implements the ScanSnap iX500 Wi-Fi protocol used by this image.
-- [`sane-airscan`](https://github.com/alexpevzner/sane-airscan) is still installed for optional `SCAN_BACKEND=sane` setups.
-- OCRmyPDF uses Tesseract language packs; this image installs German, English, and orientation/script detection.
+- [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) implements the reverse-engineered ScanSnap iX500 Wi-Fi protocol used by this image.
+- [OCRmyPDF](https://ocrmypdf.readthedocs.io/) creates searchable PDFs.
+- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) provides OCR language support.

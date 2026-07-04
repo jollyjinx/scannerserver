@@ -42,7 +42,7 @@ PAGE = """
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ScanSnap Linux</title>
+  <title>scannerserver</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
     body { margin: 0; background: #f5f5f2; color: #202124; }
@@ -60,9 +60,13 @@ PAGE = """
     ul { padding-left: 20px; }
     li { margin-bottom: 8px; }
     a { color: #0b57d0; }
+    .bulk-delete-form { display: block; }
+    .bulk-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .checkbox-label { display: inline-flex; gap: 8px; align-items: center; font-weight: 700; }
+    .file-check { width: 18px; height: 18px; flex: 0 0 auto; }
     .file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .delete-form { display: inline; }
     .delete-button { background: #b3261e; padding: 5px 9px; font-size: 13px; }
+    .bulk-delete-button { background: #b3261e; }
     .file-kind { font-size: 12px; font-weight: 700; color: #5f6368; }
     .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f0fe; color: #174ea6; font-size: 13px; font-weight: 700; }
     @media (prefers-color-scheme: dark) {
@@ -75,7 +79,7 @@ PAGE = """
 </head>
 <body>
   <main>
-    <h1>ScanSnap Linux</h1>
+    <h1>scannerserver</h1>
     <section>
       <h2>Scan</h2>
       <form method="post" action="{{ url_for('scan') }}">
@@ -120,17 +124,22 @@ PAGE = """
     <section>
       <h2>Files</h2>
       {% if files %}
-      <ul>
-        {% for file in files %}
-        <li class="file-row">
-          <a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
-          <span class="file-kind">{{ "OCR PDF" if file.name.endswith(".ocr.pdf") else "source scan" }}</span>
-          <form class="delete-form" method="post" action="{{ url_for('delete_file', name=file.name) }}">
-            <button class="delete-button" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
-          </form>
-        </li>
-        {% endfor %}
-      </ul>
+      <form class="bulk-delete-form" method="post" action="{{ url_for('delete_selected_files') }}">
+        <div class="bulk-actions">
+          <label class="checkbox-label"><input class="file-check" id="select-all-files" type="checkbox"> Select all</label>
+          <button class="bulk-delete-button" onclick="return confirmBulkDelete()">Delete selected</button>
+        </div>
+        <ul>
+          {% for file in files %}
+          <li class="file-row">
+            <input class="file-check file-select" type="checkbox" name="files" value="{{ file.name }}">
+            <a href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
+            <span class="file-kind">{{ "OCR PDF" if file.name.endswith(".ocr.pdf") else "source scan" }}</span>
+            <button class="delete-button" formaction="{{ url_for('delete_file', name=file.name) }}" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
+          </li>
+          {% endfor %}
+        </ul>
+      </form>
       {% else %}
       <p>No scans yet.</p>
       {% endif %}
@@ -140,6 +149,26 @@ PAGE = """
       <pre>{{ devices }}</pre>
     </section>
   </main>
+  <script>
+    const selectAllFiles = document.getElementById("select-all-files");
+    const fileSelections = () => Array.from(document.querySelectorAll(".file-select"));
+
+    if (selectAllFiles) {
+      selectAllFiles.addEventListener("change", () => {
+        fileSelections().forEach((checkbox) => {
+          checkbox.checked = selectAllFiles.checked;
+        });
+      });
+    }
+
+    function confirmBulkDelete() {
+      const selected = fileSelections().filter((checkbox) => checkbox.checked);
+      if (selected.length === 0) {
+        return false;
+      }
+      return confirm(`Delete ${selected.length} selected file${selected.length === 1 ? "" : "s"}?`);
+    }
+  </script>
 </body>
 </html>
 """
@@ -379,13 +408,21 @@ def maybe_start_button_listener():
     thread.start()
 
 
+def output_file(name):
+    if Path(name).name != name:
+        return None
+    path = OUTPUT_DIR / name
+    if not path.is_file():
+        return None
+    return path
+
+
 @app.get("/")
 def index():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(
         [path for path in OUTPUT_DIR.iterdir() if path.is_file()],
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
+        key=lambda path: path.name,
     )
     return render_template_string(
         PAGE,
@@ -414,17 +451,26 @@ def scan():
 
 @app.get("/files/<path:name>")
 def download(name):
-    path = OUTPUT_DIR / name
-    if not path.is_file() or path.parent != OUTPUT_DIR:
+    path = output_file(name)
+    if not path:
         return Response("Not found", status=404)
     return Response(path.read_bytes(), headers={"Content-Disposition": f"attachment; filename={path.name}"})
 
 
 @app.post("/files/<path:name>/delete")
 def delete_file(name):
-    path = OUTPUT_DIR / name
-    if path.is_file() and path.parent == OUTPUT_DIR:
+    path = output_file(name)
+    if path:
         path.unlink()
+    return redirect(url_for("index"))
+
+
+@app.post("/files/delete-selected")
+def delete_selected_files():
+    for name in request.form.getlist("files"):
+        path = output_file(name)
+        if path:
+            path.unlink()
     return redirect(url_for("index"))
 
 
