@@ -204,6 +204,9 @@ Common environment variables:
 | `SCANSNAP_BUTTON_PORT` | `55265` | UDP port for ScanSnap button notices |
 | `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` | `60` | How often to re-arm the button client while idle |
 | `SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS` | `45` | Timeout for one button arming attempt |
+| `SCANSNAP_BUTTON_REACHABILITY_INTERVAL_SECONDS` | `3` | How often to probe for the scanner while the button client is not armed |
+| `SCANSNAP_BUTTON_REACHABILITY_TIMEOUT_SECONDS` | `1` | Timeout for one scanner reachability probe |
+| `SCANSNAP_BUTTON_REACHABILITY_PORT` | `53219` | TCP port used to check whether the scanner is awake before arming |
 | `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
 | `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `10` | Ignore button notices shortly after a scan finishes |
 

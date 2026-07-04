@@ -39,6 +39,7 @@ last_ocr_job = {
 }
 last_scan_completed_at = 0.0
 last_button_started_at = 0.0
+button_rearm_requested = threading.Event()
 
 
 PAGE = """
@@ -262,6 +263,8 @@ def run_scan_locked(env_overrides):
         if result.returncode == 0 and raw_path:
             enqueue_ocr(raw_path, env_overrides)
     finally:
+        if os.environ.get("SCAN_BACKEND") == "wifi":
+            button_rearm_requested.set()
         job_lock.release()
 
 
@@ -375,6 +378,27 @@ def arm_button_client():
     return True
 
 
+def scanner_reachable(scanner_ip):
+    if not scanner_ip:
+        return False
+
+    port = int(os.environ.get("SCANSNAP_BUTTON_REACHABILITY_PORT", "53219"))
+    timeout = float(os.environ.get("SCANSNAP_BUTTON_REACHABILITY_TIMEOUT_SECONDS", "1"))
+    client_ip = os.environ.get("SCANSNAP_CLIENT_IP", "")
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(timeout)
+    try:
+        if client_ip:
+            probe.bind((client_ip, 0))
+        probe.connect((scanner_ip, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 def button_listener():
     global last_button_started_at
     scanner_ip = os.environ.get("SCANNER_IP", "")
@@ -387,6 +411,7 @@ def button_listener():
             os.environ.get("SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS", "60"),
         )
     )
+    reachability_interval = float(os.environ.get("SCANSNAP_BUTTON_REACHABILITY_INTERVAL_SECONDS", "3"))
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -394,14 +419,28 @@ def button_listener():
     sock.settimeout(1.0)
     print(f"Listening for ScanSnap button notices on UDP {port}", flush=True)
 
-    arm_button_client()
-    next_arm_at = time.monotonic() + arm_interval
+    armed = scanner_reachable(scanner_ip) and arm_button_client()
+    next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
+    next_reachability_at = time.monotonic() + reachability_interval
 
     while True:
         now = time.monotonic()
-        if now >= next_arm_at and not job_lock.locked():
-            arm_button_client()
-            next_arm_at = time.monotonic() + arm_interval
+        if not job_lock.locked():
+            should_arm = False
+            if button_rearm_requested.is_set():
+                button_rearm_requested.clear()
+                should_arm = scanner_reachable(scanner_ip)
+            elif armed and now >= next_arm_at:
+                should_arm = True
+            elif not armed and now >= next_reachability_at:
+                should_arm = scanner_reachable(scanner_ip)
+                next_reachability_at = time.monotonic() + reachability_interval
+
+            if should_arm:
+                armed = arm_button_client()
+                next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
+                if not armed:
+                    next_reachability_at = time.monotonic() + reachability_interval
 
         try:
             data, address = sock.recvfrom(2048)
