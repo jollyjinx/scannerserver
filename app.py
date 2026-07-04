@@ -42,6 +42,20 @@ last_button_started_at = 0.0
 button_rearm_requested = threading.Event()
 
 
+def iso_timestamp():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def log_event(event, **fields):
+    parts = [iso_timestamp(), event]
+    for key, value in fields.items():
+        if value is None:
+            continue
+        text = str(value).replace("\n", "\\n")
+        parts.append(f"{key}={text}")
+    print(" ".join(parts), flush=True)
+
+
 PAGE = """
 <!doctype html>
 <html lang="en">
@@ -245,9 +259,52 @@ def list_devices():
     return text or "No scanners found."
 
 
+def run_logged_subprocess(command, env):
+    stdout_lines = []
+    stderr_lines = []
+    started_at = time.monotonic()
+    log_event("subprocess.start", command=" ".join(command))
+
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        bufsize=1,
+    )
+
+    def stream_output(pipe, stream_name, lines):
+        try:
+            for line in iter(pipe.readline, ""):
+                line = line.rstrip("\n")
+                lines.append(line)
+                log_event("subprocess.output", command=command[0], stream=stream_name, line=line)
+        finally:
+            pipe.close()
+
+    threads = [
+        threading.Thread(target=stream_output, args=(process.stdout, "stdout", stdout_lines), daemon=True),
+        threading.Thread(target=stream_output, args=(process.stderr, "stderr", stderr_lines), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    returncode = process.wait()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+    duration = f"{time.monotonic() - started_at:.3f}"
+    log_event("subprocess.finished", command=command[0], returncode=returncode, duration_seconds=duration)
+    return subprocess.CompletedProcess(command, returncode, "\n".join(stdout_lines), "\n".join(stderr_lines))
+
+
 def run_scan_locked(env_overrides):
     global last_job, last_scan_completed_at
+    trigger = env_overrides.get("SCAN_TRIGGER", "web")
+    started_at = time.monotonic()
     try:
+        log_event("scan.start", trigger=trigger)
         last_job = {
             "started": datetime.now().isoformat(timespec="seconds"),
             "finished": None,
@@ -257,13 +314,14 @@ def run_scan_locked(env_overrides):
         }
         env = os.environ.copy()
         env.update(env_overrides)
-        result = subprocess.run(
-            ["scan-once"],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=env,
+        log_event(
+            "scan.command.start",
+            trigger=trigger,
+            backend=env.get("SCAN_BACKEND", "sane"),
+            source=env.get("SCAN_SOURCE", "ADF Duplex"),
+            format=env.get("SCAN_FORMAT", "pdf"),
         )
+        result = run_logged_subprocess(["scan-once"], env)
         raw_path = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
         last_job = {
             "started": last_job["started"],
@@ -273,16 +331,27 @@ def run_scan_locked(env_overrides):
             "error": result.stderr.strip(),
         }
         last_scan_completed_at = time.monotonic()
+        log_event(
+            "scan.finished",
+            trigger=trigger,
+            returncode=result.returncode,
+            raw_path=raw_path,
+            duration_seconds=f"{time.monotonic() - started_at:.3f}",
+        )
         if result.returncode == 0 and raw_path:
+            log_event("scan.ocr.enqueue", raw_path=raw_path)
             enqueue_ocr(raw_path, env_overrides)
     finally:
         if os.environ.get("SCAN_BACKEND") == "wifi":
             button_rearm_requested.set()
+            log_event("button.rearm.requested", trigger=trigger)
         job_lock.release()
+        log_event("scan.lock.released", trigger=trigger)
 
 
 def start_scan_thread(env_overrides=None):
     if not job_lock.acquire(blocking=False):
+        log_event("scan.start.rejected", reason="scan-running", trigger=(env_overrides or {}).get("SCAN_TRIGGER", "web"))
         return False
     thread = threading.Thread(target=run_scan_locked, args=(env_overrides or {},), daemon=True)
     thread.start()
@@ -310,6 +379,7 @@ def enqueue_ocr(raw_path, env_overrides):
         last_ocr_job["queued"] = len(ocr_queue)
         if last_ocr_job["status"] == "idle":
             last_ocr_job["status"] = "queued"
+        log_event("ocr.queued", raw_path=raw_path, queued=len(ocr_queue))
     start_ocr_worker()
 
 
@@ -344,6 +414,7 @@ def ocr_worker():
 
             env = os.environ.copy()
             env.update(job["env"])
+            log_event("ocr.start", raw_path=job["raw_path"])
             result = subprocess.run(
                 ["ocr-scan", job["raw_path"]],
                 check=False,
@@ -351,6 +422,7 @@ def ocr_worker():
                 text=True,
                 env=env,
             )
+            log_event("ocr.finished", raw_path=job["raw_path"], returncode=result.returncode)
             set_ocr_job(
                 {
                     "finished": datetime.now().isoformat(timespec="seconds"),
@@ -368,6 +440,8 @@ def is_button_notice(data):
 
 
 def arm_button_client():
+    started_at = time.monotonic()
+    log_event("button.arm.start")
     try:
         result = subprocess.run(
             ["scansnap-button-arm"],
@@ -378,21 +452,31 @@ def arm_button_client():
             env=os.environ.copy(),
         )
     except Exception as exc:
-        print(f"ScanSnap button arming failed: {exc}", flush=True)
+        log_event("button.arm.exception", error=exc, duration_seconds=f"{time.monotonic() - started_at:.3f}")
         return False
 
     if result.returncode != 0:
         details = (result.stderr or result.stdout).strip()
-        print(f"ScanSnap button arming failed ({result.returncode}): {details}", flush=True)
+        log_event(
+            "button.arm.failed",
+            returncode=result.returncode,
+            details=details,
+            duration_seconds=f"{time.monotonic() - started_at:.3f}",
+        )
         return False
 
     details = result.stdout.strip()
-    print(details or "ScanSnap button client armed", flush=True)
+    log_event(
+        "button.arm.succeeded",
+        details=details or "ScanSnap button client armed",
+        duration_seconds=f"{time.monotonic() - started_at:.3f}",
+    )
     return True
 
 
 def scanner_reachable(scanner_ip):
     if not scanner_ip:
+        log_event("scanner.reachability", result="missing-scanner-ip")
         return False
 
     port = int(os.environ.get("SCANSNAP_BUTTON_REACHABILITY_PORT", "53219"))
@@ -401,12 +485,28 @@ def scanner_reachable(scanner_ip):
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     probe.settimeout(timeout)
+    started_at = time.monotonic()
     try:
         if client_ip:
             probe.bind((client_ip, 0))
         probe.connect((scanner_ip, port))
+        log_event(
+            "scanner.reachability",
+            result="reachable",
+            scanner_ip=scanner_ip,
+            port=port,
+            duration_seconds=f"{time.monotonic() - started_at:.3f}",
+        )
         return True
-    except OSError:
+    except OSError as exc:
+        log_event(
+            "scanner.reachability",
+            result="unreachable",
+            scanner_ip=scanner_ip,
+            port=port,
+            error=exc,
+            duration_seconds=f"{time.monotonic() - started_at:.3f}",
+        )
         return False
     finally:
         probe.close()
@@ -430,11 +530,12 @@ def button_listener():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", port))
     sock.settimeout(1.0)
-    print(f"Listening for ScanSnap button notices on UDP {port}", flush=True)
+    log_event("button.listener.start", port=port, scanner_ip=scanner_ip)
 
     armed = scanner_reachable(scanner_ip) and arm_button_client()
     next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
     next_reachability_at = time.monotonic() + reachability_interval
+    log_event("button.listener.state", armed=armed)
 
     while True:
         now = time.monotonic()
@@ -443,17 +544,21 @@ def button_listener():
             if button_rearm_requested.is_set():
                 button_rearm_requested.clear()
                 should_arm = scanner_reachable(scanner_ip)
+                log_event("button.rearm.check", reachable=should_arm)
             elif armed and now >= next_arm_at:
                 should_arm = True
+                log_event("button.arm.refresh.due")
             elif not armed and now >= next_reachability_at:
                 should_arm = scanner_reachable(scanner_ip)
                 next_reachability_at = time.monotonic() + reachability_interval
+                log_event("button.arm.waiting", reachable=should_arm)
 
             if should_arm:
                 armed = arm_button_client()
                 next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
                 if not armed:
                     next_reachability_at = time.monotonic() + reachability_interval
+                log_event("button.listener.state", armed=armed)
 
         try:
             data, address = sock.recvfrom(2048)
@@ -462,21 +567,40 @@ def button_listener():
 
         source_ip = address[0]
         if scanner_ip and source_ip != scanner_ip:
+            log_event("button.notice.ignored", reason="unexpected-source", source_ip=source_ip, bytes=len(data))
             continue
         if not is_button_notice(data):
+            log_event("button.notice.ignored", reason="not-vens", source_ip=source_ip, bytes=len(data))
             continue
 
         now = time.monotonic()
+        log_event("button.notice.received", source_ip=source_ip, bytes=len(data), armed=armed)
         if now - last_button_started_at < debounce_seconds:
+            log_event(
+                "button.notice.ignored",
+                reason="debounce",
+                elapsed_seconds=f"{now - last_button_started_at:.3f}",
+                threshold_seconds=debounce_seconds,
+            )
             continue
         if now - last_scan_completed_at < cooldown_seconds:
+            log_event(
+                "button.notice.ignored",
+                reason="cooldown",
+                elapsed_seconds=f"{now - last_scan_completed_at:.3f}",
+                threshold_seconds=cooldown_seconds,
+            )
             continue
         if job_lock.locked():
+            log_event("button.notice.ignored", reason="scan-running")
             continue
 
         last_button_started_at = now
         if start_scan_thread({"SCAN_TRIGGER": "button"}):
-            print(f"Started scan from scanner button notice from {source_ip}", flush=True)
+            armed = False
+            log_event("button.scan.started", source_ip=source_ip)
+        else:
+            log_event("button.notice.ignored", reason="scan-start-rejected")
 
 
 def maybe_start_button_listener():
@@ -629,6 +753,7 @@ def index():
 @app.post("/scan")
 def scan():
     if job_lock.locked():
+        log_event("web.scan.ignored", reason="scan-running")
         return redirect(url_for("index"))
 
     allowed = {"SCAN_LANGUAGE", "SCAN_RESOLUTION", "SCAN_MODE", "SCAN_SOURCE"}
@@ -637,6 +762,7 @@ def scan():
         for key in allowed
         if key in request.form and request.form[key].strip()
     }
+    log_event("web.scan.requested", **env_overrides)
     start_scan_thread(env_overrides)
     return redirect(url_for("index"))
 
