@@ -76,8 +76,11 @@ PAGE = """
     .file-list { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
     .file-row { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; }
     .file-preview { width: 112px; height: 148px; object-fit: cover; border: 1px solid #dadce0; border-radius: 6px; background: #f1f3f4; }
-    .file-details { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
-    .file-name { overflow-wrap: anywhere; }
+    .file-details { display: grid; gap: 8px; min-width: 0; }
+    .file-title { font-weight: 700; overflow-wrap: anywhere; }
+    .file-links { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .file-variant { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+    .file-name { overflow-wrap: anywhere; font-size: 13px; color: #5f6368; }
     .delete-button { background: #b3261e; padding: 5px 9px; font-size: 13px; }
     .bulk-delete-button { background: #b3261e; }
     .file-kind { font-size: 12px; font-weight: 700; color: #5f6368; }
@@ -153,14 +156,21 @@ PAGE = """
           <div class="file-day">
             <h3 class="file-day-title">{{ group.day }}</h3>
             <ul class="file-list">
-              {% for file in group.files %}
+              {% for document in group.files %}
           <li class="file-row">
-            <img class="file-preview" src="{{ url_for('preview', name=file.name) }}" alt="">
+            <img class="file-preview" src="{{ url_for('preview', name=document.preview_name) }}" alt="">
             <div class="file-details">
-              <input class="file-check file-select" type="checkbox" name="files" value="{{ file.name }}">
-              <a class="file-name" href="{{ url_for('download', name=file.name) }}">{{ file.name }}</a>
-              <span class="file-kind">{{ file.kind }}</span>
-              <button class="delete-button" formaction="{{ url_for('delete_file', name=file.name) }}" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
+              <div class="file-title">{{ document.title }}</div>
+              <div class="file-links">
+                {% for file in document.files %}
+                <div class="file-variant">
+                  <input class="file-check file-select" type="checkbox" name="files" value="{{ file.name }}">
+                  <a href="{{ url_for('download', name=file.name) }}">{{ file.kind }}</a>
+                  <span class="file-name">{{ file.name }}</span>
+                  <button class="delete-button" formaction="{{ url_for('delete_file', name=file.name) }}" onclick='return confirm({{ ("Delete " ~ file.name ~ "?")|tojson }})'>Delete</button>
+                </div>
+                {% endfor %}
+              </div>
             </div>
           </li>
               {% endfor %}
@@ -495,17 +505,47 @@ def scan_sort_key(path):
     return path.name
 
 
-def scan_entry(path):
+def scan_base_name(path):
+    if path.name.endswith(".ocr.pdf"):
+        return f"{path.name[:-8]}.pdf"
+    return path.name
+
+
+def scan_variant(path):
+    return "ocr" if path.name.endswith(".ocr.pdf") else "source"
+
+
+def scan_file_entry(path):
     return {
         "name": path.name,
-        "day": scan_day(path),
-        "kind": "OCR PDF" if path.name.endswith(".ocr.pdf") else "source scan",
-        "sort_key": scan_sort_key(path),
+        "kind": "OCR PDF" if scan_variant(path) == "ocr" else "source scan",
+        "variant": scan_variant(path),
+    }
+
+
+def scan_document_entry(base_name, paths):
+    sorted_paths = sorted(paths, key=lambda path: 0 if scan_variant(path) == "source" else 1)
+    source_path = next((path for path in sorted_paths if scan_variant(path) == "source"), None)
+    preview_path = source_path or sorted_paths[0]
+    return {
+        "title": base_name,
+        "day": scan_day(preview_path),
+        "files": [scan_file_entry(path) for path in sorted_paths],
+        "preview_name": preview_path.name,
+        "sort_key": max(scan_sort_key(path) for path in sorted_paths),
     }
 
 
 def grouped_scan_entries(paths):
-    entries = sorted((scan_entry(path) for path in paths), key=lambda entry: entry["sort_key"], reverse=True)
+    document_paths = {}
+    for path in paths:
+        document_paths.setdefault(scan_base_name(path), []).append(path)
+
+    entries = sorted(
+        (scan_document_entry(base_name, grouped_paths) for base_name, grouped_paths in document_paths.items()),
+        key=lambda entry: entry["sort_key"],
+        reverse=True,
+    )
     return [
         {"day": day, "files": list(files)}
         for day, files in groupby(entries, key=lambda entry: entry["day"])
