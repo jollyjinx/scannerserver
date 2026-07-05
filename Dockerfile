@@ -59,12 +59,14 @@ COPY scripts/entrypoint.sh /usr/local/bin/scansnap-entrypoint
 COPY scripts/scan_once.sh /usr/local/bin/scan-once
 COPY scripts/ocr_scan.sh /usr/local/bin/ocr-scan
 COPY scripts/crop_pdf_pages.py /usr/local/bin/crop-pdf-pages
+COPY scripts/export_scan_images.py /usr/local/bin/export-scan-images
 COPY scripts/scansnap_button_arm.py /usr/local/bin/scansnap-button-arm
 COPY scripts/list_devices.sh /usr/local/bin/list-scanners
 COPY scripts/remove_blank_pages.py /usr/local/bin/remove-blank-pages
 COPY scripts/set_pdf_creator.py /usr/local/bin/set-pdf-creator
+COPY scripts/split_pdf_pages.py /usr/local/bin/split-pdf-pages
 
-RUN chmod +x /usr/local/bin/scansnap-entrypoint /usr/local/bin/scan-once /usr/local/bin/ocr-scan /usr/local/bin/crop-pdf-pages /usr/local/bin/scansnap-button-arm /usr/local/bin/list-scanners /usr/local/bin/remove-blank-pages /usr/local/bin/set-pdf-creator
+RUN chmod +x /usr/local/bin/scansnap-entrypoint /usr/local/bin/scan-once /usr/local/bin/ocr-scan /usr/local/bin/crop-pdf-pages /usr/local/bin/export-scan-images /usr/local/bin/scansnap-button-arm /usr/local/bin/list-scanners /usr/local/bin/remove-blank-pages /usr/local/bin/set-pdf-creator /usr/local/bin/split-pdf-pages
 
 EXPOSE 8080
 EXPOSE 80

@@ -7,18 +7,20 @@ It was built for running an iX500 from a Raspberry Pi or other always-on Linux h
 ## Features
 
 - Web UI for starting scans, downloading files, and deleting one or many files at once.
+- Saved scan modes for duplex/simplex, PDF/PNG output, OCR, autocrop, blank-page removal, and page splitting.
+- A configurable default scan mode for the physical scanner button.
 - Scan list grouped by day with first-page preview thumbnails.
 - Physical iX500 scan button support over the ScanSnap Wi-Fi protocol.
-- Raw PDF is available immediately after the scan.
-- OCR PDF is created asynchronously with OCRmyPDF and Tesseract.
+- PDF modes publish the source PDF immediately after the scan.
+- OCR PDF is created asynchronously with OCRmyPDF and Tesseract when the selected mode enables OCR.
 - Default OCR languages: German and English (`deu+eng`).
-- Optional blank-page removal before OCR.
+- Optional blank-page removal and autocrop before output/OCR.
 - Raw PDFs are marked with PDF creator metadata `ScanSnap` for tools that expect ScanSnap-created documents.
 - Runs as a non-root user while still binding the web UI to port `80`.
 
 ## Output Files
 
-Each scan produces up to two files:
+PDF scans produce one source PDF by default, plus an OCR PDF when OCR is enabled:
 
 ```text
 YYYY-MM-DD.HHMMSS.pdf
@@ -33,6 +35,34 @@ Example:
 2026-07-04.103512.pdf
 2026-07-04.103512.ocr.pdf
 ```
+
+Modes can also save one PDF per page:
+
+```text
+YYYY-MM-DD.HHMMSS-page-0001.pdf
+YYYY-MM-DD.HHMMSS-page-0001.ocr.pdf
+```
+
+PNG modes save one image per page:
+
+```text
+YYYY-MM-DD.HHMMSS-page-0001.png
+YYYY-MM-DD.HHMMSS-page-0002.png
+```
+
+## Scan Modes
+
+On first start, the web UI creates `/scans/.scanner-settings.json` with a few default modes:
+
+- `Duplex PDF + OCR`: matches the previous default behavior.
+- `Simplex PDF + OCR`: discards back pages with the Wi-Fi backend and uses a simplex source for SANE.
+- `Photo PNG`: color, higher-resolution PNG page output with OCR and document cleanup disabled.
+- `Duplex PDF`: multipage PDF with OCR disabled.
+- `Single Page PDFs + OCR`: one PDF per page, each queued for OCR.
+
+Use the **Modes** section in the web UI to add, edit, delete, or choose the mode used by the physical scanner button. Settings are persisted in the scan output volume, so they survive container rebuilds and image updates.
+
+`SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are passed to the SANE backend. With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output format conversion, OCR, blank-page removal, and autocrop; the reverse-engineered Wi-Fi scanner command does not expose resolution or color controls.
 
 ## Hardware And Network Requirements
 
@@ -137,7 +167,7 @@ The app periodically arms itself with the scanner by:
 3. Running the TCP `53218` init sequence.
 4. Listening for button notices on UDP `55265`.
 
-When a notice arrives from `SCANNER_IP`, the app starts the same scan workflow as the web button.
+When a notice arrives from `SCANNER_IP`, the app starts a scan with the saved button-default mode.
 
 Useful log lines:
 
@@ -211,12 +241,15 @@ Common environment variables:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SCAN_OUTPUT_DIR` | `/scans` | Output directory inside the container |
+| `SCAN_SETTINGS_PATH` | `/scans/.scanner-settings.json` | Saved scan modes and button-default mode |
 | `SCAN_BACKEND` | `wifi` | `wifi` for iX500 Wi-Fi protocol, `sane` for SANE fallback |
 | `SCAN_LANGUAGE` | `deu+eng` | OCR languages passed to OCRmyPDF/Tesseract |
 | `SCAN_RESOLUTION` | `300` | Resolution for SANE backend |
 | `SCAN_MODE` | `Color` | Mode for SANE backend |
 | `SCAN_SOURCE` | `ADF Duplex` | Source for SANE backend |
-| `SCAN_FORMAT` | `pdf` | `pdf`; `images` is available only with the SANE backend |
+| `SCAN_FORMAT` | `pdf` | `pdf` or `png`; PNG output exports one image per page |
+| `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
+| `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
 | `SCANNER_IP` | empty | Scanner IP address |
 | `SCANSNAP_PAIRING_KEY` | empty | Required for `SCAN_BACKEND=wifi` |
 | `SCANSNAP_CLIENT_IP` | empty | Optional client IP override for macvlan/static-IP deployments |
