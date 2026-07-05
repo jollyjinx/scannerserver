@@ -261,14 +261,19 @@ def unique_mode_id(name, modes, existing_id=None):
     return candidate
 
 
+def source_for_sides(simplex):
+    return "ADF Simplex" if truthy(simplex) else "ADF Duplex"
+
+
 def mode_from_form(form):
+    simplex = form.get("SCAN_SIMPLEX", "false")
     settings = normalized_mode_settings(
         {
             "SCAN_LANGUAGE": form.get("SCAN_LANGUAGE", ""),
             "SCAN_RESOLUTION": form.get("SCAN_RESOLUTION", ""),
             "SCAN_MODE": form.get("SCAN_MODE", ""),
-            "SCAN_SOURCE": form.get("SCAN_SOURCE", ""),
-            "SCAN_SIMPLEX": form.get("SCAN_SIMPLEX", "false"),
+            "SCAN_SOURCE": form.get("SCAN_SOURCE") or source_for_sides(simplex),
+            "SCAN_SIMPLEX": simplex,
             "SCAN_FORMAT": form.get("SCAN_FORMAT", "pdf"),
             "SCAN_PAGE_MODE": form.get("SCAN_PAGE_MODE", "multi"),
             "SCAN_OCR_ENABLED": "true" if form.get("SCAN_OCR_ENABLED") else "false",
@@ -329,6 +334,9 @@ PAGE = """
     .mode-name { font-weight: 700; }
     .mode-summary { color: #5f6368; font-size: 13px; }
     .default-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e6f4ea; color: #137333; font-size: 12px; font-weight: 700; }
+    details { display: grid; gap: 14px; }
+    summary { cursor: pointer; font-size: 18px; font-weight: 700; }
+    details[open] summary { margin-bottom: 14px; }
     pre { margin: 0; overflow: auto; white-space: pre-wrap; font-size: 13px; }
     ul { padding-left: 20px; }
     li { margin-bottom: 8px; }
@@ -390,7 +398,8 @@ PAGE = """
       </form>
     </section>
     <section>
-      <h2>Modes</h2>
+      <details {% if advanced_open %}open{% endif %}>
+      <summary>Advanced settings</summary>
       <ul class="mode-list">
         {% for mode in scan_settings.modes %}
         <li class="mode-row">
@@ -451,9 +460,6 @@ PAGE = """
               {% endfor %}
             </select>
           </label>
-          <label>Source
-            <input name="SCAN_SOURCE" value="{{ edit_mode.settings.SCAN_SOURCE }}">
-          </label>
           <label>OCR language
             <input name="SCAN_LANGUAGE" value="{{ edit_mode.settings.SCAN_LANGUAGE }}">
           </label>
@@ -471,6 +477,7 @@ PAGE = """
           {% endif %}
         </div>
       </form>
+      </details>
     </section>
     <section>
       <h2>Status</h2>
@@ -1144,6 +1151,7 @@ def index():
         PAGE,
         scan_settings=scan_settings,
         edit_mode=edit_mode,
+        advanced_open=bool(request.args.get("edit_mode")),
         mode_summaries={mode["id"]: mode_summary(mode) for mode in scan_settings["modes"]},
         last_job=last_job,
         last_ocr_job={**last_ocr_job, "queued": ocr_queue_length()},

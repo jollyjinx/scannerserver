@@ -60,9 +60,9 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with a few de
 - `Duplex PDF`: multipage PDF with OCR disabled.
 - `Single Page PDFs + OCR`: one PDF per page, each queued for OCR.
 
-Use the **Modes** section in the web UI to add, edit, delete, or choose the mode used by the physical scanner button. Settings are persisted in the scan output volume, so they survive container rebuilds and image updates.
+Use **Advanced settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button. Settings are persisted in the scan output volume, so they survive container rebuilds and image updates.
 
-`SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are passed to the SANE backend. With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output format conversion, OCR, blank-page removal, and autocrop; the reverse-engineered Wi-Fi scanner command does not expose resolution or color controls.
+`SCAN_RESOLUTION` and `SCAN_MODE` are passed to the SANE backend. The UI derives the SANE source from the Sides setting as `ADF Duplex` or `ADF Simplex`. With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output format conversion, OCR, blank-page removal, and autocrop; the reverse-engineered Wi-Fi scanner command does not expose resolution or color controls.
 
 ## Hardware And Network Requirements
 
@@ -246,7 +246,7 @@ Common environment variables:
 | `SCAN_LANGUAGE` | `deu+eng` | OCR languages passed to OCRmyPDF/Tesseract |
 | `SCAN_RESOLUTION` | `300` | Resolution for SANE backend |
 | `SCAN_MODE` | `Color` | Mode for SANE backend |
-| `SCAN_SOURCE` | `ADF Duplex` | Source for SANE backend |
+| `SCAN_SOURCE` | `ADF Duplex` | Advanced source override for SANE backend; the web UI derives this from the Sides setting |
 | `SCAN_FORMAT` | `pdf` | `pdf` or `png`; PNG output exports one image per page |
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
