@@ -98,7 +98,7 @@ offset 104..119  display name
 
 The web app uses this first-run flow for the Wi-Fi backend:
 
-1. Send VENS discovery/registration packets on the local network.
+1. Send VENS discovery/registration packets to LAN broadcast addresses and ARP neighbors with known ScanSnap/Silex MAC prefixes.
 2. List discovered ScanSnap devices, sorted with known Silex MAC prefixes first.
 3. Let you choose the scanner.
 4. If discovery does not find the scanner, let you enter its scanner IP address or Ethernet/MAC address manually.
@@ -334,7 +334,7 @@ Common environment variables:
 | `SCANSNAP_PAIRING_KEY` | empty | Optional pairing identity override; web setup can derive and persist this instead |
 | `SCANSNAP_CLIENT_IP` | empty | Optional client IP override for macvlan/static-IP deployments |
 | `SCANSNAP_MAC_PREFIXES` | `84:25:3f,00:80:92,00:40:17` | MAC prefixes sorted first in Wi-Fi discovery |
-| `SCANSNAP_DISCOVERY_SWEEP` | `true` | Also send discovery packets across the local `/24` |
+| `SCANSNAP_DISCOVERY_ARP_ALL` | `false` | Probe all ARP neighbors, not only neighbors matching known ScanSnap/Silex MAC prefixes |
 | `SCANSNAP_DISCOVERY_TIMEOUT_SECONDS` | `4` | First-run scanner discovery timeout |
 | `SCAN_SIMPLEX` | `false` | Set `true` to discard back pages with the Wi-Fi backend |
 | `SCAN_RAW_PDF_CREATOR` | `ScanSnap` | PDF `/Creator` value for raw PDFs |

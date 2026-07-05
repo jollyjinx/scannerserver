@@ -271,9 +271,81 @@ def discovery_hint(interfaces, devices):
         f"{interface['ip']}/{interface['prefixlen']}" for interface in interfaces if interface.get("ip")
     )
     return (
-        f"Discovery searched from {interface_text}. If this is a Docker bridge address instead of your LAN, "
-        "start the container with host networking or enter the scanner IP address manually."
+        f"Discovery searched from {interface_text} using LAN broadcast and ARP neighbors. "
+        "If this is a Docker bridge address instead of your LAN, start the container with host networking "
+        "or enter the scanner IP address manually."
     )
+
+
+def arp_neighbor_entries():
+    entries = []
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "-4", "neigh", "show"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            for item in json.loads(result.stdout or "[]"):
+                ip = str(item.get("dst") or "").strip()
+                mac = str(item.get("lladdr") or "").strip()
+                if not ip or not mac:
+                    continue
+                try:
+                    entries.append(
+                        {
+                            "ip": normalize_ipv4_address(ip),
+                            "mac": normalize_mac_address(mac),
+                            "state": str(item.get("state") or "").strip(),
+                            "dev": str(item.get("dev") or "").strip(),
+                        }
+                    )
+                except ValueError:
+                    continue
+            return entries
+    except Exception as exc:
+        log_event("scanner.discovery.arp.neigh.failed", error=exc)
+
+    try:
+        for line in Path("/proc/net/arp").read_text().splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 6:
+                continue
+            try:
+                entries.append(
+                    {
+                        "ip": normalize_ipv4_address(parts[0]),
+                        "mac": normalize_mac_address(parts[3]),
+                        "state": parts[2],
+                        "dev": parts[5],
+                    }
+                )
+            except ValueError:
+                continue
+    except Exception as exc:
+        log_event("scanner.discovery.arp.proc.failed", error=exc)
+    return entries
+
+
+def address_in_interface_network(address, interface):
+    try:
+        network = ipaddress.ip_network(f"{interface['ip']}/{interface['prefixlen']}", strict=False)
+        return ipaddress.ip_address(address) in network
+    except ValueError:
+        return False
+
+
+def arp_neighbor_targets_for_interface(interface):
+    include_all_neighbors = os.environ.get("SCANSNAP_DISCOVERY_ARP_ALL", "false").lower() in TRUE_VALUES
+    targets = set()
+    for entry in arp_neighbor_entries():
+        if not include_all_neighbors and not scanner_matches_mac_prefix(entry.get("mac")):
+            continue
+        if address_in_interface_network(entry["ip"], interface):
+            targets.add(entry["ip"])
+    return targets
 
 
 def discovery_targets_for_interface(interface):
@@ -284,20 +356,12 @@ def discovery_targets_for_interface(interface):
         if target:
             targets.add(target)
 
+    targets.update(arp_neighbor_targets_for_interface(interface))
+
     try:
         network = ipaddress.ip_network(f"{interface['ip']}/{interface['prefixlen']}", strict=False)
         if network.version == 4:
             targets.add(str(network.broadcast_address))
-            if os.environ.get("SCANSNAP_DISCOVERY_SWEEP", "true").lower() in TRUE_VALUES:
-                if network.num_addresses > 256:
-                    network = ipaddress.ip_network(f"{interface['ip']}/24", strict=False)
-                max_hosts = int(os.environ.get("SCANSNAP_DISCOVERY_MAX_HOSTS", "254"))
-                for index, host in enumerate(network.hosts()):
-                    if index >= max_hosts:
-                        break
-                    host_text = str(host)
-                    if host_text != interface["ip"]:
-                        targets.add(host_text)
     except ValueError:
         pass
 
