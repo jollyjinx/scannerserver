@@ -1238,47 +1238,82 @@ PAGE = """
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>scannerserver</title>
   <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { margin: 0; background: #f5f5f2; color: #202124; }
-    main { max-width: 960px; margin: 0 auto; padding: 32px 20px; }
-    h1 { font-size: 28px; margin: 0 0 24px; }
-    h2 { font-size: 18px; margin: 0 0 12px; }
-    h3 { font-size: 15px; margin: 18px 0 10px; }
-    section { background: white; border: 1px solid #dadce0; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
+    :root {
+      color-scheme: light dark;
+      --page: #f6f7f4;
+      --panel: #ffffff;
+      --panel-soft: #f8faf9;
+      --text: #202124;
+      --muted: #5f6368;
+      --border: #d8ddd8;
+      --border-strong: #c1c8c1;
+      --primary: #0b57d0;
+      --primary-text: #ffffff;
+      --secondary: #eef2f1;
+      --secondary-text: #27302f;
+      --danger: #b3261e;
+      --notice-bg: #e8f0fe;
+      --notice-text: #174ea6;
+      --warning-bg: #fef7e0;
+      --warning-text: #8f4700;
+      --success-bg: #e6f4ea;
+      --success-text: #137333;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body { margin: 0; background: var(--page); color: var(--text); }
+    main { max-width: 1040px; margin: 0 auto; padding: 32px 20px; }
+    h1 { font-size: 28px; margin: 0 0 18px; letter-spacing: 0; }
+    h2 { font-size: 18px; margin: 0 0 12px; letter-spacing: 0; }
+    h3 { font-size: 15px; margin: 18px 0 10px; letter-spacing: 0; }
+    section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(60, 64, 67, 0.08); }
     label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
     input, select, button { font: inherit; }
-    input, select { padding: 8px 10px; border: 1px solid #c7c9cc; border-radius: 6px; background: white; color: #202124; }
-    button { padding: 9px 14px; border: 0; border-radius: 6px; background: #0b57d0; color: white; font-weight: 700; cursor: pointer; }
+    input, select { padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text); }
+    input:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent); border-color: var(--primary); }
+    button { padding: 9px 14px; border: 1px solid transparent; border-radius: 6px; background: var(--primary); color: var(--primary-text); font-weight: 700; cursor: pointer; }
     button:disabled { background: #8a9199; cursor: wait; }
     form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
     .stack-form { grid-template-columns: 1fr; align-items: stretch; }
     .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
     .checkbox-grid { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
     .button-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    .secondary-button { background: #5f6368; }
-    .danger-button { background: #b3261e; }
-    .notice { padding: 10px 12px; border-radius: 6px; background: #e8f0fe; color: #174ea6; font-weight: 700; }
-    .warning { padding: 10px 12px; border-radius: 6px; background: #fef7e0; color: #8f4700; font-weight: 700; }
-    .muted { color: #5f6368; font-size: 13px; }
+    .secondary-button { background: var(--secondary); color: var(--secondary-text); border-color: var(--border); }
+    .danger-button { background: var(--danger); color: white; }
+    .notice { padding: 10px 12px; border-radius: 6px; background: var(--notice-bg); color: var(--notice-text); font-weight: 700; }
+    .warning { padding: 10px 12px; border-radius: 6px; background: var(--warning-bg); color: var(--warning-text); font-weight: 700; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .page-head { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    .page-head h1 { margin: 0; }
+    .scanner-strip { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; }
+    .scanner-summary { display: grid; gap: 6px; min-width: 0; }
+    .scanner-summary h2 { margin: 0; }
+    .scanner-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 13px; }
+    .setup-panel { max-width: 760px; margin-left: auto; margin-right: auto; }
+    .setup-intro { margin: 0 0 14px; color: var(--muted); }
+    .setup-drawer { min-width: 220px; }
+    .setup-drawer summary { justify-content: flex-end; }
+    .setup-drawer[open] { flex-basis: 100%; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 14px; }
+    .setup-drawer[open] summary { justify-content: flex-start; }
+    .setup-controls { display: grid; gap: 14px; }
     .device-list { display: grid; gap: 8px; margin: 12px 0; }
-    .device-option { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; font-weight: 400; }
+    .device-option { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-weight: 400; background: var(--panel-soft); }
     .device-title { font-weight: 700; }
     .setup-details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 10px 0; }
-    .setup-details dt { color: #5f6368; font-weight: 700; }
+    .setup-details dt { color: var(--muted); font-weight: 700; }
     .setup-details dd { margin: 0; overflow-wrap: anywhere; }
     .mode-list { display: grid; gap: 8px; padding: 0; margin: 0 0 14px; list-style: none; }
-    .mode-row { display: grid; gap: 4px; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; }
+    .mode-row { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); }
     .mode-row-title { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
     .mode-name { font-weight: 700; }
-    .mode-summary { color: #5f6368; font-size: 13px; }
-    .default-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e6f4ea; color: #137333; font-size: 12px; font-weight: 700; }
+    .mode-summary { color: var(--muted); font-size: 13px; }
+    .default-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--success-bg); color: var(--success-text); font-size: 12px; font-weight: 700; }
     details { display: grid; gap: 14px; }
-    summary { cursor: pointer; font-size: 18px; font-weight: 700; }
+    summary { cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
     details[open] summary { margin-bottom: 14px; }
     pre { margin: 0; overflow: auto; white-space: pre-wrap; font-size: 13px; }
     ul { padding-left: 20px; }
     li { margin-bottom: 8px; }
-    a { color: #0b57d0; }
+    a { color: var(--primary); }
     .bulk-delete-form { display: block; }
     .bulk-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
     .checkbox-label { display: inline-flex; gap: 8px; align-items: center; font-weight: 700; }
@@ -1287,46 +1322,55 @@ PAGE = """
     .file-day { display: grid; gap: 10px; }
     .file-day-title { margin: 0; font-size: 16px; }
     .file-list { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
-    .file-row { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; }
+    .file-row { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); }
     .file-preview-link { display: block; width: 112px; height: 148px; border-radius: 6px; }
-    .file-preview { width: 112px; height: 148px; object-fit: cover; border: 1px solid #dadce0; border-radius: 6px; background: #f1f3f4; }
+    .file-preview { width: 112px; height: 148px; object-fit: cover; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
     .file-details { display: grid; gap: 8px; min-width: 0; }
     .file-title { font-weight: 700; overflow-wrap: anywhere; }
     .file-links { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .file-variant { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
-    .file-name { overflow-wrap: anywhere; font-size: 13px; color: #5f6368; }
-    .delete-button { background: #b3261e; padding: 5px 9px; font-size: 13px; }
-    .bulk-delete-button { background: #b3261e; }
-    .file-kind { font-size: 12px; font-weight: 700; color: #5f6368; }
-    .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: #e8f0fe; color: #174ea6; font-size: 13px; font-weight: 700; }
+    .file-name { overflow-wrap: anywhere; font-size: 13px; color: var(--muted); }
+    .delete-button { background: var(--danger); padding: 5px 9px; font-size: 13px; }
+    .bulk-delete-button { background: var(--danger); }
+    .file-kind { font-size: 12px; font-weight: 700; color: var(--muted); }
+    .status { display: inline-block; padding: 3px 8px; border-radius: 999px; background: var(--notice-bg); color: var(--notice-text); font-size: 13px; font-weight: 700; }
     @media (max-width: 560px) {
+      main { padding: 20px 12px; }
+      .page-head, .scanner-strip { align-items: stretch; flex-direction: column; }
+      .setup-drawer summary { justify-content: flex-start; }
       .file-row { grid-template-columns: 72px 1fr; }
       .file-preview-link, .file-preview { width: 72px; height: 96px; }
     }
     @media (prefers-color-scheme: dark) {
-      body { background: #171717; color: #f1f3f4; }
-      section { background: #202124; border-color: #3c4043; }
-      input, select { background: #171717; color: #f1f3f4; border-color: #5f6368; }
-      a { color: #8ab4f8; }
-      .mode-row { border-color: #3c4043; }
-      .mode-summary { color: #bdc1c6; }
-      .default-badge { background: #1e3b27; color: #81c995; }
-      .notice { background: #17325f; color: #d2e3fc; }
-      .warning { background: #3f2e00; color: #fdd663; }
-      .muted, .setup-details dt { color: #bdc1c6; }
-      .device-option { border-color: #3c4043; }
-      .file-row { border-color: #3c4043; }
-      .file-preview { border-color: #3c4043; background: #171717; }
+      :root {
+        --page: #111312;
+        --panel: #1b1f1d;
+        --panel-soft: #202622;
+        --text: #f1f3f4;
+        --muted: #b8c0bd;
+        --border: #343b37;
+        --border-strong: #59625d;
+        --primary: #8ab4f8;
+        --primary-text: #101418;
+        --secondary: #26302b;
+        --secondary-text: #e8ecea;
+        --danger: #f28b82;
+        --notice-bg: #17325f;
+        --notice-text: #d2e3fc;
+        --warning-bg: #3f2e00;
+        --warning-text: #fdd663;
+        --success-bg: #1e3b27;
+        --success-text: #81c995;
+      }
+      section { box-shadow: none; }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>scannerserver</h1>
     {% set setup_required = wifi_backend and scanner_setup.required %}
-    {% if wifi_backend %}
-    <section>
-      <h2>Scanner setup</h2>
+    {% macro scanner_setup_controls() %}
+    <div class="setup-controls">
       {% if setup_message %}<p class="notice">{{ setup_message }}</p>{% endif %}
       {% if setup_required and not setup_message %}<p class="notice">Finish scanner setup before scanning.</p>{% endif %}
       {% if scanner_setup.configured %}
@@ -1417,7 +1461,36 @@ PAGE = """
         <button>Continue setup</button>
       </form>
       {% endif %}
+    </div>
+    {% endmacro %}
+
+    <div class="page-head">
+      <h1>scannerserver</h1>
+    </div>
+    {% if wifi_backend %}
+      {% if scanner_setup.configured %}
+    <section class="scanner-strip">
+      <div class="scanner-summary">
+        <h2>{{ scanner_setup.config.name or "ScanSnap" }}</h2>
+        <div class="scanner-meta">
+          <span><span class="status">configured</span></span>
+          <span>IP {{ scanner_setup.config.scanner_ip }}</span>
+          {% if scanner_setup.config.serial %}<span>Serial {{ scanner_setup.config.serial }}</span>{% endif %}
+          {% if scanner_setup.config.mac %}<span>MAC {{ scanner_setup.config.mac }}</span>{% endif %}
+        </div>
+      </div>
+      <details class="setup-drawer">
+        <summary>Scanner setup</summary>
+        {{ scanner_setup_controls() }}
+      </details>
     </section>
+      {% else %}
+    <section class="setup-panel">
+      <h2>Scanner setup</h2>
+      <p class="setup-intro">Choose the network scanner before scanning.</p>
+      {{ scanner_setup_controls() }}
+    </section>
+      {% endif %}
     {% endif %}
     {% if not setup_required %}
     <section>
