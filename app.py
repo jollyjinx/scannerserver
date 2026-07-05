@@ -406,6 +406,26 @@ def discovery_packets(client_ip, client_port):
     return bytes(vens), bytes(ssnr)
 
 
+def registration_discovery_packets(client_ip, mac):
+    magics = [b"VENS", b"ssNR", b"V2ss"]
+    flags = [0x0010, 0x0100, 0x1000]
+    ip_bytes = socket.inet_aton(client_ip)
+
+    packets = []
+    for magic, flag in zip(magics, flags):
+        packet = bytearray(32)
+        packet[:4] = magic
+        if magic == b"V2ss":
+            packet[4:8] = be32(1)
+        packet[8:12] = ip_bytes
+        packet[12:18] = mac
+        packet[22] = 0xD7
+        packet[23] = 0xE0
+        packet[24:26] = flag.to_bytes(2, "big")
+        packets.append(bytes(packet))
+    return tuple(packets)
+
+
 def discover_scansnap_devices(timeout=None, interfaces=None):
     timeout = float(timeout or os.environ.get("SCANSNAP_DISCOVERY_TIMEOUT_SECONDS", "4"))
     scanner_port = int(os.environ.get("SCANSNAP_REGISTRATION_PORT", "52217"))
@@ -427,10 +447,17 @@ def discover_scansnap_devices(timeout=None, interfaces=None):
         sock.settimeout(0.25)
 
         send_plan = []
+        try:
+            mac = client_mac_bytes()
+        except Exception as exc:
+            log_event("scanner.discovery.client_mac.failed", error=exc)
+            mac = None
         for interface in interfaces:
-            packets = discovery_packets(interface["ip"], client_port)
+            packets = list(discovery_packets(interface["ip"], client_port))
+            if mac:
+                packets.extend(registration_discovery_packets(interface["ip"], mac))
             for target in discovery_targets_for_interface(interface):
-                send_plan.append((interface["ip"], target, packets))
+                send_plan.append((interface["ip"], target, tuple(packets)))
 
         target_list = [target for _client_ip, target, _packets in send_plan]
         log_event(
@@ -439,6 +466,7 @@ def discover_scansnap_devices(timeout=None, interfaces=None):
             count=len(target_list),
             targets=",".join(target_list[:32]),
             truncated=max(len(target_list) - 32, 0),
+            packet_count=len(send_plan[0][2]) if send_plan else 0,
         )
 
         devices = {}
