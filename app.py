@@ -57,6 +57,8 @@ scanner_discovery_state = {
     "started": None,
     "finished": None,
     "error": "",
+    "hint": "",
+    "interfaces": [],
     "devices": [],
 }
 
@@ -259,6 +261,21 @@ def local_ipv4_interfaces():
         probe.close()
 
 
+def discovery_hint(interfaces, devices):
+    if devices:
+        return ""
+    if not interfaces:
+        return "No local IPv4 interface was found for scanner discovery."
+
+    interface_text = ", ".join(
+        f"{interface['ip']}/{interface['prefixlen']}" for interface in interfaces if interface.get("ip")
+    )
+    return (
+        f"Discovery searched from {interface_text}. If this is a Docker bridge address instead of your LAN, "
+        "start the container with host networking or enter the scanner IP address manually."
+    )
+
+
 def discovery_targets_for_interface(interface):
     targets = {"255.255.255.255"}
     configured_targets = os.environ.get("SCANSNAP_DISCOVERY_TARGETS", "")
@@ -311,11 +328,11 @@ def discovery_packets(client_ip, client_port):
     return bytes(vens), bytes(ssnr)
 
 
-def discover_scansnap_devices(timeout=None):
+def discover_scansnap_devices(timeout=None, interfaces=None):
     timeout = float(timeout or os.environ.get("SCANSNAP_DISCOVERY_TIMEOUT_SECONDS", "4"))
     scanner_port = int(os.environ.get("SCANSNAP_REGISTRATION_PORT", "52217"))
     source_port = int(os.environ.get("SCANSNAP_DISCOVERY_SOURCE_PORT", "55264"))
-    interfaces = local_ipv4_interfaces()
+    interfaces = interfaces if interfaces is not None else local_ipv4_interfaces()
     if not interfaces:
         raise RuntimeError("no local IPv4 interface found")
 
@@ -691,13 +708,16 @@ def find_discovered_device_by_mac(mac):
     return None
 
 
-def store_scanner_discovery_result(devices):
+def store_scanner_discovery_result(devices, interfaces=None):
+    interfaces = interfaces if interfaces is not None else local_ipv4_interfaces()
     with scanner_discovery_lock:
         scanner_discovery_state.update(
             {
                 "status": "done",
                 "finished": iso_timestamp(),
                 "error": "",
+                "hint": discovery_hint(interfaces, devices),
+                "interfaces": interfaces,
                 "devices": devices,
             }
         )
@@ -710,6 +730,8 @@ def store_scanner_discovery_failure(error):
                 "status": "failed",
                 "finished": iso_timestamp(),
                 "error": str(error),
+                "hint": "Scanner discovery failed. Use host networking or enter the scanner IP address manually.",
+                "interfaces": local_ipv4_interfaces(),
                 "devices": [],
             }
         )
@@ -722,11 +744,12 @@ def discover_device_by_mac(mac):
         return device
 
     try:
-        devices = discover_scansnap_devices()
+        interfaces = local_ipv4_interfaces()
+        devices = discover_scansnap_devices(interfaces=interfaces)
     except Exception as exc:
         store_scanner_discovery_failure(exc)
         raise
-    store_scanner_discovery_result(devices)
+    store_scanner_discovery_result(devices, interfaces=interfaces)
     for device in devices:
         if normalize_mac_address(device.get("mac", "")) == normalized_mac:
             return dict(device)
@@ -850,8 +873,9 @@ def configure_scanner_from_device(device):
 
 def scanner_discovery_worker():
     try:
-        devices = discover_scansnap_devices()
-        store_scanner_discovery_result(devices)
+        interfaces = local_ipv4_interfaces()
+        devices = discover_scansnap_devices(interfaces=interfaces)
+        store_scanner_discovery_result(devices, interfaces=interfaces)
         log_event("scanner.discovery.finished", count=len(devices))
     except Exception as exc:
         store_scanner_discovery_failure(exc)
@@ -872,6 +896,8 @@ def ensure_scanner_discovery_started(force=False):
                 "started": iso_timestamp(),
                 "finished": None,
                 "error": "",
+                "hint": "",
+                "interfaces": local_ipv4_interfaces(),
                 "devices": [] if force else scanner_discovery_state["devices"],
             }
         )
@@ -1256,6 +1282,7 @@ PAGE = """
       </form>
       {% elif scanner_setup.discovery.status == "done" %}
       <p class="muted">No ScanSnap devices found.</p>
+      {% if scanner_setup.discovery.hint %}<p class="warning">{{ scanner_setup.discovery.hint }}</p>{% endif %}
       {% endif %}
 
       {% if not scanner_setup.configured and not scanner_setup.needs_password %}
@@ -1263,13 +1290,13 @@ PAGE = """
       <form class="stack-form" method="post" action="{{ url_for('manual_scanner_setup') }}">
         <div class="settings-grid">
           <label>Scanner IP
-            <input name="scanner_ip" value="{{ scanner_setup.manual_scanner_ip }}" inputmode="numeric" autocomplete="off" placeholder="10.112.10.11">
+            <input name="scanner_ip" value="{{ scanner_setup.manual_scanner_ip }}" inputmode="numeric" autocomplete="off" placeholder="scanner IP address">
           </label>
           <label>Ethernet address
-            <input name="scanner_mac" autocomplete="off" placeholder="84:25:3f:16:6e:a0">
+            <input name="scanner_mac" autocomplete="off" placeholder="scanner Ethernet address">
           </label>
           <label>Serial
-            <input name="scanner_serial" autocomplete="off" placeholder="AWRHC08122">
+            <input name="scanner_serial" autocomplete="off" placeholder="scanner serial number">
           </label>
         </div>
         <button>Continue setup</button>
