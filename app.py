@@ -146,6 +146,12 @@ def mac_prefixes():
     return tuple(prefix.strip().lower().replace("-", ":") for prefix in raw.split(",") if prefix.strip())
 
 
+def arp_state_text(value):
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value)
+    return str(value or "")
+
+
 def normalize_mac_address(value):
     raw = str(value or "").strip()
     if not raw:
@@ -298,7 +304,7 @@ def arp_neighbor_entries():
                         {
                             "ip": normalize_ipv4_address(ip),
                             "mac": normalize_mac_address(mac),
-                            "state": str(item.get("state") or "").strip(),
+                            "state": arp_state_text(item.get("state")).strip(),
                             "dev": str(item.get("dev") or "").strip(),
                         }
                     )
@@ -339,9 +345,17 @@ def address_in_interface_network(address, interface):
 
 def arp_neighbor_targets_for_interface(interface):
     include_all_neighbors = os.environ.get("SCANSNAP_DISCOVERY_ARP_ALL", "false").lower() in TRUE_VALUES
+    prefixes = mac_prefixes()
+    if not include_all_neighbors and not prefixes:
+        log_event("scanner.discovery.arp.skipped", reason="no-mac-prefixes")
+        return set()
+
     targets = set()
     for entry in arp_neighbor_entries():
-        if not include_all_neighbors and not scanner_matches_mac_prefix(entry.get("mac")):
+        state = entry.get("state", "").upper()
+        if "FAILED" in state or "INCOMPLETE" in state:
+            continue
+        if not include_all_neighbors and not any(entry.get("mac", "").startswith(prefix) for prefix in prefixes):
             continue
         if address_in_interface_network(entry["ip"], interface):
             targets.add(entry["ip"])
@@ -417,6 +431,15 @@ def discover_scansnap_devices(timeout=None, interfaces=None):
             packets = discovery_packets(interface["ip"], client_port)
             for target in discovery_targets_for_interface(interface):
                 send_plan.append((interface["ip"], target, packets))
+
+        target_list = [target for _client_ip, target, _packets in send_plan]
+        log_event(
+            "scanner.discovery.targets",
+            interfaces=",".join(f"{interface['ip']}/{interface['prefixlen']}" for interface in interfaces),
+            count=len(target_list),
+            targets=",".join(target_list[:32]),
+            truncated=max(len(target_list) - 32, 0),
+        )
 
         devices = {}
         deadline = time.monotonic() + timeout
