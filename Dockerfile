@@ -24,6 +24,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 ARG APP_UID=1000
 ARG APP_GID=1000
+ARG VCS_REF=unknown
+
+ENV SCANNERSERVER_VERSION=${VCS_REF}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     avahi-daemon \

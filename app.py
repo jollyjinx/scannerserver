@@ -2175,6 +2175,16 @@ def editable_mode_from_request(scan_settings):
     return find_mode(scan_settings, edit_mode_id) or default_mode(scan_settings)
 
 
+def log_startup():
+    log_event(
+        "app.start",
+        version=os.environ.get("SCANNERSERVER_VERSION", "unknown"),
+        backend=os.environ.get("SCAN_BACKEND", "wifi"),
+        output_dir=OUTPUT_DIR,
+        scanner_config_path=SCANNER_CONFIG_PATH,
+    )
+
+
 @app.get("/")
 def index():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -2423,5 +2433,6 @@ def delete_selected_files():
 
 
 if __name__ == "__main__":
+    log_startup()
     maybe_start_button_listener()
     app.run(host="0.0.0.0", port=int(os.environ.get("WEB_PORT", "8080")))
