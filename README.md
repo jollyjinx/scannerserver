@@ -198,7 +198,7 @@ Open the web UI:
 http://YOUR_LINUX_HOST/
 ```
 
-On first startup with `SCAN_BACKEND=wifi`, finish **Scanner setup** before the scan controls are shown. Choose a discovered scanner, or enter the scanner IP address or Ethernet/MAC address manually. If the scanner still uses its default password, the app configures the pairing key automatically from the discovered serial number.
+On first startup, finish **Scanner setup** before the scan controls are shown. Choose a discovered scanner, or enter the scanner IP address or Ethernet/MAC address manually. If the scanner still uses its default password, the app configures the pairing key automatically from the discovered serial number.
 
 Press **Start scan** or press the scanner's physical scan button.
 

@@ -110,7 +110,7 @@ def bool_text(value):
 
 
 def wifi_backend_enabled():
-    return os.environ.get("SCAN_BACKEND") == "wifi"
+    return os.environ.get("SCAN_BACKEND", "wifi") == "wifi"
 
 
 def null_terminated_text(data):
@@ -1471,7 +1471,7 @@ PAGE = """
 
 
 def list_devices():
-    if os.environ.get("SCAN_BACKEND") == "wifi":
+    if wifi_backend_enabled():
         scanner_ip = os.environ.get("SCANNER_IP", "not configured")
         return f"ScanSnap Wi-Fi backend configured for {scanner_ip}."
 
@@ -1568,7 +1568,7 @@ def run_scan_locked(env_overrides):
         log_event(
             "scan.command.start",
             trigger=trigger,
-            backend=env.get("SCAN_BACKEND", "sane"),
+            backend=env.get("SCAN_BACKEND", "wifi"),
             scanner_ip=env.get("SCANNER_IP"),
             source=env.get("SCAN_SOURCE", "ADF Duplex"),
             format=env.get("SCAN_FORMAT", "pdf"),
@@ -1600,7 +1600,7 @@ def run_scan_locked(env_overrides):
                 else:
                     log_event("scan.ocr.skipped", raw_path=raw_path, enabled=env.get("SCAN_OCR_ENABLED", "true"))
     finally:
-        if os.environ.get("SCAN_BACKEND") == "wifi":
+        if wifi_backend_enabled():
             button_rearm_requested.set()
             log_event("button.rearm.requested", trigger=trigger)
         job_lock.release()
@@ -1881,7 +1881,7 @@ def button_listener():
 
 
 def maybe_start_button_listener():
-    if os.environ.get("SCAN_BACKEND") != "wifi":
+    if not wifi_backend_enabled():
         return
     if os.environ.get("SCANSNAP_BUTTON_SCAN_ENABLED", "true").lower() not in {"1", "true", "yes", "on"}:
         return
