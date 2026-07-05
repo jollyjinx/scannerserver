@@ -101,9 +101,10 @@ The web app uses this first-run flow for the Wi-Fi backend:
 1. Send VENS discovery/registration packets on the local network.
 2. List discovered ScanSnap devices, sorted with known Silex MAC prefixes first.
 3. Let you choose the scanner.
-4. Derive the default pairing identity from the discovered serial number.
-5. Test the pairing identity against TCP `53219`.
-6. Save the working scanner IP and pairing identity in `/scans/.scannerserver-scanner.json`.
+4. If discovery does not find the scanner, let you enter its scanner IP address or Ethernet/MAC address manually.
+5. Derive the default pairing identity from the discovered serial number.
+6. Test the pairing identity against TCP `53219`.
+7. Save the working scanner IP and pairing identity in `/scans/.scannerserver-scanner.json`.
 
 If the default password was changed, the test fails and the web UI asks for the scanner password. The app derives the pairing identity from that password and stores only the derived identity.
 
@@ -197,7 +198,7 @@ Open the web UI:
 http://YOUR_LINUX_HOST/
 ```
 
-On first startup with `SCAN_BACKEND=wifi`, choose the scanner from **Scanner setup**. If the scanner still uses its default password, the app configures the pairing key automatically from the discovered serial number.
+On first startup with `SCAN_BACKEND=wifi`, finish **Scanner setup** before the scan controls are shown. Choose a discovered scanner, or enter the scanner IP address or Ethernet/MAC address manually. If the scanner still uses its default password, the app configures the pairing key automatically from the discovered serial number.
 
 Press **Start scan** or press the scanner's physical scan button.
 

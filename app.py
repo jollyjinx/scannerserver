@@ -144,6 +144,29 @@ def mac_prefixes():
     return tuple(prefix.strip().lower().replace("-", ":") for prefix in raw.split(",") if prefix.strip())
 
 
+def normalize_mac_address(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    compact = re.sub(r"[^0-9a-fA-F]", "", raw)
+    if len(compact) != 12:
+        raise ValueError("enter a 12-digit Ethernet address")
+    return ":".join(compact[index : index + 2] for index in range(0, 12, 2)).lower()
+
+
+def normalize_ipv4_address(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError as exc:
+        raise ValueError("enter a valid scanner IP address") from exc
+    if address.version != 4:
+        raise ValueError("enter an IPv4 scanner address")
+    return str(address)
+
+
 def scanner_matches_mac_prefix(mac):
     prefixes = mac_prefixes()
     if not prefixes:
@@ -397,7 +420,11 @@ def direct_register_scanner(scanner_ip, client_ip, mac):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(3.0)
-    sock.bind((client_ip, source_port))
+    try:
+        sock.bind((client_ip, source_port))
+    except OSError as exc:
+        log_event("scanner.registration.source_port.fallback", source_port=source_port, error=exc)
+        sock.bind((client_ip, 0))
     try:
         for _ in range(4):
             for packet in packets:
@@ -613,18 +640,21 @@ def scanner_setup_context():
     env_config = env_scanner_config()
     stored_config = load_stored_scanner_config()
     active = env_config or stored_config
+    configured = bool(active and active.get("status") == "configured")
     with scanner_discovery_lock:
         discovery = {
             **scanner_discovery_state,
             "devices": [dict(device) for device in scanner_discovery_state["devices"]],
         }
     return {
-        "configured": bool(active and active.get("status") == "configured"),
+        "configured": configured,
+        "required": wifi_backend_enabled() and not configured,
         "needs_password": bool(stored_config and stored_config.get("status") == "needs_password"),
         "config": active or stored_config or {},
         "stored_config": stored_config or {},
         "discovery": discovery,
         "env_configured": bool(env_config),
+        "manual_scanner_ip": os.environ.get("SCANNER_IP", "").strip(),
     }
 
 
@@ -638,6 +668,9 @@ def setup_message(code):
         "no-device": "Selected scanner was not found in the current discovery results.",
         "cleared": "Stored scanner setup cleared.",
         "setup-required": "Choose a scanner before starting a Wi-Fi scan.",
+        "manual-missing": "Enter a scanner IP address or Ethernet address.",
+        "manual-invalid": "Check the scanner IP address and Ethernet address.",
+        "manual-not-found": "No scanner with that Ethernet address was found. Enter the scanner IP address instead.",
     }.get(code or "", "")
 
 
@@ -649,29 +682,179 @@ def find_discovered_device(device_id):
     return None
 
 
+def find_discovered_device_by_mac(mac):
+    normalized_mac = normalize_mac_address(mac)
+    with scanner_discovery_lock:
+        for device in scanner_discovery_state["devices"]:
+            if normalize_mac_address(device.get("mac", "")) == normalized_mac:
+                return dict(device)
+    return None
+
+
+def store_scanner_discovery_result(devices):
+    with scanner_discovery_lock:
+        scanner_discovery_state.update(
+            {
+                "status": "done",
+                "finished": iso_timestamp(),
+                "error": "",
+                "devices": devices,
+            }
+        )
+
+
+def store_scanner_discovery_failure(error):
+    with scanner_discovery_lock:
+        scanner_discovery_state.update(
+            {
+                "status": "failed",
+                "finished": iso_timestamp(),
+                "error": str(error),
+                "devices": [],
+            }
+        )
+
+
+def discover_device_by_mac(mac):
+    normalized_mac = normalize_mac_address(mac)
+    device = find_discovered_device_by_mac(normalized_mac)
+    if device:
+        return device
+
+    try:
+        devices = discover_scansnap_devices()
+    except Exception as exc:
+        store_scanner_discovery_failure(exc)
+        raise
+    store_scanner_discovery_result(devices)
+    for device in devices:
+        if normalize_mac_address(device.get("mac", "")) == normalized_mac:
+            return dict(device)
+    return None
+
+
+def scanner_device_record(device):
+    device = dict(device or {})
+    scanner_ip = normalize_ipv4_address(device.get("scanner_ip") or device.get("ip") or "")
+    mac = normalize_mac_address(device.get("mac", "")) if device.get("mac") else ""
+    serial = str(device.get("serial") or "").strip()
+    name = str(device.get("name") or "ScanSnap").strip() or "ScanSnap"
+    return {
+        **device,
+        "id": device.get("id") or f"{mac or 'manual'}@{scanner_ip}",
+        "ip": scanner_ip,
+        "scanner_ip": scanner_ip,
+        "mac": mac,
+        "serial": serial,
+        "name": name,
+        "matches_prefix": scanner_matches_mac_prefix(mac),
+    }
+
+
+def manual_device_record(scanner_ip, mac="", serial="", name="ScanSnap"):
+    return scanner_device_record(
+        {
+            "ip": scanner_ip,
+            "scanner_ip": scanner_ip,
+            "mac": mac,
+            "serial": serial,
+            "name": name or "ScanSnap",
+        }
+    )
+
+
+def lookup_manual_scanner(scanner_ip="", mac="", serial=""):
+    scanner_ip = normalize_ipv4_address(scanner_ip)
+    mac = normalize_mac_address(mac) if mac else ""
+    serial = str(serial or "").strip()
+
+    if not scanner_ip and not mac:
+        raise ValueError("enter a scanner IP address or Ethernet address")
+
+    if not scanner_ip:
+        device = discover_device_by_mac(mac)
+        if not device:
+            raise LookupError("no scanner with that Ethernet address was found")
+        if serial and not device.get("serial"):
+            device["serial"] = serial
+        return scanner_device_record(device)
+
+    discovered = None
+    try:
+        client_ip = client_ip_for_scanner(scanner_ip)
+        discovered_tail, discovered = direct_register_scanner(scanner_ip, client_ip, client_mac_bytes())
+        if discovered:
+            discovered["metadata"] = discovered.get("metadata") or discovered_tail.hex()
+    except Exception as exc:
+        log_event("scanner.setup.manual.lookup.failed", scanner_ip=scanner_ip, error=exc)
+
+    device = manual_device_record(scanner_ip, mac=mac, serial=serial)
+    if discovered:
+        discovered = scanner_device_record({**device, **discovered})
+        if mac and discovered.get("mac") and discovered["mac"] != mac:
+            raise ValueError("the scanner at that IP address answered with a different Ethernet address")
+        if serial and not discovered.get("serial"):
+            discovered["serial"] = serial
+        return discovered
+    return device
+
+
+def save_scanner_needs_password(device, message):
+    save_scanner_config(
+        {
+            **scanner_device_record(device),
+            "status": "needs_password",
+            "last_error": message,
+        }
+    )
+
+
+def configure_scanner_from_device(device):
+    device = scanner_device_record(device)
+    password = password_from_serial(device.get("serial", ""))
+    if not password:
+        save_scanner_needs_password(
+            device,
+            "Scanner serial was not available; enter the scanner password.",
+        )
+        return "password-needed"
+
+    pairing_key = derive_scansnap_pairing_key(password)
+    try:
+        result = test_scansnap_pairing_key(device["ip"], pairing_key)
+    except Exception as exc:
+        result = {"ok": False, "status": None, "message": str(exc)}
+
+    if result["ok"]:
+        discovered = scanner_device_record({**device, **(result.get("device") or {})})
+        save_scanner_config(
+            {
+                **discovered,
+                "scanner_ip": discovered.get("ip") or device["ip"],
+                "pairing_key": pairing_key,
+                "password_source": "serial-default",
+                "status": "configured",
+                "last_error": "",
+            }
+        )
+        log_event("scanner.setup.configured", scanner_ip=device["ip"], serial=device.get("serial"))
+        return "configured"
+
+    save_scanner_needs_password(
+        device,
+        f"Default password {password!r} was rejected: {result['message']}.",
+    )
+    log_event("scanner.setup.default_password.failed", scanner_ip=device["ip"], status=result.get("status"))
+    return "password-needed"
+
+
 def scanner_discovery_worker():
     try:
         devices = discover_scansnap_devices()
-        with scanner_discovery_lock:
-            scanner_discovery_state.update(
-                {
-                    "status": "done",
-                    "finished": iso_timestamp(),
-                    "error": "",
-                    "devices": devices,
-                }
-            )
+        store_scanner_discovery_result(devices)
         log_event("scanner.discovery.finished", count=len(devices))
     except Exception as exc:
-        with scanner_discovery_lock:
-            scanner_discovery_state.update(
-                {
-                    "status": "failed",
-                    "finished": iso_timestamp(),
-                    "error": str(exc),
-                    "devices": [],
-                }
-            )
+        store_scanner_discovery_failure(exc)
         log_event("scanner.discovery.failed", error=exc)
 
 
@@ -919,6 +1102,7 @@ PAGE = """
     main { max-width: 960px; margin: 0 auto; padding: 32px 20px; }
     h1 { font-size: 28px; margin: 0 0 24px; }
     h2 { font-size: 18px; margin: 0 0 12px; }
+    h3 { font-size: 15px; margin: 18px 0 10px; }
     section { background: white; border: 1px solid #dadce0; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
     label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
     input, select, button { font: inherit; }
@@ -998,10 +1182,12 @@ PAGE = """
 <body>
   <main>
     <h1>scannerserver</h1>
+    {% set setup_required = wifi_backend and scanner_setup.required %}
     {% if wifi_backend %}
     <section>
       <h2>Scanner setup</h2>
       {% if setup_message %}<p class="notice">{{ setup_message }}</p>{% endif %}
+      {% if setup_required and not setup_message %}<p class="notice">Finish scanner setup before scanning.</p>{% endif %}
       {% if scanner_setup.configured %}
       <p><span class="status">configured</span></p>
       <dl class="setup-details">
@@ -1030,6 +1216,9 @@ PAGE = """
           <input name="scanner_password" type="password" autocomplete="current-password" required>
         </label>
         <button>Test password</button>
+      </form>
+      <form method="post" action="{{ url_for('clear_scanner_setup') }}" class="button-row">
+        <button class="secondary-button">Choose a different scanner</button>
       </form>
       {% else %}
       <p class="muted">No Wi-Fi scanner is configured.</p>
@@ -1068,8 +1257,27 @@ PAGE = """
       {% elif scanner_setup.discovery.status == "done" %}
       <p class="muted">No ScanSnap devices found.</p>
       {% endif %}
+
+      {% if not scanner_setup.configured and not scanner_setup.needs_password %}
+      <h3>Manual scanner</h3>
+      <form class="stack-form" method="post" action="{{ url_for('manual_scanner_setup') }}">
+        <div class="settings-grid">
+          <label>Scanner IP
+            <input name="scanner_ip" value="{{ scanner_setup.manual_scanner_ip }}" inputmode="numeric" autocomplete="off" placeholder="10.112.10.11">
+          </label>
+          <label>Ethernet address
+            <input name="scanner_mac" autocomplete="off" placeholder="84:25:3f:16:6e:a0">
+          </label>
+          <label>Serial
+            <input name="scanner_serial" autocomplete="off" placeholder="AWRHC08122">
+          </label>
+        </div>
+        <button>Continue setup</button>
+      </form>
+      {% endif %}
     </section>
     {% endif %}
+    {% if not setup_required %}
     <section>
       <h2>Scan</h2>
       <form method="post" action="{{ url_for('scan') }}">
@@ -1231,6 +1439,7 @@ PAGE = """
       <pre>{{ devices }}</pre>
     </section>
     {% endif %}
+    {% endif %}
   </main>
   <script>
     const selectAllFiles = document.getElementById("select-all-files");
@@ -1251,6 +1460,10 @@ PAGE = """
       }
       return confirm(`Delete ${selected.length} selected file${selected.length === 1 ? "" : "s"}?`);
     }
+
+    {% if wifi_backend and scanner_setup.discovery.status == "running" %}
+    setTimeout(() => window.location.reload(), 1500);
+    {% endif %}
   </script>
 </body>
 </html>
@@ -1887,49 +2100,31 @@ def select_scanner():
     if not device:
         return redirect(url_for("index", setup="no-device"))
 
-    password = password_from_serial(device.get("serial", ""))
-    if not password:
-        save_scanner_config(
-            {
-                **device,
-                "scanner_ip": device["ip"],
-                "status": "needs_password",
-                "last_error": "Scanner serial was not available; enter the scanner password.",
-            }
-        )
-        return redirect(url_for("index", setup="password-needed"))
+    return redirect(url_for("index", setup=configure_scanner_from_device(device)))
 
-    pairing_key = derive_scansnap_pairing_key(password)
+
+@app.post("/setup/scanners/manual")
+def manual_scanner_setup():
+    scanner_ip = request.form.get("scanner_ip", "")
+    scanner_mac = request.form.get("scanner_mac", "")
+    scanner_serial = request.form.get("scanner_serial", "")
+
+    if not scanner_ip.strip() and not scanner_mac.strip():
+        return redirect(url_for("index", setup="manual-missing"))
+
     try:
-        result = test_scansnap_pairing_key(device["ip"], pairing_key)
+        device = lookup_manual_scanner(scanner_ip=scanner_ip, mac=scanner_mac, serial=scanner_serial)
+    except LookupError as exc:
+        log_event("scanner.setup.manual.not_found", scanner_mac=scanner_mac, error=exc)
+        return redirect(url_for("index", setup="manual-not-found"))
+    except ValueError as exc:
+        log_event("scanner.setup.manual.invalid", scanner_ip=scanner_ip, scanner_mac=scanner_mac, error=exc)
+        return redirect(url_for("index", setup="manual-invalid"))
     except Exception as exc:
-        result = {"ok": False, "status": None, "message": str(exc)}
+        log_event("scanner.setup.manual.failed", scanner_ip=scanner_ip, scanner_mac=scanner_mac, error=exc)
+        return redirect(url_for("index", setup="manual-not-found"))
 
-    if result["ok"]:
-        discovered = result.get("device") or device
-        save_scanner_config(
-            {
-                **discovered,
-                "scanner_ip": discovered.get("ip") or device["ip"],
-                "pairing_key": pairing_key,
-                "password_source": "serial-default",
-                "status": "configured",
-                "last_error": "",
-            }
-        )
-        log_event("scanner.setup.configured", scanner_ip=device["ip"], serial=device.get("serial"))
-        return redirect(url_for("index", setup="configured"))
-
-    save_scanner_config(
-        {
-            **device,
-            "scanner_ip": device["ip"],
-            "status": "needs_password",
-            "last_error": f"Default password {password!r} was rejected: {result['message']}.",
-        }
-    )
-    log_event("scanner.setup.default_password.failed", scanner_ip=device["ip"], status=result.get("status"))
-    return redirect(url_for("index", setup="password-needed"))
+    return redirect(url_for("index", setup=configure_scanner_from_device(device)))
 
 
 @app.post("/setup/scanners/password")
