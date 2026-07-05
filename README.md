@@ -7,6 +7,7 @@ It was built for running an iX500 from a Raspberry Pi or other always-on Linux h
 ## Features
 
 - Web UI for starting scans, downloading files, and deleting one or many files at once.
+- First-run Wi-Fi setup that discovers the scanner on the local network and derives the default pairing identity from the scanner serial number.
 - Saved scan modes for duplex/simplex, PDF/PNG output, OCR, autocrop, blank-page removal, and page splitting.
 - A configurable default scan mode for the physical scanner button.
 - Scan list grouped by day with first-page preview thumbnails.
@@ -70,8 +71,8 @@ You need:
 
 - A ScanSnap iX500 with Wi-Fi enabled.
 - A Linux host that can reach the scanner on the network.
-- A container runtime with the Compose-compatible `container compose` command.
-- The iX500 product serial/password only if the web setup cannot use the default password automatically.
+- Docker with the Compose plugin (`docker compose`).
+- The iX500 password only if the scanner no longer uses its factory-default password.
 
 The iX500 does not behave like a normal eSCL/AirScan scanner in this setup. This project uses the reverse-engineered ScanSnap Wi-Fi protocol implemented by [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap), built into the image as `scansnap-wifi`.
 
@@ -84,7 +85,7 @@ The important scanner ports are:
 | TCP `53218` | Scan control/data |
 | UDP `55265` | Button notice listener in this app |
 
-Keep your `SCANSNAP_PAIRING_KEY` out of git. Put it in `.env` only when configuring the scanner manually.
+You normally do not need to set `SCANNER_IP` or `SCANSNAP_PAIRING_KEY` before first start. The web UI guides the scanner setup and stores the working scanner configuration in the scan volume. Keep `SCANSNAP_PAIRING_KEY` out of git if you do set it manually.
 
 ### VENS Serial Discovery
 
@@ -105,6 +106,8 @@ The web app uses this first-run flow for the Wi-Fi backend:
 5. Derive the default pairing identity from the discovered serial number.
 6. Test the pairing identity against TCP `53219`.
 7. Save the working scanner IP and pairing identity in `/scans/.scannerserver-scanner.json`.
+
+Discovery intentionally does not sweep every IP address in the subnet. It uses broadcast plus ARP/neighbor-table entries, so setup is quick and does not probe unrelated LAN hosts.
 
 If the default password was changed, the test fails and the web UI asks for the scanner password. The app derives the pairing identity from that password and stores only the derived identity.
 
@@ -170,14 +173,14 @@ git clone https://github.com/jollyjinx/scannerserver.git
 cd scannerserver
 ```
 
-Create the output directory and local environment file:
+Create the output directory and optional local environment file:
 
 ```bash
 mkdir -p scans
 cp .env.example .env
 ```
 
-You can leave scanner discovery to the web UI. These values are optional for manual setup:
+The default `.env.example` is intentionally minimal. For normal use, leave scanner discovery to the web UI. These values are optional overrides for fixed/manual deployments:
 
 ```text
 SCANNER_IP=your-scanner-ip-address
@@ -187,7 +190,7 @@ SCANSNAP_PAIRING_KEY=derived-or-captured-pairing-key
 Start the service:
 
 ```bash
-container compose up -d
+docker compose up -d
 ```
 
 The included Compose file pulls `ghcr.io/jollyjinx/scannerserver:latest`. No local image build is needed for normal installation.
@@ -200,7 +203,7 @@ docker run --rm --network host --user "$(id -u):$(id -g)" \
   ghcr.io/jollyjinx/scannerserver:latest
 ```
 
-Using only `-p 8080:8080` puts the container on Docker's bridge network. The web UI is reachable that way, but ScanSnap UDP discovery usually searches the container network instead of the scanner's LAN.
+Using only `-p 8080:8080` puts the container on a bridge network. The web UI is reachable that way, but ScanSnap UDP discovery usually searches the container network instead of the scanner's LAN.
 
 Open the web UI:
 
@@ -208,7 +211,7 @@ Open the web UI:
 http://YOUR_LINUX_HOST/
 ```
 
-On first startup, finish **Scanner setup** before the scan controls are shown. Choose a discovered scanner, or enter the scanner IP address or Ethernet/MAC address manually. If the scanner still uses its default password, the app configures the pairing key automatically from the discovered serial number.
+On first startup, the web UI shows only **Scanner setup**. Choose a discovered scanner, or enter the scanner IP address or Ethernet/MAC address manually. If the scanner still uses its default password, the app configures the pairing key automatically from the discovered serial number. After setup succeeds, the scan controls appear and scanner setup is tucked into a collapsible drawer.
 
 Press **Start scan** or press the scanner's physical scan button.
 
@@ -223,14 +226,14 @@ ping SCANNER_IP
 Check that the container starts:
 
 ```bash
-container compose ps
-container compose logs -f scansnap
+docker compose ps
+docker compose logs -f scansnap
 ```
 
 Run one scan from the command line:
 
 ```bash
-container compose run --rm scansnap scan-once
+docker compose run --rm scansnap scan-once
 ```
 
 Expected result: a raw PDF appears in `./scans`, then the web service queues OCR and creates the `.ocr.pdf` file. For Wi-Fi mode, run the web setup first or provide `SCANNER_IP` and `SCANSNAP_PAIRING_KEY` manually.
@@ -334,8 +337,13 @@ Common environment variables:
 | `SCANSNAP_PAIRING_KEY` | empty | Optional pairing identity override; web setup can derive and persist this instead |
 | `SCANSNAP_CLIENT_IP` | empty | Optional client IP override for macvlan/static-IP deployments |
 | `SCANSNAP_MAC_PREFIXES` | `84:25:3f,00:80:92,00:40:17` | MAC prefixes sorted first in Wi-Fi discovery |
+| `SCANSNAP_DISCOVERY_TARGETS` | empty | Comma-separated explicit IP/broadcast targets to probe during setup |
 | `SCANSNAP_DISCOVERY_ARP_ALL` | `false` | Probe all ARP neighbors, not only neighbors matching known ScanSnap/Silex MAC prefixes |
 | `SCANSNAP_DISCOVERY_TIMEOUT_SECONDS` | `4` | First-run scanner discovery timeout |
+| `SCANSNAP_DISCOVERY_ROUNDS` | `2` | Number of discovery packet send rounds per target |
+| `SCANSNAP_DISCOVERY_SOURCE_PORT` | `55264` | UDP source port used for discovery packets |
+| `SCANSNAP_REGISTRATION_PORT` | `52217` | Scanner UDP registration/discovery port |
+| `SCANSNAP_REGISTRATION_SOURCE_PORT` | `55264` | UDP source port used by direct registration and pairing setup |
 | `SCAN_SIMPLEX` | `false` | Set `true` to discard back pages with the Wi-Fi backend |
 | `SCAN_RAW_PDF_CREATOR` | `ScanSnap` | PDF `/Creator` value for raw PDFs |
 | `SCAN_OCR_ROTATE_PAGES_THRESHOLD` | `2.0` | OCRmyPDF rotation confidence threshold; lower values rotate pages more aggressively |
@@ -407,8 +415,8 @@ For an existing stack, copy only the `scansnap` service from `deploy/raspberry-p
 
 ```bash
 cd /home/ubuntu/plt
-container compose config --quiet
-container compose up -d --no-deps scansnap
+docker compose config --quiet
+docker compose up -d --no-deps scansnap
 ```
 
 This starts only the scanner service and does not recreate unrelated services.
@@ -419,15 +427,15 @@ Pull the latest Compose file, pull the latest image from GitHub Container Regist
 
 ```bash
 git pull
-container compose pull scansnap
-container compose up -d --no-deps scansnap
+docker compose pull scansnap
+docker compose up -d --no-deps scansnap
 ```
 
 For the simple standalone setup, this is also fine:
 
 ```bash
-container compose pull
-container compose up -d
+docker compose pull
+docker compose up -d
 ```
 
 ## Build From Source
@@ -453,13 +461,41 @@ services:
 Save it as `compose.override.yaml`, then run:
 
 ```bash
-container compose up -d --build
+docker compose up -d --build
 ```
 
 To rebuild after local changes:
 
 ```bash
-container compose up -d --build --no-deps scansnap
+docker compose up -d --build --no-deps scansnap
+```
+
+To build and push the development ARM64 image used on Raspberry Pi systems:
+
+```bash
+./scripts/build_push_development_arm64.sh
+```
+
+By default this builds and pushes:
+
+```text
+ghcr.io/jollyjinx/scannerserver:development-arm64
+```
+
+The script tags the image with the current git commit through `SCANNERSERVER_VERSION`. If the working tree is dirty, the version gets a `-dirty` suffix so runtime logs show that the image was built from local changes.
+
+If the local Docker builder reports `Structure needs cleaning`, prune the builder cache, then rerun the script:
+
+```bash
+docker buildx prune --all --force
+docker builder prune --all --force
+./scripts/build_push_development_arm64.sh
+```
+
+You can override the defaults:
+
+```bash
+IMAGE=ghcr.io/your-user/scannerserver TAG=test-arm64 ./scripts/build_push_development_arm64.sh
 ```
 
 ## Troubleshooting
@@ -469,8 +505,8 @@ container compose up -d --build --no-deps scansnap
 Check whether the container is running:
 
 ```bash
-container compose ps
-container compose logs --tail=100 scansnap
+docker compose ps
+docker compose logs --tail=100 scansnap
 ```
 
 If using port `80`, make sure nothing else is already bound to that IP/port.
@@ -486,7 +522,7 @@ ping SCANNER_IP
 From inside the container:
 
 ```bash
-container compose exec scansnap sh
+docker compose exec scansnap sh
 ```
 
 Then inside the shell:
@@ -497,12 +533,35 @@ ip addr
 
 For macvlan deployments, confirm the container has the expected IP and MAC, and that the scanner is in the same VLAN/subnet.
 
+### Scanner setup finds no devices
+
+The setup page should discover devices by broadcast and by ARP/neighbor-table entries with known ScanSnap/Silex MAC prefixes. It does not sweep the whole subnet.
+
+If discovery finds nothing:
+
+```bash
+docker compose exec scansnap ip neigh show
+```
+
+Look for the scanner MAC address. iX500 Ethernet/Wi-Fi modules commonly start with `84:25:3f`, `00:80:92`, or `00:40:17`.
+
+If the scanner is visible in ARP but not listed in setup, enter its IP address manually in the web UI. Manual setup still asks the scanner for its serial number before pairing, then tries the default serial-derived password.
+
+If the container is on a bridge network, UDP broadcast usually cannot reach the scanner LAN. Use the included host-network `compose.yaml`, or use a macvlan/static-IP deployment where the container has an address on the scanner VLAN.
+
+For unusual networks, set explicit discovery targets:
+
+```yaml
+environment:
+  SCANSNAP_DISCOVERY_TARGETS: "10.112.10.11,10.112.10.255"
+```
+
 ### Button press does nothing
 
 Check the logs:
 
 ```bash
-container compose logs -f scansnap
+docker compose logs -f scansnap
 ```
 
 You want to see:
@@ -562,6 +621,7 @@ environment:
 ## Security Notes
 
 - Keep `SCANSNAP_PAIRING_KEY` in `.env`; do not commit it. If you use web setup, the derived pairing identity is stored in `/scans/.scannerserver-scanner.json`.
+- The iX500 default password is derived from the product serial number and is used only for local pairing with the scanner. Treat the stored pairing identity as a local device credential, not as internet-facing security.
 - The web UI has no authentication. Run it only on a trusted network or put it behind your own reverse proxy/authentication.
 - The container runs as `${UID:-1000}:${GID:-1000}` by default.
 - Python is granted `cap_net_bind_service` in the image so the app can bind port `80` without running as root.

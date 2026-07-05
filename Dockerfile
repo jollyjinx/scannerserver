@@ -2,7 +2,8 @@ FROM ubuntu:24.04 AS scansnap_wifi_build
 
 ARG SCANSNAP_WIFI_REF=814c0987c9c294f27b18f1835c3c69174889de11
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-upgrade --no-install-recommends \
     build-essential \
     ca-certificates \
     git \
@@ -28,7 +29,8 @@ ARG VCS_REF=unknown
 
 ENV SCANNERSERVER_VERSION=${VCS_REF}
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-upgrade --no-install-recommends \
     avahi-daemon \
     avahi-utils \
     dbus \
