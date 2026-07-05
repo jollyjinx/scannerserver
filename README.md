@@ -177,6 +177,33 @@ environment:
   SCAN_REMOVE_BLANK_PAGES: "false"
 ```
 
+## Receipt / Small Page Cropping
+
+Automatic page cropping is enabled by default for PDF scans. It detects smaller documents, such as receipts, that sit on a larger scanner page and crops the PDF page boxes around the detected document before OCR runs.
+
+The detector is conservative: it only crops when the detected object is much narrower or shorter than the full scan page and dense enough to look like a document rather than a few text pixels.
+
+```yaml
+environment:
+  SCAN_CROP_PAGES: "true"
+  SCAN_CROP_BACKGROUND_DELTA: "8"
+  SCAN_CROP_MARGIN_POINTS: "12"
+```
+
+To see per-page crop decisions:
+
+```yaml
+environment:
+  SCAN_CROP_DEBUG: "1"
+```
+
+To disable automatic cropping:
+
+```yaml
+environment:
+  SCAN_CROP_PAGES: "false"
+```
+
 ## Configuration
 
 Common environment variables:
@@ -200,6 +227,13 @@ Common environment variables:
 | `SCAN_BLANK_WHITE_THRESHOLD` | `245` | Pixel threshold used for blank detection |
 | `SCAN_BLANK_CONTENT_RATIO_THRESHOLD` | `0.003` | Maximum dark-pixel ratio for a blank page |
 | `SCAN_BLANK_MEAN_THRESHOLD` | `248.0` | Minimum average brightness for a blank page |
+| `SCAN_CROP_PAGES` | `true` | Crop smaller scanned documents before OCR |
+| `SCAN_CROP_BACKGROUND_DELTA` | `8` | Pixel delta from the page-edge background used for crop detection |
+| `SCAN_CROP_BORDER_PX` | `64` | Edge sample size used to estimate scanner background color |
+| `SCAN_CROP_MARGIN_POINTS` | `12` | PDF point margin kept around detected crop bounds |
+| `SCAN_CROP_MAX_WIDTH_RATIO` | `0.80` | Crop only when detected content is at most this fraction of page width, unless height is smaller |
+| `SCAN_CROP_MAX_HEIGHT_RATIO` | `0.80` | Crop only when detected content is at most this fraction of page height, unless width is smaller |
+| `SCAN_CROP_MIN_DENSITY` | `0.08` | Minimum detected content density inside the crop bounds |
 | `WEB_PORT` | `8080` in app, `80` in Compose | Web UI port |
 | `SCANSNAP_BUTTON_SCAN_ENABLED` | `true` | Enable physical scanner button listener |
 | `SCANSNAP_BUTTON_PORT` | `55265` | UDP port for ScanSnap button notices |
@@ -390,6 +424,22 @@ Disable the feature if your documents have very light content:
 ```yaml
 environment:
   SCAN_REMOVE_BLANK_PAGES: "false"
+```
+
+### Receipts or smaller pages are not cropped correctly
+
+Enable debug logging for one scan:
+
+```yaml
+environment:
+  SCAN_CROP_DEBUG: "1"
+```
+
+If a receipt is still left on a large page, lower `SCAN_CROP_BACKGROUND_DELTA` slightly. If normal pages are cropped too aggressively, raise `SCAN_CROP_MIN_DENSITY` or disable the feature:
+
+```yaml
+environment:
+  SCAN_CROP_PAGES: "false"
 ```
 
 ## Security Notes

@@ -15,6 +15,7 @@ client_ip="${SCANSNAP_CLIENT_IP:-}"
 simplex="${SCAN_SIMPLEX:-false}"
 wifi_debug="${SCAN_WIFI_DEBUG:-false}"
 remove_blank_pages="${SCAN_REMOVE_BLANK_PAGES:-true}"
+crop_pages="${SCAN_CROP_PAGES:-true}"
 
 scan_timestamp="${SCAN_TIMESTAMP:-$(date +%Y-%m-%d.%H%M%S)}"
 log_event() {
@@ -100,6 +101,21 @@ case "$format" in
       log_event "blank-removal.finished raw_pdf=$raw_pdf"
     else
       log_event "blank-removal.skipped"
+    fi
+    if [[ "$crop_pages" == "true" || "$crop_pages" == "1" || "$crop_pages" == "yes" || "$crop_pages" == "on" ]]; then
+      log_event "crop.start raw_pdf=$raw_pdf"
+      crop-pdf-pages "$raw_pdf" \
+        --background-delta "${SCAN_CROP_BACKGROUND_DELTA:-8}" \
+        --border-px "${SCAN_CROP_BORDER_PX:-64}" \
+        --margin-points "${SCAN_CROP_MARGIN_POINTS:-12}" \
+        --max-width-ratio "${SCAN_CROP_MAX_WIDTH_RATIO:-0.80}" \
+        --max-height-ratio "${SCAN_CROP_MAX_HEIGHT_RATIO:-0.80}" \
+        --min-density "${SCAN_CROP_MIN_DENSITY:-0.08}" \
+        ${SCAN_CROP_KEEP_ORIGINAL_BOXES:+--keep-original-boxes} \
+        ${SCAN_CROP_DEBUG:+--debug} >&2
+      log_event "crop.finished raw_pdf=$raw_pdf"
+    else
+      log_event "crop.skipped"
     fi
     log_event "metadata.start creator=${SCAN_RAW_PDF_CREATOR:-ScanSnap}"
     set-pdf-creator "$raw_pdf" --creator "${SCAN_RAW_PDF_CREATOR:-ScanSnap}"
