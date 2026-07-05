@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import socket
 import sys
@@ -21,6 +22,32 @@ INIT_COMMANDS = [
 
 def be32(value):
     return int(value & 0xFFFFFFFF).to_bytes(4, "big")
+
+
+def configured_scanner_settings():
+    scanner_ip = os.environ.get("SCANNER_IP", "")
+    pairing_key = os.environ.get("SCANSNAP_PAIRING_KEY") or os.environ.get("SCAN_PAIRING_KEY", "")
+    if scanner_ip and pairing_key:
+        return scanner_ip, pairing_key
+
+    config_path = Path(
+        os.environ.get(
+            "SCANNER_CONFIG_PATH",
+            str(Path(os.environ.get("SCAN_OUTPUT_DIR", "/scans")) / ".scannerserver-scanner.json"),
+        )
+    )
+    if not config_path.is_file():
+        return scanner_ip, pairing_key
+
+    try:
+        data = json.loads(config_path.read_text())
+    except Exception:
+        return scanner_ip, pairing_key
+
+    if data.get("status") == "configured":
+        scanner_ip = scanner_ip or str(data.get("scanner_ip") or "")
+        pairing_key = pairing_key or str(data.get("pairing_key") or "")
+    return scanner_ip, pairing_key
 
 
 def read_exact(sock, length):
@@ -224,12 +251,11 @@ def init_session(scanner_ip, client_ip, mac):
 
 
 def arm_button():
-    scanner_ip = os.environ.get("SCANNER_IP", "")
-    pairing_key = os.environ.get("SCANSNAP_PAIRING_KEY") or os.environ.get("SCAN_PAIRING_KEY", "")
+    scanner_ip, pairing_key = configured_scanner_settings()
     if not scanner_ip:
-        raise RuntimeError("SCANNER_IP is required")
+        raise RuntimeError("SCANNER_IP or configured scanner setup file is required")
     if not pairing_key:
-        raise RuntimeError("SCANSNAP_PAIRING_KEY or SCAN_PAIRING_KEY is required")
+        raise RuntimeError("SCANSNAP_PAIRING_KEY, SCAN_PAIRING_KEY, or configured scanner setup file is required")
 
     client_ip = client_ip_for_scanner(scanner_ip)
     mac = client_mac_bytes()

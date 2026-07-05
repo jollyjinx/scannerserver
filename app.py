@@ -1,6 +1,7 @@
 import json
 import mimetypes
 import os
+import ipaddress
 import re
 import socket
 import subprocess
@@ -20,11 +21,16 @@ from PIL import Image
 app = Flask(__name__)
 OUTPUT_DIR = Path(os.environ.get("SCAN_OUTPUT_DIR", "/scans"))
 SETTINGS_PATH = Path(os.environ.get("SCAN_SETTINGS_PATH", str(OUTPUT_DIR / ".scanner-settings.json")))
+SCANNER_CONFIG_PATH = Path(
+    os.environ.get("SCANNER_CONFIG_PATH", str(OUTPUT_DIR / ".scannerserver-scanner.json"))
+)
 PREVIEW_DIR_NAME = ".previews"
 job_lock = threading.Lock()
 ocr_lock = threading.Lock()
 ocr_state_lock = threading.Lock()
 settings_lock = threading.Lock()
+scanner_config_lock = threading.Lock()
+scanner_discovery_lock = threading.Lock()
 ocr_queue = deque()
 last_job = {
     "started": None,
@@ -45,6 +51,17 @@ last_ocr_job = {
 last_scan_completed_at = 0.0
 last_button_started_at = 0.0
 button_rearm_requested = threading.Event()
+scanner_config_changed = threading.Event()
+scanner_discovery_state = {
+    "status": "idle",
+    "started": None,
+    "finished": None,
+    "error": "",
+    "devices": [],
+}
+
+SCANSNAP_IDENTITY_KEY = "pFusCANsNapFiPfu"
+DEFAULT_SCANSNAP_MAC_PREFIXES = ("84:25:3f", "00:80:92", "00:40:17")
 
 
 def iso_timestamp():
@@ -90,6 +107,593 @@ def truthy(value):
 
 def bool_text(value):
     return "true" if truthy(value) else "false"
+
+
+def wifi_backend_enabled():
+    return os.environ.get("SCAN_BACKEND") == "wifi"
+
+
+def null_terminated_text(data):
+    return data.split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
+
+
+def password_from_serial(serial):
+    text = str(serial or "").rstrip(" \x00")
+    return text[-4:] if len(text) > 4 else text
+
+
+def derive_scansnap_pairing_key(password):
+    password = str(password or "")
+    if len(password) > len(SCANSNAP_IDENTITY_KEY):
+        raise ValueError(f"password too long; maximum is {len(SCANSNAP_IDENTITY_KEY)} characters")
+    return "".join(
+        str(ord(char) + ord(SCANSNAP_IDENTITY_KEY[index]) + 11)
+        for index, char in enumerate(password)
+    )
+
+
+def masked_secret(value):
+    text = str(value or "")
+    if len(text) <= 4:
+        return "set" if text else ""
+    return f"{text[:2]}...{text[-2:]}"
+
+
+def mac_prefixes():
+    raw = os.environ.get("SCANSNAP_MAC_PREFIXES", ",".join(DEFAULT_SCANSNAP_MAC_PREFIXES))
+    return tuple(prefix.strip().lower().replace("-", ":") for prefix in raw.split(",") if prefix.strip())
+
+
+def scanner_matches_mac_prefix(mac):
+    prefixes = mac_prefixes()
+    if not prefixes:
+        return True
+    normalized = str(mac or "").lower()
+    return any(normalized.startswith(prefix) for prefix in prefixes)
+
+
+def be32(value):
+    return int(value & 0xFFFFFFFF).to_bytes(4, "big")
+
+
+def read_exact(sock, length):
+    chunks = []
+    remaining = length
+    while remaining:
+        data = sock.recv(remaining)
+        if not data:
+            raise RuntimeError("connection closed")
+        chunks.append(data)
+        remaining -= len(data)
+    return b"".join(chunks)
+
+
+def parse_vens_device_info(data, remote_ip=None):
+    if len(data) < 132 or data[:4] != b"VENS":
+        return None
+
+    device_ip = socket.inet_ntoa(data[16:20])
+    if device_ip == "0.0.0.0" and remote_ip:
+        device_ip = remote_ip
+    mac = ":".join(f"{byte:02x}" for byte in data[28:34])
+    serial = null_terminated_text(data[40:104])
+    name = null_terminated_text(data[104:120])
+    client_ip = socket.inet_ntoa(data[120:124])
+    if client_ip == "0.0.0.0":
+        client_ip = ""
+
+    return {
+        "id": f"{mac}@{device_ip}",
+        "ip": device_ip,
+        "mac": mac,
+        "serial": serial,
+        "name": name or "ScanSnap",
+        "data_port": int.from_bytes(data[22:24], "big"),
+        "control_port": int.from_bytes(data[26:28], "big"),
+        "state": int.from_bytes(data[36:40], "big"),
+        "client_ip": client_ip,
+        "metadata": data[124:132].hex(),
+        "matches_prefix": scanner_matches_mac_prefix(mac),
+    }
+
+
+def local_ipv4_interfaces():
+    configured_ip = os.environ.get("SCANSNAP_CLIENT_IP", "").strip()
+    if configured_ip:
+        return [{"ip": configured_ip, "prefixlen": 24}]
+
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "-4", "addr", "show", "scope", "global"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            interfaces = []
+            for item in json.loads(result.stdout or "[]"):
+                for address in item.get("addr_info", []):
+                    if address.get("family") == "inet" and address.get("local"):
+                        interfaces.append(
+                            {
+                                "ip": address["local"],
+                                "prefixlen": int(address.get("prefixlen") or 24),
+                            }
+                        )
+            if interfaces:
+                return interfaces
+    except Exception as exc:
+        log_event("scanner.discovery.interfaces.failed", error=exc)
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("1.1.1.1", 1))
+        return [{"ip": probe.getsockname()[0], "prefixlen": 24}]
+    except OSError:
+        return []
+    finally:
+        probe.close()
+
+
+def discovery_targets_for_interface(interface):
+    targets = {"255.255.255.255"}
+    configured_targets = os.environ.get("SCANSNAP_DISCOVERY_TARGETS", "")
+    for target in configured_targets.split(","):
+        target = target.strip()
+        if target:
+            targets.add(target)
+
+    try:
+        network = ipaddress.ip_network(f"{interface['ip']}/{interface['prefixlen']}", strict=False)
+        if network.version == 4:
+            targets.add(str(network.broadcast_address))
+            if os.environ.get("SCANSNAP_DISCOVERY_SWEEP", "true").lower() in TRUE_VALUES:
+                if network.num_addresses > 256:
+                    network = ipaddress.ip_network(f"{interface['ip']}/24", strict=False)
+                max_hosts = int(os.environ.get("SCANSNAP_DISCOVERY_MAX_HOSTS", "254"))
+                for index, host in enumerate(network.hosts()):
+                    if index >= max_hosts:
+                        break
+                    host_text = str(host)
+                    if host_text != interface["ip"]:
+                        targets.add(host_text)
+    except ValueError:
+        pass
+
+    env_scanner_ip = os.environ.get("SCANNER_IP", "").strip()
+    if env_scanner_ip:
+        targets.add(env_scanner_ip)
+    return sorted(targets)
+
+
+def discovery_packets(client_ip, client_port):
+    token = os.urandom(6) + b"\x00\x00"
+    ip_bytes = socket.inet_aton(client_ip)
+
+    vens = bytearray(32)
+    vens[:4] = b"VENS"
+    vens[8:12] = ip_bytes
+    vens[12:20] = token
+    vens[22:24] = int(client_port).to_bytes(2, "big")
+    vens[25] = 0x10
+
+    ssnr = bytearray(32)
+    ssnr[:4] = b"ssNR"
+    ssnr[8:12] = ip_bytes
+    ssnr[12:20] = token
+    ssnr[22:24] = int(client_port).to_bytes(2, "big")
+    ssnr[24] = 0x01
+
+    return bytes(vens), bytes(ssnr)
+
+
+def discover_scansnap_devices(timeout=None):
+    timeout = float(timeout or os.environ.get("SCANSNAP_DISCOVERY_TIMEOUT_SECONDS", "4"))
+    scanner_port = int(os.environ.get("SCANSNAP_REGISTRATION_PORT", "52217"))
+    source_port = int(os.environ.get("SCANSNAP_DISCOVERY_SOURCE_PORT", "55264"))
+    interfaces = local_ipv4_interfaces()
+    if not interfaces:
+        raise RuntimeError("no local IPv4 interface found")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        try:
+            sock.bind(("", source_port))
+        except OSError as exc:
+            log_event("scanner.discovery.source_port.fallback", source_port=source_port, error=exc)
+            sock.bind(("", 0))
+        client_port = sock.getsockname()[1]
+        sock.settimeout(0.25)
+
+        send_plan = []
+        for interface in interfaces:
+            packets = discovery_packets(interface["ip"], client_port)
+            for target in discovery_targets_for_interface(interface):
+                send_plan.append((interface["ip"], target, packets))
+
+        devices = {}
+        deadline = time.monotonic() + timeout
+        round_count = int(os.environ.get("SCANSNAP_DISCOVERY_ROUNDS", "2"))
+        for _ in range(max(round_count, 1)):
+            for _client_ip, target, packets in send_plan:
+                address = (target, scanner_port)
+                for packet in packets:
+                    try:
+                        sock.sendto(packet, address)
+                    except OSError as exc:
+                        log_event("scanner.discovery.send.failed", target=target, error=exc)
+
+            while time.monotonic() < deadline:
+                try:
+                    data, remote = sock.recvfrom(512)
+                except socket.timeout:
+                    break
+                device = parse_vens_device_info(data, remote_ip=remote[0])
+                if device:
+                    devices[device["id"]] = device
+
+        return sorted(
+            devices.values(),
+            key=lambda device: (not device["matches_prefix"], device["name"], device["ip"], device["mac"]),
+        )
+    finally:
+        sock.close()
+
+
+def client_ip_for_scanner(scanner_ip):
+    configured_ip = os.environ.get("SCANSNAP_CLIENT_IP", "").strip()
+    if configured_ip:
+        return configured_ip
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect((scanner_ip, 1))
+        return probe.getsockname()[0]
+    finally:
+        probe.close()
+
+
+def client_mac_bytes():
+    configured_mac = os.environ.get("SCANSNAP_CLIENT_MAC", "").strip()
+    if configured_mac:
+        return bytes.fromhex(configured_mac.replace(":", "").replace("-", ""))
+
+    interface = os.environ.get("SCANSNAP_CLIENT_INTERFACE", "eth0")
+    candidates = [Path(f"/sys/class/net/{interface}/address")]
+    candidates.extend(path for path in Path("/sys/class/net").glob("*/address") if path.parent.name != "lo")
+    for path in candidates:
+        try:
+            mac_text = path.read_text().strip()
+            if mac_text and mac_text != "00:00:00:00:00:00":
+                return bytes.fromhex(mac_text.replace(":", ""))
+        except OSError:
+            continue
+    raise RuntimeError("could not determine client MAC address; set SCANSNAP_CLIENT_MAC")
+
+
+def direct_register_scanner(scanner_ip, client_ip, mac):
+    scanner_port = int(os.environ.get("SCANSNAP_REGISTRATION_PORT", "52217"))
+    source_port = int(os.environ.get("SCANSNAP_REGISTRATION_SOURCE_PORT", "55264"))
+    magics = [b"VENS", b"ssNR", b"V2ss"]
+    flags = [0x0010, 0x0100, 0x1000]
+    ip_bytes = socket.inet_aton(client_ip)
+
+    packets = []
+    for magic, flag in zip(magics, flags):
+        packet = bytearray(32)
+        packet[:4] = magic
+        if magic == b"V2ss":
+            packet[4:8] = be32(1)
+        packet[8:12] = ip_bytes
+        packet[12:18] = mac
+        packet[22] = 0xD7
+        packet[23] = 0xE0
+        packet[24:26] = flag.to_bytes(2, "big")
+        packets.append(bytes(packet))
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.settimeout(3.0)
+    sock.bind((client_ip, source_port))
+    try:
+        for _ in range(4):
+            for packet in packets:
+                sock.sendto(packet, (scanner_ip, scanner_port))
+
+        response, remote = sock.recvfrom(256)
+        device = parse_vens_device_info(response, remote_ip=remote[0])
+        if device:
+            return response[124:132], device
+        return b"\x00" * 8, None
+    finally:
+        sock.close()
+
+
+def connect_tcp(scanner_ip, port, client_ip=None, timeout=5.0):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    if client_ip:
+        sock.bind((client_ip, 0))
+    sock.connect((scanner_ip, port))
+    return sock
+
+
+def send_d6_release(scanner_ip, mac, client_ip):
+    sock = connect_tcp(scanner_ip, 53218, client_ip=client_ip, timeout=5.0)
+    try:
+        read_exact(sock, 16)
+        command = bytes.fromhex("00000006000000000000000000000000d6000000000000000000000000000000")
+        packet = bytearray(16 + 16 + len(command))
+        packet[:4] = be32(len(packet))
+        packet[4:8] = b"VENS"
+        packet[8:12] = be32(1)
+        packet[16:22] = mac
+        packet[32:] = command
+        sock.sendall(packet)
+        read_exact(sock, 16)
+    finally:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        sock.close()
+
+
+def single_scansnap_pairing_attempt(scanner_ip, pairing_key, client_ip, mac):
+    device_tail, device = direct_register_scanner(scanner_ip, client_ip, mac)
+    sock = connect_tcp(scanner_ip, 53219, client_ip=client_ip, timeout=5.0)
+    try:
+        read_exact(sock, 16)
+        packet = bytearray(128)
+        packet[:4] = be32(len(packet))
+        packet[4:8] = b"VENS"
+        packet[8:12] = be32(0x11)
+        packet[16:22] = mac
+        packet[33] = 0x06
+        packet[34] = 0x1E
+        packet[40:44] = be32(1)
+        packet[44:48] = socket.inet_aton(client_ip)
+        packet[50] = 0xD7
+        packet[51] = 0xE1
+        packet[52:68] = str(pairing_key).encode("ascii", errors="ignore")[:16].ljust(16, b"\x00")
+        now = datetime.now()
+        packet[100] = now.year >> 8
+        packet[101] = now.year & 0xFF
+        packet[102] = now.month
+        packet[103] = now.day
+        packet[104] = now.hour
+        packet[105] = now.minute
+        packet[106] = now.second
+        packet[108:116] = device_tail[:8].ljust(8, b"\x00")
+        packet[116:120] = be32(0xFFFFE3E0)
+        sock.sendall(packet)
+        response = sock.recv(256)
+        if len(response) < 12:
+            return {"ok": False, "status": -999, "message": "short pairing response", "device": device}
+        status = int.from_bytes(response[8:12], "big", signed=True)
+        return {
+            "ok": status == 0,
+            "status": status,
+            "message": pairing_status_message(status),
+            "device": device,
+        }
+    finally:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        sock.close()
+
+
+def test_scansnap_pairing_key(scanner_ip, pairing_key):
+    client_ip = client_ip_for_scanner(scanner_ip)
+    mac = client_mac_bytes()
+    result = None
+    for attempt in range(1, 5):
+        result = single_scansnap_pairing_attempt(scanner_ip, pairing_key, client_ip, mac)
+        if result["status"] != -4:
+            break
+        log_event("scanner.setup.session_busy", scanner_ip=scanner_ip, attempt=attempt)
+        try:
+            send_d6_release(scanner_ip, mac, client_ip)
+        except Exception as exc:
+            log_event("scanner.setup.release.failed", scanner_ip=scanner_ip, error=exc)
+        time.sleep(1)
+
+    if result and result["ok"]:
+        try:
+            send_d6_release(scanner_ip, mac, client_ip)
+        except Exception as exc:
+            log_event("scanner.setup.release.failed", scanner_ip=scanner_ip, error=exc)
+    return result or {"ok": False, "status": -999, "message": "pairing test did not run", "device": None}
+
+
+def pairing_status_message(status):
+    messages = {
+        0: "pairing accepted",
+        -1: "bad pairing packet",
+        -2: "scanner serial mismatch",
+        -3: "password rejected",
+        -4: "scanner session busy",
+        -5: "scanner response did not include serial data",
+        -7: "scanner is paired to a different client IP",
+        -999: "short pairing response",
+    }
+    return messages.get(status, f"pairing rejected with status {status}")
+
+
+def env_scanner_config():
+    scanner_ip = os.environ.get("SCANNER_IP", "").strip()
+    pairing_key = (os.environ.get("SCANSNAP_PAIRING_KEY") or os.environ.get("SCAN_PAIRING_KEY") or "").strip()
+    if not scanner_ip or not pairing_key:
+        return None
+    return {
+        "version": 1,
+        "status": "configured",
+        "source": "env",
+        "scanner_ip": scanner_ip,
+        "pairing_key": pairing_key,
+        "pairing_key_masked": masked_secret(pairing_key),
+    }
+
+
+def normalize_scanner_config(data):
+    data = dict(data or {})
+    status = data.get("status") if data.get("status") in {"configured", "needs_password"} else "needs_password"
+    pairing_key = str(data.get("pairing_key") or "").strip()
+    if status == "configured" and not pairing_key:
+        status = "needs_password"
+    return {
+        "version": 1,
+        "status": status,
+        "source": data.get("source") or "stored",
+        "scanner_ip": str(data.get("scanner_ip") or data.get("ip") or "").strip(),
+        "mac": str(data.get("mac") or "").strip(),
+        "serial": str(data.get("serial") or "").strip(),
+        "name": str(data.get("name") or "ScanSnap").strip() or "ScanSnap",
+        "pairing_key": pairing_key,
+        "pairing_key_masked": masked_secret(pairing_key),
+        "password_source": str(data.get("password_source") or "").strip(),
+        "last_error": str(data.get("last_error") or "").strip(),
+        "updated_at": str(data.get("updated_at") or "").strip(),
+    }
+
+
+def load_stored_scanner_config():
+    with scanner_config_lock:
+        if not SCANNER_CONFIG_PATH.exists():
+            return None
+        try:
+            return normalize_scanner_config(json.loads(SCANNER_CONFIG_PATH.read_text()))
+        except Exception as exc:
+            log_event("scanner.config.load.failed", path=SCANNER_CONFIG_PATH, error=exc)
+            return None
+
+
+def save_scanner_config(config):
+    normalized = normalize_scanner_config(config)
+    normalized["source"] = "stored"
+    normalized["updated_at"] = iso_timestamp()
+    with scanner_config_lock:
+        SCANNER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = SCANNER_CONFIG_PATH.with_suffix(f"{SCANNER_CONFIG_PATH.suffix}.tmp")
+        temp_path.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n")
+        temp_path.replace(SCANNER_CONFIG_PATH)
+    scanner_config_changed.set()
+    return normalized
+
+
+def clear_scanner_config():
+    with scanner_config_lock:
+        if SCANNER_CONFIG_PATH.exists():
+            SCANNER_CONFIG_PATH.unlink()
+    scanner_config_changed.set()
+
+
+def active_scanner_config():
+    return env_scanner_config() or load_stored_scanner_config()
+
+
+def scanner_env_overrides():
+    config = active_scanner_config()
+    if not config or config.get("status") != "configured":
+        return {}
+    env = {}
+    if config.get("scanner_ip"):
+        env["SCANNER_IP"] = config["scanner_ip"]
+    if config.get("pairing_key"):
+        env["SCANSNAP_PAIRING_KEY"] = config["pairing_key"]
+    return env
+
+
+def scanner_setup_context():
+    env_config = env_scanner_config()
+    stored_config = load_stored_scanner_config()
+    active = env_config or stored_config
+    with scanner_discovery_lock:
+        discovery = {
+            **scanner_discovery_state,
+            "devices": [dict(device) for device in scanner_discovery_state["devices"]],
+        }
+    return {
+        "configured": bool(active and active.get("status") == "configured"),
+        "needs_password": bool(stored_config and stored_config.get("status") == "needs_password"),
+        "config": active or stored_config or {},
+        "stored_config": stored_config or {},
+        "discovery": discovery,
+        "env_configured": bool(env_config),
+    }
+
+
+def setup_message(code):
+    return {
+        "configured": "Scanner configured.",
+        "password-needed": "Default password was rejected. Enter the scanner password.",
+        "password-failed": "Password was rejected.",
+        "discovery-started": "Scanner discovery started.",
+        "discovery-finished": "Scanner discovery finished.",
+        "no-device": "Selected scanner was not found in the current discovery results.",
+        "cleared": "Stored scanner setup cleared.",
+        "setup-required": "Choose a scanner before starting a Wi-Fi scan.",
+    }.get(code or "", "")
+
+
+def find_discovered_device(device_id):
+    with scanner_discovery_lock:
+        for device in scanner_discovery_state["devices"]:
+            if device["id"] == device_id:
+                return dict(device)
+    return None
+
+
+def scanner_discovery_worker():
+    try:
+        devices = discover_scansnap_devices()
+        with scanner_discovery_lock:
+            scanner_discovery_state.update(
+                {
+                    "status": "done",
+                    "finished": iso_timestamp(),
+                    "error": "",
+                    "devices": devices,
+                }
+            )
+        log_event("scanner.discovery.finished", count=len(devices))
+    except Exception as exc:
+        with scanner_discovery_lock:
+            scanner_discovery_state.update(
+                {
+                    "status": "failed",
+                    "finished": iso_timestamp(),
+                    "error": str(exc),
+                    "devices": [],
+                }
+            )
+        log_event("scanner.discovery.failed", error=exc)
+
+
+def ensure_scanner_discovery_started(force=False):
+    if not wifi_backend_enabled():
+        return False
+    with scanner_discovery_lock:
+        if scanner_discovery_state["status"] == "running":
+            return False
+        if not force and scanner_discovery_state["status"] in {"done", "failed"}:
+            return False
+        scanner_discovery_state.update(
+            {
+                "status": "running",
+                "started": iso_timestamp(),
+                "finished": None,
+                "error": "",
+                "devices": [] if force else scanner_discovery_state["devices"],
+            }
+        )
+    threading.Thread(target=scanner_discovery_worker, daemon=True).start()
+    return True
 
 
 def env_default_settings():
@@ -328,6 +932,15 @@ PAGE = """
     .button-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .secondary-button { background: #5f6368; }
     .danger-button { background: #b3261e; }
+    .notice { padding: 10px 12px; border-radius: 6px; background: #e8f0fe; color: #174ea6; font-weight: 700; }
+    .warning { padding: 10px 12px; border-radius: 6px; background: #fef7e0; color: #8f4700; font-weight: 700; }
+    .muted { color: #5f6368; font-size: 13px; }
+    .device-list { display: grid; gap: 8px; margin: 12px 0; }
+    .device-option { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; font-weight: 400; }
+    .device-title { font-weight: 700; }
+    .setup-details { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 10px 0; }
+    .setup-details dt { color: #5f6368; font-weight: 700; }
+    .setup-details dd { margin: 0; overflow-wrap: anywhere; }
     .mode-list { display: grid; gap: 8px; padding: 0; margin: 0 0 14px; list-style: none; }
     .mode-row { display: grid; gap: 4px; padding: 10px; border: 1px solid #e0e3e7; border-radius: 8px; }
     .mode-row-title { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
@@ -373,6 +986,10 @@ PAGE = """
       .mode-row { border-color: #3c4043; }
       .mode-summary { color: #bdc1c6; }
       .default-badge { background: #1e3b27; color: #81c995; }
+      .notice { background: #17325f; color: #d2e3fc; }
+      .warning { background: #3f2e00; color: #fdd663; }
+      .muted, .setup-details dt { color: #bdc1c6; }
+      .device-option { border-color: #3c4043; }
       .file-row { border-color: #3c4043; }
       .file-preview { border-color: #3c4043; background: #171717; }
     }
@@ -381,6 +998,78 @@ PAGE = """
 <body>
   <main>
     <h1>scannerserver</h1>
+    {% if wifi_backend %}
+    <section>
+      <h2>Scanner setup</h2>
+      {% if setup_message %}<p class="notice">{{ setup_message }}</p>{% endif %}
+      {% if scanner_setup.configured %}
+      <p><span class="status">configured</span></p>
+      <dl class="setup-details">
+        <dt>Name</dt><dd>{{ scanner_setup.config.name or "ScanSnap" }}</dd>
+        <dt>IP</dt><dd>{{ scanner_setup.config.scanner_ip }}</dd>
+        {% if scanner_setup.config.serial %}<dt>Serial</dt><dd>{{ scanner_setup.config.serial }}</dd>{% endif %}
+        {% if scanner_setup.config.mac %}<dt>MAC</dt><dd>{{ scanner_setup.config.mac }}</dd>{% endif %}
+        <dt>Pairing key</dt><dd>{{ scanner_setup.config.pairing_key_masked or "set" }}</dd>
+      </dl>
+      {% if not scanner_setup.env_configured %}
+      <form method="post" action="{{ url_for('clear_scanner_setup') }}" class="button-row">
+        <button class="danger-button">Clear stored scanner</button>
+      </form>
+      {% endif %}
+      {% elif scanner_setup.needs_password %}
+      <p><span class="status">password needed</span></p>
+      {% if scanner_setup.stored_config.last_error %}<p class="warning">{{ scanner_setup.stored_config.last_error }}</p>{% endif %}
+      <dl class="setup-details">
+        <dt>Name</dt><dd>{{ scanner_setup.stored_config.name or "ScanSnap" }}</dd>
+        <dt>IP</dt><dd>{{ scanner_setup.stored_config.scanner_ip }}</dd>
+        {% if scanner_setup.stored_config.serial %}<dt>Serial</dt><dd>{{ scanner_setup.stored_config.serial }}</dd>{% endif %}
+        {% if scanner_setup.stored_config.mac %}<dt>MAC</dt><dd>{{ scanner_setup.stored_config.mac }}</dd>{% endif %}
+      </dl>
+      <form method="post" action="{{ url_for('save_scanner_password') }}">
+        <label>Scanner password
+          <input name="scanner_password" type="password" autocomplete="current-password" required>
+        </label>
+        <button>Test password</button>
+      </form>
+      {% else %}
+      <p class="muted">No Wi-Fi scanner is configured.</p>
+      {% endif %}
+
+      <div class="button-row">
+        <form method="post" action="{{ url_for('discover_scanners') }}">
+          <button class="secondary-button">Refresh discovery</button>
+        </form>
+      </div>
+
+      {% if scanner_setup.discovery.status == "running" %}
+      <p><span class="status">searching</span></p>
+      {% elif scanner_setup.discovery.status == "failed" %}
+      <p class="warning">{{ scanner_setup.discovery.error }}</p>
+      {% endif %}
+
+      {% if scanner_setup.discovery.devices %}
+      <form class="stack-form" method="post" action="{{ url_for('select_scanner') }}">
+        <div class="device-list">
+          {% for device in scanner_setup.discovery.devices %}
+          <label class="device-option">
+            <input type="radio" name="device_id" value="{{ device.id }}" {% if loop.first %}checked{% endif %}>
+            <span>
+              <span class="device-title">{{ device.name or "ScanSnap" }} at {{ device.ip }}</span><br>
+              <span class="muted">
+                serial {{ device.serial or "unknown" }} · MAC {{ device.mac }}
+                {% if not device.matches_prefix %} · prefix not in configured list{% endif %}
+              </span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+        <button>Use selected scanner</button>
+      </form>
+      {% elif scanner_setup.discovery.status == "done" %}
+      <p class="muted">No ScanSnap devices found.</p>
+      {% endif %}
+    </section>
+    {% endif %}
     <section>
       <h2>Scan</h2>
       <form method="post" action="{{ url_for('scan') }}">
@@ -536,10 +1225,12 @@ PAGE = """
       <p>No scans yet.</p>
       {% endif %}
     </section>
+    {% if not wifi_backend %}
     <section>
       <h2>Scanner discovery</h2>
       <pre>{{ devices }}</pre>
     </section>
+    {% endif %}
   </main>
   <script>
     const selectAllFiles = document.getElementById("select-all-files");
@@ -659,11 +1350,13 @@ def run_scan_locked(env_overrides):
             "error": "",
         }
         env = os.environ.copy()
+        env.update(scanner_env_overrides())
         env.update(env_overrides)
         log_event(
             "scan.command.start",
             trigger=trigger,
             backend=env.get("SCAN_BACKEND", "sane"),
+            scanner_ip=env.get("SCANNER_IP"),
             source=env.get("SCAN_SOURCE", "ADF Duplex"),
             format=env.get("SCAN_FORMAT", "pdf"),
             profile=env.get("SCAN_PROFILE_NAME"),
@@ -794,6 +1487,11 @@ def is_button_notice(data):
 def arm_button_client():
     started_at = time.monotonic()
     log_event("button.arm.start")
+    env = os.environ.copy()
+    env.update(scanner_env_overrides())
+    if not env.get("SCANNER_IP") or not env.get("SCANSNAP_PAIRING_KEY"):
+        log_event("button.arm.skipped", reason="scanner-not-configured")
+        return False
     try:
         result = subprocess.run(
             ["scansnap-button-arm"],
@@ -801,7 +1499,7 @@ def arm_button_client():
             capture_output=True,
             text=True,
             timeout=float(os.environ.get("SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS", "45")),
-            env=os.environ.copy(),
+            env=env,
         )
     except Exception as exc:
         log_event("button.arm.exception", error=exc, duration_seconds=f"{time.monotonic() - started_at:.3f}")
@@ -866,7 +1564,6 @@ def scanner_reachable(scanner_ip):
 
 def button_listener():
     global last_button_started_at
-    scanner_ip = os.environ.get("SCANNER_IP", "")
     port = int(os.environ.get("SCANSNAP_BUTTON_PORT", "55265"))
     debounce_seconds = float(os.environ.get("SCANSNAP_BUTTON_DEBOUNCE_SECONDS", "3"))
     cooldown_seconds = float(os.environ.get("SCANSNAP_BUTTON_COOLDOWN_SECONDS", "10"))
@@ -882,26 +1579,35 @@ def button_listener():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", port))
     sock.settimeout(1.0)
-    log_event("button.listener.start", port=port, scanner_ip=scanner_ip)
+    log_event("button.listener.start", port=port)
 
-    armed = scanner_reachable(scanner_ip) and arm_button_client()
-    next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
-    next_reachability_at = time.monotonic() + reachability_interval
+    armed = False
+    next_arm_at = float("inf")
+    next_reachability_at = time.monotonic()
     log_event("button.listener.state", armed=armed)
 
     while True:
         now = time.monotonic()
+        scanner_env = scanner_env_overrides()
+        scanner_ip = scanner_env.get("SCANNER_IP", "")
+        if scanner_config_changed.is_set():
+            scanner_config_changed.clear()
+            armed = False
+            next_arm_at = float("inf")
+            next_reachability_at = now
+            log_event("button.listener.config.changed", scanner_ip=scanner_ip)
+
         if not job_lock.locked():
             should_arm = False
             if button_rearm_requested.is_set():
                 button_rearm_requested.clear()
-                should_arm = scanner_reachable(scanner_ip)
+                should_arm = bool(scanner_ip) and scanner_reachable(scanner_ip)
                 log_event("button.rearm.check", reachable=should_arm)
             elif armed and now >= next_arm_at:
                 should_arm = True
                 log_event("button.arm.refresh.due")
             elif not armed and now >= next_reachability_at:
-                should_arm = scanner_reachable(scanner_ip)
+                should_arm = bool(scanner_ip) and scanner_reachable(scanner_ip)
                 next_reachability_at = time.monotonic() + reachability_interval
                 log_event("button.arm.waiting", reachable=should_arm)
 
@@ -918,6 +1624,10 @@ def button_listener():
             continue
 
         source_ip = address[0]
+        scanner_ip = scanner_env_overrides().get("SCANNER_IP", "")
+        if not scanner_ip:
+            log_event("button.notice.ignored", reason="scanner-not-configured", source_ip=source_ip, bytes=len(data))
+            continue
         if scanner_ip and source_ip != scanner_ip:
             log_event("button.notice.ignored", reason="unexpected-source", source_ip=source_ip, bytes=len(data))
             continue
@@ -1141,6 +1851,8 @@ def editable_mode_from_request(scan_settings):
 @app.get("/")
 def index():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if wifi_backend_enabled() and not scanner_env_overrides():
+        ensure_scanner_discovery_started(force=False)
     scan_settings = load_scan_settings()
     edit_mode = editable_mode_from_request(scan_settings)
     files = sorted(
@@ -1149,6 +1861,9 @@ def index():
     )
     return render_template_string(
         PAGE,
+        wifi_backend=wifi_backend_enabled(),
+        scanner_setup=scanner_setup_context(),
+        setup_message=setup_message(request.args.get("setup")),
         scan_settings=scan_settings,
         edit_mode=edit_mode,
         advanced_open=bool(request.args.get("edit_mode")),
@@ -1160,11 +1875,134 @@ def index():
     )
 
 
+@app.post("/setup/scanners/discover")
+def discover_scanners():
+    ensure_scanner_discovery_started(force=True)
+    return redirect(url_for("index", setup="discovery-started"))
+
+
+@app.post("/setup/scanners/select")
+def select_scanner():
+    device = find_discovered_device(request.form.get("device_id", ""))
+    if not device:
+        return redirect(url_for("index", setup="no-device"))
+
+    password = password_from_serial(device.get("serial", ""))
+    if not password:
+        save_scanner_config(
+            {
+                **device,
+                "scanner_ip": device["ip"],
+                "status": "needs_password",
+                "last_error": "Scanner serial was not available; enter the scanner password.",
+            }
+        )
+        return redirect(url_for("index", setup="password-needed"))
+
+    pairing_key = derive_scansnap_pairing_key(password)
+    try:
+        result = test_scansnap_pairing_key(device["ip"], pairing_key)
+    except Exception as exc:
+        result = {"ok": False, "status": None, "message": str(exc)}
+
+    if result["ok"]:
+        discovered = result.get("device") or device
+        save_scanner_config(
+            {
+                **discovered,
+                "scanner_ip": discovered.get("ip") or device["ip"],
+                "pairing_key": pairing_key,
+                "password_source": "serial-default",
+                "status": "configured",
+                "last_error": "",
+            }
+        )
+        log_event("scanner.setup.configured", scanner_ip=device["ip"], serial=device.get("serial"))
+        return redirect(url_for("index", setup="configured"))
+
+    save_scanner_config(
+        {
+            **device,
+            "scanner_ip": device["ip"],
+            "status": "needs_password",
+            "last_error": f"Default password {password!r} was rejected: {result['message']}.",
+        }
+    )
+    log_event("scanner.setup.default_password.failed", scanner_ip=device["ip"], status=result.get("status"))
+    return redirect(url_for("index", setup="password-needed"))
+
+
+@app.post("/setup/scanners/password")
+def save_scanner_password():
+    config = load_stored_scanner_config()
+    if not config or not config.get("scanner_ip"):
+        return redirect(url_for("index", setup="setup-required"))
+
+    password = request.form.get("scanner_password", "")
+    candidates = []
+    try:
+        candidates.append((derive_scansnap_pairing_key(password), "user-password"))
+    except ValueError:
+        pass
+    if password and password not in {candidate[0] for candidate in candidates}:
+        candidates.append((password, "provided-pairing-key"))
+
+    last_result = {"message": "no password was provided", "status": None}
+    for pairing_key, source in candidates:
+        try:
+            result = test_scansnap_pairing_key(config["scanner_ip"], pairing_key)
+        except Exception as exc:
+            result = {"ok": False, "status": None, "message": str(exc)}
+        last_result = result
+        if result["ok"]:
+            discovered = result.get("device") or config
+            save_scanner_config(
+                {
+                    **config,
+                    **discovered,
+                    "scanner_ip": discovered.get("ip") or config["scanner_ip"],
+                    "pairing_key": pairing_key,
+                    "password_source": source,
+                    "status": "configured",
+                    "last_error": "",
+                }
+            )
+            log_event("scanner.setup.password.configured", scanner_ip=config["scanner_ip"], source=source)
+            return redirect(url_for("index", setup="configured"))
+
+    save_scanner_config(
+        {
+            **config,
+            "status": "needs_password",
+            "last_error": f"Password was rejected: {last_result['message']}.",
+        }
+    )
+    log_event("scanner.setup.password.failed", scanner_ip=config["scanner_ip"], status=last_result.get("status"))
+    return redirect(url_for("index", setup="password-failed"))
+
+
+@app.post("/setup/scanners/clear")
+def clear_scanner_setup():
+    clear_scanner_config()
+    return redirect(url_for("index", setup="cleared"))
+
+
 @app.post("/scan")
 def scan():
     if job_lock.locked():
         log_event("web.scan.ignored", reason="scan-running")
         return redirect(url_for("index"))
+
+    if wifi_backend_enabled() and not scanner_env_overrides():
+        global last_job
+        last_job = {
+            "started": None,
+            "finished": datetime.now().isoformat(timespec="seconds"),
+            "status": "setup required",
+            "output": "",
+            "error": "Choose a Wi-Fi scanner before starting a scan.",
+        }
+        return redirect(url_for("index", setup="setup-required"))
 
     scan_settings = load_scan_settings()
     mode = find_mode(scan_settings, request.form.get("mode_id", "")) or default_mode(scan_settings)

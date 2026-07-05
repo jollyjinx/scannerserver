@@ -12,6 +12,7 @@ backend="${SCAN_BACKEND:-sane}"
 device="${SCAN_DEVICE:-}"
 scanner_ip="${SCANNER_IP:-}"
 pairing_key="${SCAN_PAIRING_KEY:-${SCANSNAP_PAIRING_KEY:-}}"
+scanner_config_path="${SCANNER_CONFIG_PATH:-${SCAN_OUTPUT_DIR:-/scans}/.scannerserver-scanner.json}"
 client_ip="${SCANSNAP_CLIENT_IP:-}"
 simplex="${SCAN_SIMPLEX:-false}"
 wifi_debug="${SCAN_WIFI_DEBUG:-false}"
@@ -67,12 +68,41 @@ case "$backend" in
     log_event "pdf.create.finished raw_pdf=$raw_pdf"
     ;;
   wifi)
+    if { [[ -z "$scanner_ip" ]] || [[ -z "$pairing_key" ]]; } && [[ -f "$scanner_config_path" ]]; then
+      while IFS='=' read -r key value; do
+        case "$key" in
+          SCANNER_IP)
+            if [[ -z "$scanner_ip" ]]; then scanner_ip="$value"; fi
+            ;;
+          SCANSNAP_PAIRING_KEY)
+            if [[ -z "$pairing_key" ]]; then pairing_key="$value"; fi
+            ;;
+        esac
+      done < <(python3 - "$scanner_config_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text())
+except Exception:
+    data = {}
+if data.get("status") == "configured":
+    if data.get("scanner_ip"):
+        print(f"SCANNER_IP={data['scanner_ip']}")
+    if data.get("pairing_key"):
+        print(f"SCANSNAP_PAIRING_KEY={data['pairing_key']}")
+PY
+)
+    fi
+
     if [[ -z "$scanner_ip" ]]; then
-      echo "SCAN_BACKEND=wifi requires SCANNER_IP." >&2
+      echo "SCAN_BACKEND=wifi requires SCANNER_IP or a configured scanner setup file." >&2
       exit 64
     fi
     if [[ -z "$pairing_key" ]]; then
-      echo "SCAN_BACKEND=wifi requires SCAN_PAIRING_KEY or SCANSNAP_PAIRING_KEY." >&2
+      echo "SCAN_BACKEND=wifi requires SCAN_PAIRING_KEY, SCANSNAP_PAIRING_KEY, or a configured scanner setup file." >&2
       exit 64
     fi
 
