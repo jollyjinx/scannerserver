@@ -2,6 +2,7 @@ import json
 import mimetypes
 import os
 import ipaddress
+import queue
 import re
 import socket
 import subprocess
@@ -1952,6 +1953,36 @@ def arm_button_client():
     return True
 
 
+class ButtonArmCoordinator:
+    def __init__(self, arm_func=arm_button_client):
+        self.arm_func = arm_func
+        self.result_queue = queue.Queue()
+        self.arming = False
+
+    def start(self):
+        if self.arming:
+            return False
+        self.arming = True
+        thread = threading.Thread(target=self._run, daemon=True)
+        thread.start()
+        return True
+
+    def _run(self):
+        try:
+            self.result_queue.put(bool(self.arm_func()))
+        except Exception as exc:
+            log_event("button.arm.worker.exception", error=exc)
+            self.result_queue.put(False)
+
+    def drain_result(self):
+        try:
+            result = self.result_queue.get_nowait()
+        except queue.Empty:
+            return None
+        self.arming = False
+        return result
+
+
 def scanner_reachable(scanner_ip):
     if not scanner_ip:
         log_event("scanner.reachability", result="missing-scanner-ip")
@@ -1994,7 +2025,7 @@ def button_listener():
     global last_button_started_at
     port = int(os.environ.get("SCANSNAP_BUTTON_PORT", "55265"))
     debounce_seconds = float(os.environ.get("SCANSNAP_BUTTON_DEBOUNCE_SECONDS", "3"))
-    cooldown_seconds = float(os.environ.get("SCANSNAP_BUTTON_COOLDOWN_SECONDS", "10"))
+    cooldown_seconds = float(os.environ.get("SCANSNAP_BUTTON_COOLDOWN_SECONDS", "1"))
     arm_interval = float(
         os.environ.get(
             "SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS",
@@ -2010,6 +2041,7 @@ def button_listener():
     log_event("button.listener.start", port=port)
 
     armed = False
+    arm_coordinator = ButtonArmCoordinator()
     next_arm_at = float("inf")
     next_reachability_at = time.monotonic()
     log_event("button.listener.state", armed=armed)
@@ -2024,6 +2056,14 @@ def button_listener():
             next_arm_at = float("inf")
             next_reachability_at = now
             log_event("button.listener.config.changed", scanner_ip=scanner_ip)
+
+        arm_result = arm_coordinator.drain_result()
+        if arm_result is not None:
+            armed = arm_result
+            next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
+            if not armed:
+                next_reachability_at = time.monotonic() + reachability_interval
+            log_event("button.listener.state", armed=armed)
 
         if not job_lock.locked():
             should_arm = False
@@ -2040,11 +2080,11 @@ def button_listener():
                 log_event("button.arm.waiting", reachable=should_arm)
 
             if should_arm:
-                armed = arm_button_client()
-                next_arm_at = time.monotonic() + arm_interval if armed else float("inf")
-                if not armed:
-                    next_reachability_at = time.monotonic() + reachability_interval
-                log_event("button.listener.state", armed=armed)
+                if arm_coordinator.start():
+                    next_arm_at = float("inf")
+                    log_event("button.arm.scheduled")
+                else:
+                    log_event("button.arm.skipped", reason="already-running")
 
         try:
             data, address = sock.recvfrom(2048)

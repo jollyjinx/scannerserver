@@ -72,7 +72,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS` | `45` | Timeout for one button arming attempt |
 | `SCANSNAP_BUTTON_REACHABILITY_PORT` | `53219` | TCP port used to check whether the scanner is awake before arming |
 | `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
-| `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `10` | Ignore button notices shortly after a scan finishes |
+| `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `1` | Ignore duplicate button notices shortly after a scan finishes |
 
 ## Blank Page Removal
 
