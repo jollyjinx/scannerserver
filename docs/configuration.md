@@ -1,3 +1,11 @@
+---
+title: Configuration and Scan Behavior
+description: Environment variables, output naming, scan modes, and post-processing behavior.
+type: reference
+audience: operators
+status: current
+---
+
 # Configuration and Scan Behavior
 
 ## Output Files
@@ -126,13 +134,13 @@ environment:
 Check logs:
 
 ```bash
-docker logs -f scannerserver
+container logs -f scannerserver
 ```
 
 For Compose:
 
 ```bash
-docker compose logs -f scansnap
+container compose logs -f scansnap
 ```
 
 Check the scanner from the host:
@@ -144,8 +152,8 @@ ping SCANNER_IP
 Check the container network view:
 
 ```bash
-docker compose exec scansnap ip addr
-docker compose exec scansnap ip neigh show
+container compose exec scansnap ip addr
+container compose exec scansnap ip neigh show
 ```
 
 If button presses do nothing, look for:

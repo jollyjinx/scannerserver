@@ -1,3 +1,11 @@
+---
+title: ScanSnap Protocol Notes
+description: Reverse-engineered ScanSnap iX500 Wi-Fi protocol details used by scannerserver.
+type: reference
+audience: maintainers
+status: current
+---
+
 # ScanSnap Protocol Notes
 
 ## Why This Uses The ScanSnap Wi-Fi Protocol

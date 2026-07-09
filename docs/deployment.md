@@ -1,3 +1,11 @@
+---
+title: Deployment and Builds
+description: Container image deployment, Compose usage, local builds, and development image publishing.
+type: guide
+audience: operators
+status: current
+---
+
 # Deployment and Builds
 
 ## Published Image
@@ -10,13 +18,13 @@ ghcr.io/jollyjinx/scannerserver:latest
 
 It supports `linux/amd64` and `linux/arm64`, so it works on x86 Linux hosts and Raspberry Pi systems.
 
-## Docker Run
+## Container Run
 
 Use host networking so ScanSnap UDP discovery reaches the local network:
 
 ```bash
 mkdir -p scans
-docker run -d \
+container run -d \
   --name scannerserver \
   --restart unless-stopped \
   --network host \
@@ -29,7 +37,7 @@ docker run -d \
 
 Using only `-p 8080:8080` puts the container on a bridge network. The web UI is reachable that way, but ScanSnap UDP discovery usually searches the container network instead of the scanner LAN.
 
-## Docker Compose
+## Compose
 
 The repository includes a simple host-network `compose.yaml`:
 
@@ -37,7 +45,7 @@ The repository includes a simple host-network `compose.yaml`:
 git clone https://github.com/jollyjinx/scannerserver.git
 cd scannerserver
 mkdir -p scans
-docker compose up -d
+container compose up -d
 ```
 
 ## Raspberry Pi Macvlan Example
@@ -63,27 +71,27 @@ NETWORK_PREFIX=10.112
 If you already have a larger home-lab Compose file, copy only the scanner service into it instead of replacing your stack.
 
 ```bash
-docker compose config --quiet
-docker compose up -d --no-deps scansnap
+container compose config --quiet
+container compose up -d --no-deps scansnap
 ```
 
 ## Updating
 
-Standalone `docker run`:
+Standalone `container run`:
 
 ```bash
-docker pull ghcr.io/jollyjinx/scannerserver:latest
-docker stop scannerserver
-docker rm scannerserver
-# rerun the docker run command
+container pull ghcr.io/jollyjinx/scannerserver:latest
+container stop scannerserver
+container rm scannerserver
+# rerun the container run command
 ```
 
 Compose:
 
 ```bash
 git pull
-docker compose pull
-docker compose up -d
+container compose pull
+container compose up -d
 ```
 
 ## Build From Source
@@ -102,7 +110,7 @@ services:
 Then run:
 
 ```bash
-docker compose up -d --build
+container compose up -d --build
 ```
 
 ## Build And Push Development ARM64
@@ -119,10 +127,10 @@ By default it builds and pushes:
 ghcr.io/jollyjinx/scannerserver:development-arm64
 ```
 
-The script uses Docker Buildx:
+The script uses Buildx:
 
 ```bash
-docker buildx build --platform linux/arm64 --push ...
+container buildx build --platform linux/arm64 --push ...
 ```
 
 Override the target if needed:
@@ -131,10 +139,10 @@ Override the target if needed:
 IMAGE=ghcr.io/your-user/scannerserver TAG=test-arm64 ./scripts/build_push_development_arm64.sh
 ```
 
-If Docker reports `Structure needs cleaning`, prune the builder cache and rerun:
+If the container runtime reports `Structure needs cleaning`, prune the builder cache and rerun:
 
 ```bash
-docker buildx prune --all --force
-docker builder prune --all --force
+container buildx prune --all --force
+container builder prune --all --force
 ./scripts/build_push_development_arm64.sh
 ```

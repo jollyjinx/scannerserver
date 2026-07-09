@@ -1,6 +1,14 @@
+---
+title: scannerserver
+description: Web scanner service for Fujitsu/Ricoh ScanSnap iX500 devices on Linux.
+type: overview
+audience: users
+status: current
+---
+
 # scannerserver
 
-`scannerserver` is a Dockerized web scanner service for the Fujitsu/Ricoh ScanSnap iX500.
+`scannerserver` is a containerized web scanner service for the Fujitsu/Ricoh ScanSnap iX500.
 
 It runs on a Raspberry Pi or other Linux host, finds the iX500 on your local network, and lets you scan from a web page or by pressing the scanner's physical button. Scans are written to a host directory as PDFs, with OCR running in the background.
 
@@ -10,7 +18,7 @@ On the Linux host that can reach the scanner, create a scan directory and start 
 
 ```bash
 mkdir -p scans
-docker run -d \
+container run -d \
   --name scannerserver \
   --restart unless-stopped \
   --network host \
@@ -36,7 +44,7 @@ After setup, scan either way:
 
 Raw PDFs appear immediately in `./scans`. Searchable OCR PDFs appear shortly after OCR finishes.
 
-## Docker Compose
+## Compose
 
 Compose is optional. If you prefer it, clone the repo and use the included host-network compose file:
 
@@ -44,7 +52,7 @@ Compose is optional. If you prefer it, clone the repo and use the included host-
 git clone https://github.com/jollyjinx/scannerserver.git
 cd scannerserver
 mkdir -p scans
-docker compose up -d
+container compose up -d
 ```
 
 Then open:
@@ -78,21 +86,21 @@ It does not sweep every IP address in your subnet.
 
 ## Updating
 
-For `docker run`:
+For `container run`:
 
 ```bash
-docker pull ghcr.io/jollyjinx/scannerserver:latest
-docker stop scannerserver
-docker rm scannerserver
-# rerun the docker run command from Quick Start
+container pull ghcr.io/jollyjinx/scannerserver:latest
+container stop scannerserver
+container rm scannerserver
+# rerun the container run command from Quick Start
 ```
 
-For Docker Compose:
+For Compose:
 
 ```bash
 git pull
-docker compose pull
-docker compose up -d
+container compose pull
+container compose up -d
 ```
 
 ## Troubleshooting
@@ -100,13 +108,13 @@ docker compose up -d
 Check logs:
 
 ```bash
-docker logs -f scannerserver
+container logs -f scannerserver
 ```
 
 For Compose:
 
 ```bash
-docker compose logs -f scansnap
+container compose logs -f scansnap
 ```
 
 If setup finds no scanner, make sure:
@@ -119,7 +127,7 @@ If setup finds no scanner, make sure:
 With Compose:
 
 ```bash
-docker compose exec scansnap ip neigh show
+container compose exec scansnap ip neigh show
 ```
 
 If discovery still fails but you know the scanner IP, enter the IP address manually on the setup page.
@@ -129,6 +137,20 @@ If discovery still fails but you know the scanner IP, enter the IP address manua
 - [Deployment and builds](docs/deployment.md)
 - [Configuration and scan behavior](docs/configuration.md)
 - [ScanSnap protocol notes](docs/protocol.md)
+
+## Documentation Front Matter
+
+All Markdown documentation in this repository starts with YAML front matter so agents and documentation tooling can classify files before reading the full body.
+
+Required fields:
+
+| Field | Purpose |
+| --- | --- |
+| `title` | Human-readable page title |
+| `description` | One-sentence summary of the page |
+| `type` | Document category, such as `overview`, `guide`, or `reference` |
+| `audience` | Primary reader, such as `users`, `operators`, or `maintainers` |
+| `status` | Lifecycle state, currently `current` for maintained docs |
 
 ## References
 
