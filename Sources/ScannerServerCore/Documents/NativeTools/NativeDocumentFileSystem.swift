@@ -43,9 +43,16 @@ public protocol NativeDocumentFileSystem: Sendable {
     ) throws -> [URL]
     func pngDimensions(at url: URL) throws -> NativeDocumentImageDimensions?
     func readData(at url: URL) throws -> Data
+    func readMappedData(at url: URL) throws -> Data
     func writeData(_ data: Data, to url: URL) throws
     func placeFileExclusively(at source: URL, destination: URL) throws
     func replaceFileAtomically(at destination: URL, with source: URL) throws
+}
+
+public extension NativeDocumentFileSystem {
+    func readMappedData(at url: URL) throws -> Data {
+        try readData(at: url)
+    }
 }
 
 public struct FoundationNativeDocumentFileSystem: NativeDocumentFileSystem {
@@ -118,6 +125,10 @@ public struct FoundationNativeDocumentFileSystem: NativeDocumentFileSystem {
 
     public func readData(at url: URL) throws -> Data {
         try Data(contentsOf: url)
+    }
+
+    public func readMappedData(at url: URL) throws -> Data {
+        try Data(contentsOf: url, options: .mappedIfSafe)
     }
 
     public func writeData(_ data: Data, to url: URL) throws {

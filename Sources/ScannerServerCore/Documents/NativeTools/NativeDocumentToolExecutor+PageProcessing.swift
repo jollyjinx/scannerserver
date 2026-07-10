@@ -439,114 +439,131 @@ extension NativeDocumentToolExecutor {
         }
 
         let name = "crop-analysis-\(paddedPageNumber(page))"
-        let grayscale = stagingDirectory.appendingPathComponent("\(name)-gray.v")
+        let sRGB = stagingDirectory.appendingPathComponent("\(name)-srgb.v")
+        let rawRGB = stagingDirectory.appendingPathComponent("\(name)-rgb.raw")
         var diagnostics = try await successfulProcess(
             executable: "vips",
-            arguments: ["colourspace", image.url.path, grayscale.path, "b-w"],
+            arguments: ["colourspace", image.url.path, sRGB.path, "srgb"],
             request: request
         ).standardError
-
-        let strips = [
-            (0, 0, width, border),
-            (0, height - border, width, border),
-            (0, 0, border, height),
-            (width - border, 0, border, height),
-        ]
-        var histograms: [URL] = []
-        for (index, area) in strips.enumerated() {
-            let strip = stagingDirectory.appendingPathComponent("\(name)-strip-\(index).v")
-            let histogram = stagingDirectory.appendingPathComponent("\(name)-hist-\(index).v")
-            diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-                executable: "vips",
-                arguments: [
-                    "crop", grayscale.path, strip.path,
-                    String(area.0), String(area.1), String(area.2), String(area.3),
-                ],
-                request: request
-            ).standardError)
-            diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-                executable: "vips",
-                arguments: ["hist_find", strip.path, histogram.path],
-                request: request
-            ).standardError)
-            histograms.append(histogram)
-        }
-
-        var combined = histograms[0]
-        for index in 1..<histograms.count {
-            let sum = stagingDirectory.appendingPathComponent("\(name)-hist-sum-\(index).v")
-            diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-                executable: "vips",
-                arguments: ["add", combined.path, histograms[index].path, sum.path],
-                request: request
-            ).standardError)
-            combined = sum
-        }
-        let histogramCSV = stagingDirectory.appendingPathComponent("\(name)-hist.csv")
         diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
             executable: "vips",
-            arguments: ["csvsave", combined.path, histogramCSV.path],
+            arguments: ["rawsave", sRGB.path, rawRGB.path],
             request: request
         ).standardError)
-        let background = try histogramMedian(fileSystem.readData(at: histogramCSV))
-
-        let difference = stagingDirectory.appendingPathComponent("\(name)-difference.v")
-        let absoluteDifference = stagingDirectory.appendingPathComponent("\(name)-absolute.v")
-        let mask = stagingDirectory.appendingPathComponent("\(name)-mask.v")
-        diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-            executable: "vips",
-            arguments: [
-                "linear", grayscale.path, difference.path,
-                "1", "--", String(-background),
-            ],
-            request: request
-        ).standardError)
-        diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-            executable: "vips",
-            arguments: ["abs", difference.path, absoluteDifference.path],
-            request: request
-        ).standardError)
-        diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-            executable: "vips",
-            arguments: [
-                "relational_const", absoluteDifference.path, mask.path,
-                "more", String(options.backgroundDelta),
-            ],
-            request: request
-        ).standardError)
-        let trimResult = try await successfulProcess(
-            executable: "vips",
-            arguments: ["find_trim", mask.path, "--background", "0"],
-            request: request
+        let analysis = try cropPixelAnalysis(
+            rgb: fileSystem.readMappedData(at: rawRGB),
+            width: width,
+            height: height,
+            border: border,
+            backgroundDelta: options.backgroundDelta
         )
-        diagnostics = joinedDiagnostics(diagnostics, trimResult.standardError)
-        let boundingBox = try boundingBoxOutput(trimResult)
-        guard boundingBox.width > 0, boundingBox.height > 0 else {
-            return (nil, background, 0, diagnostics)
-        }
-
-        let croppedMask = stagingDirectory.appendingPathComponent("\(name)-mask-crop.v")
-        diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-            executable: "vips",
-            arguments: [
-                "crop", mask.path, croppedMask.path,
-                String(boundingBox.left), String(boundingBox.top),
-                String(boundingBox.width), String(boundingBox.height),
-            ],
-            request: request
-        ).standardError)
-        let densityResult = try await successfulProcess(
-            executable: "vips",
-            arguments: ["avg", croppedMask.path],
-            request: request
-        )
-        diagnostics = joinedDiagnostics(diagnostics, densityResult.standardError)
         return (
-            boundingBox,
-            background,
-            try numericOutput(densityResult, operation: "vips avg") / 255.0,
+            analysis.boundingBox,
+            analysis.background,
+            analysis.density,
             diagnostics
         )
+    }
+
+    private func cropPixelAnalysis(
+        rgb: Data,
+        width: Int,
+        height: Int,
+        border: Int,
+        backgroundDelta: Int
+    ) throws -> (boundingBox: NativeImageBoundingBox?, background: Int, density: Double) {
+        let pixelCount = width.multipliedReportingOverflow(by: height)
+        guard !pixelCount.overflow, pixelCount.partialValue <= 100_000_000 else {
+            throw NativePageProcessingFailure.diagnostic(
+                "page image exceeds the native crop analysis pixel limit."
+            )
+        }
+        let expectedByteCount = pixelCount.partialValue.multipliedReportingOverflow(by: 3)
+        guard !expectedByteCount.overflow, rgb.count == expectedByteCount.partialValue
+        else {
+            throw NativePageProcessingFailure.diagnostic(
+                "vips rawsave did not return three-channel 8-bit RGB data."
+            )
+        }
+
+        return try rgb.withUnsafeBytes { rawBytes in
+            let bytes = rawBytes.bindMemory(to: UInt8.self)
+            var borderHistogram = Array(repeating: 0, count: 256)
+
+            @inline(__always)
+            func grayscale(x: Int, y: Int) -> Int {
+                let offset = (y * width + x) * 3
+                return (
+                    19_595 * Int(bytes[offset])
+                        + 38_470 * Int(bytes[offset + 1])
+                        + 7_471 * Int(bytes[offset + 2])
+                        + 32_768
+                ) >> 16
+            }
+
+            func record(xRange: Range<Int>, yRange: Range<Int>) {
+                for y in yRange {
+                    for x in xRange {
+                        borderHistogram[grayscale(x: x, y: y)] += 1
+                    }
+                }
+            }
+
+            record(xRange: 0..<width, yRange: 0..<border)
+            record(xRange: 0..<width, yRange: (height - border)..<height)
+            record(xRange: 0..<border, yRange: 0..<height)
+            record(xRange: (width - border)..<width, yRange: 0..<height)
+            let background = medianValue(in: borderHistogram)
+
+            var minimumX = width
+            var minimumY = height
+            var maximumX = -1
+            var maximumY = -1
+            var contentPixels = 0
+            for y in 0..<height {
+                if y.isMultiple(of: 128) { try Task.checkCancellation() }
+                for x in 0..<width {
+                    if abs(grayscale(x: x, y: y) - background) > backgroundDelta {
+                        minimumX = min(minimumX, x)
+                        minimumY = min(minimumY, y)
+                        maximumX = max(maximumX, x)
+                        maximumY = max(maximumY, y)
+                        contentPixels += 1
+                    }
+                }
+            }
+            guard maximumX >= minimumX, maximumY >= minimumY else {
+                return (nil, background, 0)
+            }
+
+            let boundingBox = NativeImageBoundingBox(
+                left: minimumX,
+                top: minimumY,
+                width: maximumX - minimumX + 1,
+                height: maximumY - minimumY + 1
+            )
+            let density = Double(contentPixels)
+                / Double(boundingBox.width * boundingBox.height)
+            return (boundingBox, background, density)
+        }
+    }
+
+    private func medianValue(in histogram: [Int]) -> Int {
+        let total = histogram.reduce(0, +)
+
+        func value(at rank: Int) -> Int {
+            var cumulative = 0
+            for (value, count) in histogram.enumerated() {
+                cumulative += count
+                if cumulative > rank { return value }
+            }
+            return 255
+        }
+
+        let lower = value(at: (total - 1) / 2)
+        let upper = value(at: total / 2)
+        return (lower + upper) / 2
     }
 
     private func successfulProcess(
@@ -575,59 +592,6 @@ extension NativeDocumentToolExecutor {
             )
         }
         return number
-    }
-
-    private func boundingBoxOutput(_ result: ProcessResult) throws -> NativeImageBoundingBox {
-        let values = result.standardOutput.split(whereSeparator: \.isWhitespace).compactMap {
-            Int($0)
-        }
-        guard values.count == 4 else {
-            throw NativePageProcessingFailure.diagnostic(
-                "vips find_trim did not return a valid bounding box."
-            )
-        }
-        return NativeImageBoundingBox(
-            left: values[0],
-            top: values[1],
-            width: values[2],
-            height: values[3]
-        )
-    }
-
-    private func histogramMedian(_ data: Data) throws -> Int {
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw NativePageProcessingFailure.diagnostic(
-                "vips csvsave did not return a valid histogram."
-            )
-        }
-        let counts = text.split { character in
-            character.isWhitespace || character == "," || character == ";"
-        }.compactMap { Double($0) }
-        guard counts.count >= 256,
-              counts.prefix(256).allSatisfy({ $0.isFinite && $0 >= 0 })
-        else {
-            throw NativePageProcessingFailure.diagnostic(
-                "vips csvsave did not return a valid histogram."
-            )
-        }
-        let bins = Array(counts.prefix(256))
-        let total = bins.reduce(0, +)
-        guard total > 0 else {
-            throw NativePageProcessingFailure.diagnostic("vips histogram is empty.")
-        }
-
-        func value(at rank: Double) -> Int {
-            var cumulative = 0.0
-            for (value, count) in bins.enumerated() {
-                cumulative += count
-                if cumulative > rank { return value }
-            }
-            return 255
-        }
-
-        let lower = value(at: floor((total - 1) / 2))
-        let upper = value(at: floor(total / 2))
-        return (lower + upper) / 2
     }
 
     private func pageSelection(_ pages: [Int]) -> String {
