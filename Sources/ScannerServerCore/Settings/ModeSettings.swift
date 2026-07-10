@@ -1,0 +1,183 @@
+import Foundation
+
+enum SettingsCoding {
+    static let environmentUserInfoKey = CodingUserInfoKey(
+        rawValue: "ScannerServerCore.Settings.environment"
+    )!
+}
+
+public struct ModeSettings: Codable, Equatable, Sendable {
+    public enum EnvironmentKey: String, CaseIterable, Sendable {
+        case language = "SCAN_LANGUAGE"
+        case resolution = "SCAN_RESOLUTION"
+        case mode = "SCAN_MODE"
+        case source = "SCAN_SOURCE"
+        case simplex = "SCAN_SIMPLEX"
+        case format = "SCAN_FORMAT"
+        case pageMode = "SCAN_PAGE_MODE"
+        case ocrEnabled = "SCAN_OCR_ENABLED"
+        case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
+        case cropPages = "SCAN_CROP_PAGES"
+    }
+
+    public static let truthyValues: Set<String> = ["1", "true", "yes", "on"]
+
+    public var language: String
+    public var resolution: String
+    public var mode: String
+    public var source: String
+    public var simplex: Bool
+    public var format: String
+    public var pageMode: String
+    public var ocrEnabled: Bool
+    public var removeBlankPages: Bool
+    public var cropPages: Bool
+
+    public init(
+        language: String = "deu+eng",
+        resolution: String = "300",
+        mode: String = "Color",
+        source: String = "ADF Duplex",
+        simplex: Bool = false,
+        format: String = "pdf",
+        pageMode: String = "multi",
+        ocrEnabled: Bool = true,
+        removeBlankPages: Bool = true,
+        cropPages: Bool = true
+    ) {
+        self.language = language
+        self.resolution = resolution
+        self.mode = mode
+        self.source = source
+        self.simplex = simplex
+        self.format = format
+        self.pageMode = pageMode
+        self.ocrEnabled = ocrEnabled
+        self.removeBlankPages = removeBlankPages
+        self.cropPages = cropPages
+    }
+
+    public init(values: [String: String], defaults: ModeSettings = .standard) {
+        func value(_ key: EnvironmentKey, fallback: String) -> String {
+            guard let value = values[key.rawValue] else { return fallback }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? fallback : trimmed
+        }
+
+        language = value(.language, fallback: defaults.language)
+        resolution = value(.resolution, fallback: defaults.resolution)
+        mode = value(.mode, fallback: defaults.mode)
+        source = value(.source, fallback: defaults.source)
+        simplex = Self.isTruthy(values[EnvironmentKey.simplex.rawValue] ?? defaults.simplexText)
+
+        let requestedFormat = value(.format, fallback: defaults.format).lowercased()
+        let aliasedFormat = ["image", "images"].contains(requestedFormat) ? "png" : requestedFormat
+        format = ["pdf", "png"].contains(aliasedFormat) ? aliasedFormat : defaults.validFormat
+
+        let requestedPageMode = value(.pageMode, fallback: defaults.pageMode).lowercased()
+        pageMode = ["multi", "single"].contains(requestedPageMode)
+            ? requestedPageMode
+            : defaults.validPageMode
+
+        ocrEnabled = Self.isTruthy(values[EnvironmentKey.ocrEnabled.rawValue] ?? defaults.ocrEnabledText)
+        removeBlankPages = Self.isTruthy(
+            values[EnvironmentKey.removeBlankPages.rawValue] ?? defaults.removeBlankPagesText
+        )
+        cropPages = Self.isTruthy(values[EnvironmentKey.cropPages.rawValue] ?? defaults.cropPagesText)
+    }
+
+    public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        self.init(values: environment, defaults: .standard)
+    }
+
+    public static let standard = ModeSettings(language: "deu+eng")
+
+    public static func isTruthy(_ value: String) -> Bool {
+        truthyValues.contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    public static func booleanText(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
+    public static func source(forSimplex simplex: Bool) -> String {
+        simplex ? "ADF Simplex" : "ADF Duplex"
+    }
+
+    public var environment: [String: String] {
+        [
+            EnvironmentKey.language.rawValue: language,
+            EnvironmentKey.resolution.rawValue: resolution,
+            EnvironmentKey.mode.rawValue: mode,
+            EnvironmentKey.source.rawValue: source,
+            EnvironmentKey.simplex.rawValue: simplexText,
+            EnvironmentKey.format.rawValue: format,
+            EnvironmentKey.pageMode.rawValue: pageMode,
+            EnvironmentKey.ocrEnabled.rawValue: ocrEnabledText,
+            EnvironmentKey.removeBlankPages.rawValue: removeBlankPagesText,
+            EnvironmentKey.cropPages.rawValue: cropPagesText,
+        ]
+    }
+
+    public func normalized(defaults: ModeSettings) -> ModeSettings {
+        ModeSettings(values: environment, defaults: defaults)
+    }
+
+    public var simplexText: String { Self.booleanText(simplex) }
+    public var ocrEnabledText: String { Self.booleanText(ocrEnabled) }
+    public var removeBlankPagesText: String { Self.booleanText(removeBlankPages) }
+    public var cropPagesText: String { Self.booleanText(cropPages) }
+
+    private var validFormat: String {
+        ["pdf", "png"].contains(format) ? format : "pdf"
+    }
+
+    private var validPageMode: String {
+        ["multi", "single"].contains(pageMode) ? pageMode : "multi"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        var values: [String: String] = [:]
+        for key in CodingKeys.allCases {
+            if let value = try container.compatibleStringIfPresent(forKey: key) {
+                values[key.rawValue] = value
+            }
+        }
+        let defaults = (decoder.userInfo[SettingsCoding.environmentUserInfoKey] as? [String: String])
+            .map(ModeSettings.init(environment:))
+            ?? .standard
+        self.init(values: values, defaults: defaults)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        for key in CodingKeys.allCases {
+            try container.encode(environment[key.rawValue]!, forKey: key)
+        }
+    }
+
+    fileprivate enum CodingKeys: String, CodingKey, CaseIterable {
+        case language = "SCAN_LANGUAGE"
+        case resolution = "SCAN_RESOLUTION"
+        case mode = "SCAN_MODE"
+        case source = "SCAN_SOURCE"
+        case simplex = "SCAN_SIMPLEX"
+        case format = "SCAN_FORMAT"
+        case pageMode = "SCAN_PAGE_MODE"
+        case ocrEnabled = "SCAN_OCR_ENABLED"
+        case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
+        case cropPages = "SCAN_CROP_PAGES"
+    }
+}
+
+private extension KeyedDecodingContainer where Key == ModeSettings.CodingKeys {
+    func compatibleStringIfPresent(forKey key: Key) throws -> String? {
+        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        if let value = try? decode(String.self, forKey: key) { return value }
+        if let value = try? decode(Bool.self, forKey: key) { return value ? "true" : "false" }
+        if let value = try? decode(Int.self, forKey: key) { return String(value) }
+        if let value = try? decode(Double.self, forKey: key) { return String(value) }
+        return nil
+    }
+}
