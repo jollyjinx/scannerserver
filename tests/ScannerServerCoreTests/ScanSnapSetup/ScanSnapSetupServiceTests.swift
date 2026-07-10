@@ -4,6 +4,24 @@ import Testing
 
 @Suite("Live ScanSnap setup service")
 struct ScanSnapSetupServiceTests {
+    @Test("Live application dependencies expose the network setup service")
+    func liveDependencyComposition() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScanSnapSetupComposition-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = [
+            "SCAN_OUTPUT_DIR": directory.path,
+            "SCAN_SETTINGS_PATH": directory.appendingPathComponent("settings.json").path,
+            "SCANNER_CONFIG_PATH": directory.appendingPathComponent("scanner.json").path,
+        ]
+
+        let dependencies = ScannerServerDependencies.live(environment: environment)
+        let state = await dependencies.scannerSetup.state()
+
+        #expect(state.serviceAvailable)
+        #expect(!state.configured)
+    }
+
     @Test("Automatic discovery starts once and skips configured scanners")
     func automaticDiscoveryGuard() async throws {
         let discovery = FakeScanSnapSetupDiscovery([.devices([])])
