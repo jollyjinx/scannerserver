@@ -44,7 +44,10 @@ let package = Package(
         ),
         .testTarget(
             name: "ScannerServerCoreTests",
-            dependencies: ["ScannerServerCore"],
+            dependencies: [
+                "ScannerServerCore",
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+            ],
             path: "tests/ScannerServerCoreTests",
             swiftSettings: swiftSettings
         ),
