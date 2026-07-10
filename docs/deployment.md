@@ -137,6 +137,8 @@ IMAGE=ghcr.io/your-user/scannerserver ./scripts/build_push_development.sh test
 
 The previous `build_push_development_arm64.sh` path remains as a compatibility wrapper and now also publishes both architectures.
 
+The script requires at least 10 GiB of free host disk space before starting because a dual-architecture Buildx build can expand Docker Desktop's VM disk substantially. `MIN_FREE_GIB` can raise that threshold. Setting `MIN_FREE_GIB=0` bypasses the check deliberately.
+
 If the container runtime reports `Structure needs cleaning`, prune the builder cache and rerun:
 
 ```bash
@@ -144,3 +146,5 @@ docker buildx prune --all --force
 docker builder prune --all --force
 ./scripts/build_push_development.sh development
 ```
+
+If the output instead contains `input/output error`, `read-only file system`, `metadata_v2.db`, or `UNEXPECTED INCONSISTENCY`, Docker's VM filesystem is unhealthy. Free host disk space first, restart Docker Desktop, and follow Docker Desktop's backup and recovery workflow. A Docker Desktop Clean / Purge operation deletes local containers, images, and volumes and should only be used after preserving any required data.
