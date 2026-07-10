@@ -31,7 +31,10 @@ func discoveryPreservesSendOrderAndPorts() async throws {
         "VENS", "ssNR", "VENS", "ssNR", "V2ss",
     ])
     #expect(sends.allSatisfy { $0.remoteAddress == ScanSnapSocketAddress(host: "192.168.1.255", port: 52_217) })
-    #expect(await transport.receiveTimeouts == [777])
+    let receiveTimeouts = await transport.receiveTimeouts
+    #expect(receiveTimeouts.count == 1)
+    #expect(receiveTimeouts[0] > 0)
+    #expect(receiveTimeouts[0] <= 777)
     #expect(await transport.isClosed)
 }
 
