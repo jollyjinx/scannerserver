@@ -70,9 +70,9 @@ The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on A
 
 ## Architecture
 
-Create a SwiftPM package with `// swift-tools-version: 6.3`, Swift 6 language mode, and strict concurrency enabled for all targets.
+The SwiftPM package uses `// swift-tools-version: 6.3`, Swift 6 language mode, and strict concurrency for all targets.
 
-Proposed package shape:
+Package shape:
 
 ```text
 Package.swift
@@ -94,7 +94,7 @@ Tests/
 
 The executable target owns command-line parsing, environment loading, signal setup, HTTP server startup, and runtime wiring. The library owns scanner discovery, pairing, button handling, scan orchestration, OCR queueing, settings persistence, file grouping, preview generation, and testable domain logic.
 
-Prefer a lightweight SwiftNIO-based HTTP layer. Hummingbird should be evaluated first because this service needs simple routes and low overhead, not a large web framework. Use `swift-argument-parser` for CLI options and `JLog` for service logs unless implementation work finds a strong reason to stay with SwiftLog.
+Hummingbird provides the lightweight SwiftNIO-based HTTP layer, `swift-argument-parser` owns CLI parsing, and `JLog` provides service logging.
 
 ## Dependency Strategy
 
