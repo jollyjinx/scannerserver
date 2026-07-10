@@ -1,3 +1,11 @@
+---
+title: Swift Hardware Validation
+description: Manual iX500 acceptance checklist for the Swift scannerserver container.
+type: guide
+audience: maintainers
+status: current
+---
+
 # Swift Hardware Validation
 
 Run this checklist against a real ScanSnap iX500 before publishing the Swift image as `latest`. Unit and container smoke tests do not validate the scanner's session ownership, button protocol, or LAN routing.
