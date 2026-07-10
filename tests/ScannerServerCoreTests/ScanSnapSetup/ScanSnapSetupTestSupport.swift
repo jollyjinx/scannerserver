@@ -93,6 +93,56 @@ actor FakeScanSnapSetupPairing: ScanSnapSetupPairing {
     }
 }
 
+actor SuspendedFirstScanSnapSetupPairing: ScanSnapSetupPairing {
+    typealias Call = FakeScanSnapSetupPairing.Call
+
+    private let firstResult: ScanSnapPairingResult
+    private var subsequentResults: [ScanSnapPairingResult]
+    private var firstContinuation: CheckedContinuation<Void, Never>?
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var calls: [Call] = []
+
+    init(
+        firstResult: ScanSnapPairingResult,
+        subsequentResults: [ScanSnapPairingResult] = []
+    ) {
+        self.firstResult = firstResult
+        self.subsequentResults = subsequentResults
+    }
+
+    func pair(
+        configuration: ScanSnapPairingConfiguration,
+        timestamp: ScanSnapTimestamp
+    ) async throws -> ScanSnapPairingResult {
+        calls.append(Call(configuration: configuration, timestamp: timestamp))
+        if calls.count == 1 {
+            await withCheckedContinuation { continuation in
+                firstContinuation = continuation
+                let waiters = suspensionWaiters
+                suspensionWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+            return firstResult
+        }
+        guard !subsequentResults.isEmpty else {
+            throw FakeScanSnapSetupError.missingPairingResult
+        }
+        return subsequentResults.removeFirst()
+    }
+
+    func waitUntilFirstCallIsSuspended() async {
+        guard firstContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            suspensionWaiters.append(continuation)
+        }
+    }
+
+    func resumeFirstCall() {
+        firstContinuation?.resume()
+        firstContinuation = nil
+    }
+}
+
 enum FakeScanSnapSetupError: Error, Sendable {
     case discoveryFailed
     case missingDiscoveryBehavior
@@ -136,4 +186,3 @@ func setupStore(environment: [String: String] = [:]) -> (ScannerConfigStore, URL
 }
 
 let fixedSetupDate = Date(timeIntervalSince1970: 1_700_000_000)
-

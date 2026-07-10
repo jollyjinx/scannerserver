@@ -1,5 +1,10 @@
 import Foundation
 
+struct ScannerConfigSetupRevision: Equatable, Sendable {
+    let owner: UUID
+    let generation: UInt64
+}
+
 public actor ScanSettingsStore {
     public let fileURL: URL
     private let environment: [String: String]
@@ -56,6 +61,8 @@ public actor ScanSettingsStore {
 public actor ScannerConfigStore {
     public let fileURL: URL
     private let environment: [String: String]
+    private var setupRevision: ScannerConfigSetupRevision?
+    private var retiredSetupOwners: Set<UUID> = []
 
     public init(
         fileURL: URL,
@@ -93,6 +100,20 @@ public actor ScannerConfigStore {
 
     @discardableResult
     public func save(_ config: ScannerConfig, now: Date = Date()) throws -> ScannerConfig {
+        retireCurrentSetupOwner()
+        return try write(config, now: now)
+    }
+
+    func save(
+        _ config: ScannerConfig,
+        now: Date,
+        setupRevision proposedRevision: ScannerConfigSetupRevision
+    ) throws -> ScannerConfig? {
+        guard accept(proposedRevision) else { return nil }
+        return try write(config, now: now)
+    }
+
+    private func write(_ config: ScannerConfig, now: Date) throws -> ScannerConfig {
         var config = config.normalized(source: "stored")
         config.updatedAt = Self.timestamp(now)
         try AtomicJSONFile.write(config, to: fileURL)
@@ -100,8 +121,43 @@ public actor ScannerConfigStore {
     }
 
     public func clear() throws {
+        retireCurrentSetupOwner()
+        try removeStoredConfiguration()
+    }
+
+    @discardableResult
+    func clear(setupRevision proposedRevision: ScannerConfigSetupRevision) throws -> Bool {
+        guard accept(proposedRevision) else { return false }
+        try removeStoredConfiguration()
+        return true
+    }
+
+    private func removeStoredConfiguration() throws {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         try FileManager.default.removeItem(at: fileURL)
+    }
+
+    private func accept(_ proposedRevision: ScannerConfigSetupRevision) -> Bool {
+        guard !retiredSetupOwners.contains(proposedRevision.owner) else { return false }
+        guard let current = setupRevision else {
+            setupRevision = proposedRevision
+            return true
+        }
+        guard current.owner == proposedRevision.owner else {
+            retiredSetupOwners.insert(current.owner)
+            setupRevision = proposedRevision
+            return true
+        }
+        guard proposedRevision.generation >= current.generation else { return false }
+        setupRevision = proposedRevision
+        return true
+    }
+
+    private func retireCurrentSetupOwner() {
+        if let owner = setupRevision?.owner {
+            retiredSetupOwners.insert(owner)
+        }
+        setupRevision = nil
     }
 
     private static func timestamp(_ date: Date) -> String {

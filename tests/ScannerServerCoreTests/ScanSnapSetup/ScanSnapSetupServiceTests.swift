@@ -306,6 +306,137 @@ struct ScanSnapSetupServiceTests {
         #expect(after.scannerEnvironment["SCANSNAP_PAIRING_KEY"] == "environment-key")
     }
 
+    @Test("Clear prevents a suspended selected-device pairing from restoring setup")
+    func clearInvalidatesSuspendedSelection() async throws {
+        let device = setupDevice()
+        let discovery = FakeScanSnapSetupDiscovery([.devices([device])])
+        let pairing = SuspendedFirstScanSnapSetupPairing(firstResult: acceptedPairing(device: device))
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: ["SCANSNAP_CLIENT_IP": "192.168.1.10"],
+            store: store,
+            network: FakeScanSnapSetupNetwork(),
+            discovery: discovery,
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+        #expect(await service.discover() == .discoveryStarted)
+        await service.waitForDiscovery()
+
+        let selection = Task { await service.select(deviceID: device.id) }
+        await pairing.waitUntilFirstCallIsSuspended()
+        #expect(await service.clear() == .cleared)
+        await pairing.resumeFirstCall()
+
+        #expect(await selection.value == .unavailable)
+        #expect(await store.loadStored() == nil)
+    }
+
+    @Test("Clear prevents suspended manual pairing from restoring setup")
+    func clearInvalidatesSuspendedManualSetup() async throws {
+        let pairing = SuspendedFirstScanSnapSetupPairing(firstResult: acceptedPairing())
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(),
+            discovery: FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)]),
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+
+        let manualSetup = Task {
+            await service.configureManually(
+                ipAddress: "192.168.1.44",
+                macAddress: "84:25:3f:00:11:22",
+                serial: "AWRHC08122"
+            )
+        }
+        await pairing.waitUntilFirstCallIsSuspended()
+        #expect(await service.clear() == .cleared)
+        await pairing.resumeFirstCall()
+
+        #expect(await manualSetup.value == .unavailable)
+        #expect(await store.loadStored() == nil)
+    }
+
+    @Test("Clear prevents suspended password pairing from restoring setup")
+    func clearInvalidatesSuspendedPasswordSetup() async throws {
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await store.save(ScannerConfig(
+            status: .needsPassword,
+            scannerIP: "192.168.1.44"
+        ))
+        let pairing = SuspendedFirstScanSnapSetupPairing(firstResult: acceptedPairing())
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(),
+            discovery: FakeScanSnapSetupDiscovery([]),
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+
+        let passwordSetup = Task { await service.savePassword("8122") }
+        await pairing.waitUntilFirstCallIsSuspended()
+        #expect(await service.clear() == .cleared)
+        await pairing.resumeFirstCall()
+
+        #expect(await passwordSetup.value == .unavailable)
+        #expect(await store.loadStored() == nil)
+    }
+
+    @Test("A suspended setup cannot overwrite a newer setup")
+    func newerSetupWinsOverSuspendedSetup() async throws {
+        let newerDevice = setupDevice(
+            ipAddress: "192.168.1.45",
+            macAddress: "84:25:3f:00:11:23",
+            serial: "AWRHC08123"
+        )
+        let pairing = SuspendedFirstScanSnapSetupPairing(
+            firstResult: acceptedPairing(),
+            subsequentResults: [acceptedPairing(device: newerDevice)]
+        )
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(),
+            discovery: FakeScanSnapSetupDiscovery([
+                .failure(.discoveryFailed),
+                .failure(.discoveryFailed),
+            ]),
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+
+        let olderSetup = Task {
+            await service.configureManually(
+                ipAddress: "192.168.1.44",
+                macAddress: "84:25:3f:00:11:22",
+                serial: "AWRHC08122"
+            )
+        }
+        await pairing.waitUntilFirstCallIsSuspended()
+
+        #expect(await service.configureManually(
+            ipAddress: newerDevice.ipAddress,
+            macAddress: newerDevice.macAddress,
+            serial: newerDevice.serialNumber
+        ) == .configured)
+        await pairing.resumeFirstCall()
+
+        #expect(await olderSetup.value == .unavailable)
+        let stored = try #require(await store.loadStored())
+        #expect(stored.scannerIP == newerDevice.ipAddress)
+        #expect(stored.mac == newerDevice.macAddress)
+        #expect(stored.serial == newerDevice.serialNumber)
+    }
+
     @Test("Discovery cancellation is cooperative and does not report failure")
     func cancellation() async {
         let discovery = FakeScanSnapSetupDiscovery([.waitForCancellation])

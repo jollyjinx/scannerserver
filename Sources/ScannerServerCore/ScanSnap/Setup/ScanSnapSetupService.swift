@@ -36,6 +36,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     private var operationError = ""
     private var discoveryTask: Task<Void, Never>?
     private var discoveryGeneration = 0
+    private let setupRevisionOwner = UUID()
+    private var setupGeneration: UInt64 = 0
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -128,10 +130,11 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     }
 
     public func select(deviceID: String) async -> ScannerSetupOutcome {
+        let revision = beginSetupOperation()
         guard let device = discoveredDevices.first(where: { $0.id == deviceID }) else {
             return .noDevice
         }
-        return await configure(SetupDeviceRecord(device))
+        return await configure(SetupDeviceRecord(device), revision: revision)
     }
 
     public func configureManually(
@@ -139,6 +142,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         macAddress: String,
         serial: String
     ) async -> ScannerSetupOutcome {
+        let revision = beginSetupOperation()
         let normalizedIP: String
         let normalizedMAC: String
         do {
@@ -159,12 +163,14 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         if normalizedIP.isEmpty {
             do {
                 let device = try await device(withMACAddress: normalizedMAC)
+                guard isCurrent(revision) else { return .unavailable }
                 var record = SetupDeviceRecord(device)
                 if record.serial.isEmpty { record.serial = serial }
-                return await configure(record)
+                return await configure(record, revision: revision)
             } catch is CancellationError {
                 return .unavailable
             } catch {
+                guard isCurrent(revision) else { return .unavailable }
                 operationError = Self.message(for: error)
                 return .manualNotFound
             }
@@ -178,6 +184,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         )
         do {
             if let found = try await directlyDiscover(scannerIPAddress: normalizedIP) {
+                guard isCurrent(revision) else { return .unavailable }
                 let discovered = SetupDeviceRecord(found)
                 if !normalizedMAC.isEmpty, !discovered.macAddress.isEmpty,
                    discovered.macAddress != normalizedMAC {
@@ -191,13 +198,18 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         } catch is CancellationError {
             return .unavailable
         } catch {
+            guard isCurrent(revision) else { return .unavailable }
             // Compatibility requires an IP-only record when direct lookup cannot wake the scanner.
         }
-        return await configure(record)
+        guard isCurrent(revision) else { return .unavailable }
+        return await configure(record, revision: revision)
     }
 
     public func savePassword(_ password: String) async -> ScannerSetupOutcome {
-        guard var config = await store.loadStored(), !config.scannerIP.isEmpty else {
+        let revision = beginSetupOperation()
+        let storedConfig = await store.loadStored()
+        guard isCurrent(revision) else { return .unavailable }
+        guard var config = storedConfig, !config.scannerIP.isEmpty else {
             return .setupRequired
         }
 
@@ -216,6 +228,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
                     scannerIPAddress: config.scannerIP,
                     identity: candidate.identity
                 )
+                guard isCurrent(revision) else { return .unavailable }
                 lastMessage = Self.pairingMessage(result.status)
                 guard result.accepted else { continue }
                 if let device = result.device {
@@ -225,25 +238,29 @@ public actor ScanSnapSetupService: ScannerSetupServing {
                 config.pairingKey = candidate.key
                 config.passwordSource = candidate.source
                 config.lastError = ""
-                return await save(config, success: .configured)
+                return await save(config, success: .configured, revision: revision)
             } catch is CancellationError {
                 return .unavailable
             } catch {
+                guard isCurrent(revision) else { return .unavailable }
                 lastMessage = Self.message(for: error)
             }
         }
 
         config.status = .needsPassword
         config.lastError = "Password was rejected: \(lastMessage)."
-        return await save(config, success: .passwordFailed)
+        return await save(config, success: .passwordFailed, revision: revision)
     }
 
     public func clear() async -> ScannerSetupOutcome {
+        let revision = beginSetupOperation()
         do {
-            try await store.clear()
+            guard try await store.clear(setupRevision: revision) else { return .unavailable }
+            guard isCurrent(revision) else { return .unavailable }
             operationError = ""
             return .cleared
         } catch {
+            guard isCurrent(revision) else { return .unavailable }
             operationError = Self.message(for: error)
             return .unavailable
         }
@@ -367,12 +384,16 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         return found
     }
 
-    private func configure(_ device: SetupDeviceRecord) async -> ScannerSetupOutcome {
+    private func configure(
+        _ device: SetupDeviceRecord,
+        revision: ScannerConfigSetupRevision
+    ) async -> ScannerSetupOutcome {
+        guard isCurrent(revision) else { return .unavailable }
         let password = ScannerConfig.password(fromSerial: device.serial)
         guard !password.isEmpty else {
             var config = device.config(status: .needsPassword)
             config.lastError = "Scanner serial was not available; enter the scanner password."
-            return await save(config, success: .passwordNeeded)
+            return await save(config, success: .passwordNeeded, revision: revision)
         }
 
         let identity: ScanSnapIdentity
@@ -381,15 +402,16 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         } catch {
             var config = device.config(status: .needsPassword)
             config.lastError = Self.message(for: error)
-            return await save(config, success: .passwordNeeded)
+            return await save(config, success: .passwordNeeded, revision: revision)
         }
 
         do {
             let result = try await testPairing(scannerIPAddress: device.ipAddress, identity: identity)
+            guard isCurrent(revision) else { return .unavailable }
             guard result.accepted else {
                 var config = device.config(status: .needsPassword)
                 config.lastError = "Default password \(password.debugDescription) was rejected: \(Self.pairingMessage(result.status))."
-                return await save(config, success: .passwordNeeded)
+                return await save(config, success: .passwordNeeded, revision: revision)
             }
             let configuredDevice = result.device.map(SetupDeviceRecord.init) ?? device
             var config = configuredDevice.config(status: .configured)
@@ -397,13 +419,14 @@ public actor ScanSnapSetupService: ScannerSetupServing {
             config.status = .configured
             config.passwordSource = "serial-default"
             config.lastError = ""
-            return await save(config, success: .configured)
+            return await save(config, success: .configured, revision: revision)
         } catch is CancellationError {
             return .unavailable
         } catch {
+            guard isCurrent(revision) else { return .unavailable }
             var config = device.config(status: .needsPassword)
             config.lastError = "Default password \(password.debugDescription) was rejected: \(Self.message(for: error))."
-            return await save(config, success: .passwordNeeded)
+            return await save(config, success: .passwordNeeded, revision: revision)
         }
     }
 
@@ -456,9 +479,26 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         return environmentConfiguration
     }
 
-    private func save(_ config: ScannerConfig, success: ScannerSetupOutcome) async -> ScannerSetupOutcome {
+    private func beginSetupOperation() -> ScannerConfigSetupRevision {
+        setupGeneration &+= 1
+        return ScannerConfigSetupRevision(owner: setupRevisionOwner, generation: setupGeneration)
+    }
+
+    private func isCurrent(_ revision: ScannerConfigSetupRevision) -> Bool {
+        revision.owner == setupRevisionOwner && revision.generation == setupGeneration
+    }
+
+    private func save(
+        _ config: ScannerConfig,
+        success: ScannerSetupOutcome,
+        revision: ScannerConfigSetupRevision
+    ) async -> ScannerSetupOutcome {
+        guard isCurrent(revision) else { return .unavailable }
         do {
-            _ = try await store.save(config, now: now())
+            guard try await store.save(config, now: now(), setupRevision: revision) != nil else {
+                return .unavailable
+            }
+            guard isCurrent(revision) else { return .unavailable }
             operationError = ""
             return success
         } catch {
