@@ -1,6 +1,12 @@
 import Foundation
 
-public actor ScanSnapButtonRuntimeController {
+public protocol ScanSnapButtonRuntimeControlling: Sendable {
+    @discardableResult
+    func start() async throws -> Bool
+    func stop() async
+}
+
+public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
     public nonisolated let isEligible: Bool
 
     private let lifecycle: ScanSnapButtonLifecycleActor

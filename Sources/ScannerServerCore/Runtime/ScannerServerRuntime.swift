@@ -1,16 +1,32 @@
 import Foundation
+import JLog
 
 public actor ScannerServerRuntime {
     public nonisolated let dependencies: ScannerServerDependencies
+    private let buttonRuntime: (any ScanSnapButtonRuntimeControlling)?
 
-    public init(dependencies: ScannerServerDependencies) {
+    public init(
+        dependencies: ScannerServerDependencies,
+        buttonRuntime: (any ScanSnapButtonRuntimeControlling)? = nil
+    ) {
         self.dependencies = dependencies
+        self.buttonRuntime = buttonRuntime
     }
 
     public static func live(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ScannerServerRuntime {
-        ScannerServerRuntime(dependencies: .live(environment: environment))
+        let dependencies = ScannerServerDependencies.live(environment: environment)
+        let buttonRuntime = ScanSnapButtonRuntimeFactory.live(
+            environment: environment,
+            scannerStore: dependencies.scannerStore,
+            settingsStore: dependencies.settingsStore,
+            scanJobs: dependencies.scanJobs
+        )
+        return ScannerServerRuntime(
+            dependencies: dependencies,
+            buttonRuntime: buttonRuntime
+        )
     }
 
     public func run(configuration: ScannerServerServiceConfiguration) async throws {
@@ -18,6 +34,7 @@ public actor ScannerServerRuntime {
             configuration: configuration,
             dependencies: dependencies
         )
+        await startButtonRuntime()
         do {
             try await application.runService()
         } catch {
@@ -27,7 +44,16 @@ public actor ScannerServerRuntime {
         await shutdown()
     }
 
+    public func startButtonRuntime() async {
+        do {
+            _ = try await buttonRuntime?.start()
+        } catch {
+            JLog.warning("ScanSnap button listener failed to start: \(error.localizedDescription)")
+        }
+    }
+
     public func shutdown() async {
+        await buttonRuntime?.stop()
         await dependencies.scannerSetup.shutdown()
         await dependencies.scanJobs.cancel()
         await dependencies.ocrQueue.cancelAll()

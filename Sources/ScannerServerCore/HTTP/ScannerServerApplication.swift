@@ -194,6 +194,7 @@ public struct CompatibleScanPreviewProvider: ScanPreviewProviding {
 
 public struct ScannerServerDependencies: Sendable {
     public let settingsStore: ScanSettingsStore
+    public let scannerStore: ScannerConfigStore
     public let scanJobs: ScanJobActor
     public let ocrQueue: OCRQueueActor
     public let outputPathResolver: ScanOutputPathResolver
@@ -203,6 +204,7 @@ public struct ScannerServerDependencies: Sendable {
 
     public init(
         settingsStore: ScanSettingsStore,
+        scannerStore: ScannerConfigStore? = nil,
         scanJobs: ScanJobActor,
         ocrQueue: OCRQueueActor? = nil,
         outputPathResolver: ScanOutputPathResolver,
@@ -211,6 +213,7 @@ public struct ScannerServerDependencies: Sendable {
         environment: [String: String]
     ) {
         self.settingsStore = settingsStore
+        self.scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
         self.scanJobs = scanJobs
         self.ocrQueue = ocrQueue ?? OCRQueueActor(executor: FoundationProcessExecutor())
         self.outputPathResolver = outputPathResolver
@@ -225,8 +228,11 @@ public struct ScannerServerDependencies: Sendable {
         let outputDirectory = URL(fileURLWithPath: environment["SCAN_OUTPUT_DIR"] ?? "/scans", isDirectory: true)
         let processExecutor = FoundationProcessExecutor()
         let ocrQueue = OCRQueueActor(executor: processExecutor)
+        let settingsStore = ScanSettingsStore(environment: environment)
+        let scannerStore = ScannerConfigStore(environment: environment)
         return ScannerServerDependencies(
-            settingsStore: ScanSettingsStore(environment: environment),
+            settingsStore: settingsStore,
+            scannerStore: scannerStore,
             scanJobs: ScanJobActor(
                 nativeScanner: NativeScanPipeline(executor: processExecutor),
                 ocrQueue: ocrQueue
@@ -235,7 +241,7 @@ public struct ScannerServerDependencies: Sendable {
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: ScanSnapSetupService(
                 environment: environment,
-                store: ScannerConfigStore(environment: environment)
+                store: scannerStore
             ),
             previewProvider: NativeScanPreviewProvider(executor: processExecutor),
             environment: environment
