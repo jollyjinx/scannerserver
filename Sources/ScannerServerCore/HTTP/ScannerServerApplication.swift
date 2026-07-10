@@ -224,6 +224,7 @@ public struct ScannerServerDependencies: Sendable {
             ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: StoredScannerSetupService(store: ScannerConfigStore(environment: environment)),
+            previewProvider: NativeScanPreviewProvider(executor: processExecutor),
             environment: environment
         )
     }
