@@ -3,6 +3,23 @@ import Testing
 
 @Suite("Scan job actor")
 struct ScanJobActorTests {
+    @Test("Native scanner execution receives the merged configuration")
+    func nativeScannerExecution() async {
+        let scanner = FakeNativeScanner(result: ProcessResult(
+            exitStatus: 0,
+            standardOutput: "/scans/native.pdf\n"
+        ))
+        let actor = ScanJobActor(nativeScanner: scanner)
+        let configuration = ScanPipelineConfiguration(environment: ["SCAN_TRIGGER": "button"])
+
+        #expect(await actor.start(configuration: configuration))
+        await actor.waitUntilIdle()
+
+        #expect(await scanner.configurations == [configuration])
+        #expect(await actor.state.status == "done")
+        #expect(await actor.state.output == "/scans/native.pdf")
+    }
+
     @Test("A running scan rejects a second start")
     func singleFlight() async {
         let executor = FakeProcessExecutor(stubs: [
@@ -69,5 +86,19 @@ struct ScanJobActorTests {
         let state = await actor.state
         #expect(state.status == "cancelled")
         #expect(state.finished != nil)
+    }
+}
+
+private actor FakeNativeScanner: NativeScanExecuting {
+    private let result: ProcessResult
+    private(set) var configurations: [ScanPipelineConfiguration] = []
+
+    init(result: ProcessResult) {
+        self.result = result
+    }
+
+    func scan(configuration: ScanPipelineConfiguration) -> ProcessResult {
+        configurations.append(configuration)
+        return result
     }
 }

@@ -112,6 +112,7 @@ public enum ScannerSetupOutcome: String, Sendable {
 public protocol ScannerSetupServing: Sendable {
     func state() async -> ScannerSetupState
     func ensureDiscoveryStarted() async
+    func shutdown() async
     func discover() async -> ScannerSetupOutcome
     func select(deviceID: String) async -> ScannerSetupOutcome
     func configureManually(ipAddress: String, macAddress: String, serial: String) async -> ScannerSetupOutcome
@@ -121,6 +122,7 @@ public protocol ScannerSetupServing: Sendable {
 
 public extension ScannerSetupServing {
     func ensureDiscoveryStarted() async {}
+    func shutdown() async {}
 }
 
 public actor StoredScannerSetupService: ScannerSetupServing {
@@ -225,7 +227,10 @@ public struct ScannerServerDependencies: Sendable {
         let ocrQueue = OCRQueueActor(executor: processExecutor)
         return ScannerServerDependencies(
             settingsStore: ScanSettingsStore(environment: environment),
-            scanJobs: ScanJobActor(executor: processExecutor, ocrQueue: ocrQueue),
+            scanJobs: ScanJobActor(
+                nativeScanner: NativeScanPipeline(executor: processExecutor),
+                ocrQueue: ocrQueue
+            ),
             ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: ScanSnapSetupService(

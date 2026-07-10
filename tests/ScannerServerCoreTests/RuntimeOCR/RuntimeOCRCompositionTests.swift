@@ -114,14 +114,29 @@ private struct LiveCommandFixture {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let tools = root.appendingPathComponent("bin", isDirectory: true)
         let scans = root.appendingPathComponent("scans", isDirectory: true)
+        let timestamp = "2026-07-10.120000"
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: scans, withIntermediateDirectories: true)
-        inputURL = scans.appendingPathComponent("live.pdf")
-        outputURL = scans.appendingPathComponent("live.ocr.pdf")
+        inputURL = scans.appendingPathComponent("\(timestamp)-page-0001.pdf")
+        outputURL = scans.appendingPathComponent("\(timestamp)-page-0001.ocr.pdf")
 
         try Self.writeExecutable(
-            at: tools.appendingPathComponent("scan-once"),
-            contents: "#!/bin/sh\nset -eu\n: > \"$SCAN_OUTPUT_DIR/live.pdf\"\nprintf '%s\\n' \"$SCAN_OUTPUT_DIR/live.pdf\"\n"
+            at: tools.appendingPathComponent("scanadf"),
+            contents: "#!/bin/sh\nset -eu\noutput_pattern=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output-file ]; then output_pattern=$2; shift 2; else shift; fi\ndone\noutput=$(printf '%s' \"$output_pattern\" | sed 's/%04d/0001/')\n: > \"$output\"\n"
+        )
+        try Self.writeExecutable(
+            at: tools.appendingPathComponent("img2pdf"),
+            contents: "#!/bin/sh\nset -eu\nfor argument; do\n  if [ \"${previous:-}\" = -o ]; then output=$argument; fi\n  previous=$argument\ndone\n: > \"$output\"\n"
+        )
+        for helper in ["remove-blank-pages", "crop-pdf-pages", "set-pdf-creator"] {
+            try Self.writeExecutable(
+                at: tools.appendingPathComponent(helper),
+                contents: "#!/bin/sh\nset -eu\n"
+            )
+        }
+        try Self.writeExecutable(
+            at: tools.appendingPathComponent("split-pdf-pages"),
+            contents: "#!/bin/sh\nset -eu\noutput=\"$2/$3-page-0001.pdf\"\n: > \"$output\"\nprintf '%s\\n' \"$output\"\n"
         )
         try Self.writeExecutable(
             at: tools.appendingPathComponent("ocrmypdf"),
@@ -131,6 +146,8 @@ private struct LiveCommandFixture {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = tools.path + ":" + (environment["PATH"] ?? "")
         environment["SCAN_BACKEND"] = "sane"
+        environment["SCAN_PAGE_MODE"] = "single"
+        environment["SCAN_TIMESTAMP"] = timestamp
         environment["SCAN_OCR_ENABLED"] = "true"
         environment["SCAN_OUTPUT_DIR"] = scans.path
         environment["SCAN_SETTINGS_PATH"] = scans.appendingPathComponent(".scanner-settings.json").path

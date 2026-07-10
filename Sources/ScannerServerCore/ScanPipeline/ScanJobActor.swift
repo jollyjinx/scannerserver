@@ -23,13 +23,23 @@ public struct ScanJobState: Equatable, Sendable {
 }
 
 public actor ScanJobActor {
-    private let executor: any ProcessExecutor
+    private enum ExecutionStrategy: Sendable {
+        case process(any ProcessExecutor)
+        case native(any NativeScanExecuting)
+    }
+
+    private let executionStrategy: ExecutionStrategy
     private let ocrQueue: OCRQueueActor?
     private var worker: Task<Void, Never>?
     private var jobState = ScanJobState()
 
     public init(executor: any ProcessExecutor, ocrQueue: OCRQueueActor? = nil) {
-        self.executor = executor
+        executionStrategy = .process(executor)
+        self.ocrQueue = ocrQueue
+    }
+
+    public init(nativeScanner: any NativeScanExecuting, ocrQueue: OCRQueueActor? = nil) {
+        executionStrategy = .native(nativeScanner)
         self.ocrQueue = ocrQueue
     }
 
@@ -43,13 +53,18 @@ public actor ScanJobActor {
         guard worker == nil else { return false }
 
         jobState = ScanJobState(started: Date(), status: "running")
-        let request = ScanPipelineCommands.scan(
-            configuration: configuration,
-            workingDirectory: workingDirectory
-        )
         worker = Task {
             do {
-                let result = try await executor.execute(request)
+                let result: ProcessResult
+                switch executionStrategy {
+                case .process(let executor):
+                    result = try await executor.execute(ScanPipelineCommands.scan(
+                        configuration: configuration,
+                        workingDirectory: workingDirectory
+                    ))
+                case .native(let scanner):
+                    result = try await scanner.scan(configuration: configuration)
+                }
                 await finish(result: result, configuration: configuration)
             } catch is CancellationError {
                 finishCancellation()

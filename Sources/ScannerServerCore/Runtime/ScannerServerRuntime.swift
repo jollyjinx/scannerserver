@@ -28,6 +28,7 @@ public actor ScannerServerRuntime {
     }
 
     public func shutdown() async {
+        await dependencies.scannerSetup.shutdown()
         await dependencies.scanJobs.cancel()
         await dependencies.ocrQueue.cancelAll()
     }

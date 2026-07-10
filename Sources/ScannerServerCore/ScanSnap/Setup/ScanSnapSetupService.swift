@@ -123,6 +123,10 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         await task?.value
     }
 
+    public func shutdown() async {
+        await cancelDiscovery()
+    }
+
     public func select(deviceID: String) async -> ScannerSetupOutcome {
         guard let device = discoveredDevices.first(where: { $0.id == deviceID }) else {
             return .noDevice
