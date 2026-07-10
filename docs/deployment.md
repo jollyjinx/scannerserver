@@ -127,10 +127,10 @@ By default it builds and pushes:
 ghcr.io/jollyjinx/scannerserver:development-arm64
 ```
 
-The script uses Buildx:
+The script uses Docker Buildx because the `container` command does not provide the multi-platform Buildx and registry-push options it needs. This is the only Docker-specific build workflow:
 
 ```bash
-container buildx build --platform linux/arm64 --push ...
+docker buildx build --platform linux/arm64 --push ...
 ```
 
 Override the target if needed:
@@ -142,7 +142,7 @@ IMAGE=ghcr.io/your-user/scannerserver TAG=test-arm64 ./scripts/build_push_develo
 If the container runtime reports `Structure needs cleaning`, prune the builder cache and rerun:
 
 ```bash
-container buildx prune --all --force
-container builder prune --all --force
+docker buildx prune --all --force
+docker builder prune --all --force
 ./scripts/build_push_development_arm64.sh
 ```
