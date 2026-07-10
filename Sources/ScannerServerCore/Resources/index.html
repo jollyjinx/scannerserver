@@ -3,11 +3,33 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ScanSnap scanner server</title>
+    <title>scannerserver</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; --page: #f4f6f5; --panel: #fff; --text: #202124; --muted: #5f6368; --border: #d8ddd8; --primary: #0b57d0; --danger: #b3261e; }
+      body { margin: 0; background: var(--page); color: var(--text); }
+      main { max-width: 1040px; margin: 0 auto; padding: 28px 20px; }
+      h1 { font-size: 28px; margin: 0; } h2 { font-size: 18px; margin-top: 0; } h3 { font-size: 15px; }
+      section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 16px 0; }
+      form, .settings-grid, .setup-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
+      .stack-form, .setup-controls { grid-template-columns: 1fr; }
+      label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
+      input, select, button { box-sizing: border-box; font: inherit; min-width: 0; }
+      input, select { padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); }
+      button { padding: 9px 14px; border: 0; border-radius: 6px; background: var(--primary); color: #fff; font-weight: 700; cursor: pointer; }
+      button:disabled { opacity: .55; cursor: wait; } .danger-button { background: var(--danger); }
+      .secondary-button { background: #e7ecea; color: #27302f; } .button-row, .checkbox-grid { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .notice, .warning { padding: 10px 12px; border-radius: 6px; font-weight: 700; } .notice { background: #e8f0fe; color: #174ea6; } .warning { background: #fef7e0; color: #8f4700; }
+      .muted, .file-name { color: var(--muted); font-size: 13px; } .status, .default-badge { font-weight: 700; }
+      .mode-list, .file-list { padding: 0; list-style: none; } .mode-list li, .file-row { border-top: 1px solid var(--border); padding: 10px 0; }
+      .file-groups { grid-column: 1 / -1; } .file-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; }
+      .file-preview { width: 112px; height: 148px; object-fit: contain; background: #f1f3f4; }
+      .file-variant { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; } a { color: var(--primary); }
+      @media (prefers-color-scheme: dark) { :root { --page: #171918; --panel: #232624; --text: #f1f3f4; --muted: #b5b9b6; --border: #464b47; } .secondary-button { background: #3b413d; color: #fff; } }
+      @media (max-width: 560px) { main { padding: 20px 12px; } .file-row { grid-template-columns: 1fr; } }
+    </style>
   </head>
   <body>
-    <main>
-      <h1>ScanSnap scanner server</h1>
-    </main>
+    <main><!-- SCANNER_SERVER_CONTENT --></main>
   </body>
 </html>

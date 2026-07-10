@@ -1,3 +1,4 @@
+import Foundation
 import Hummingbird
 import HummingbirdTesting
 import ScannerServerCore
@@ -25,10 +26,11 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("Health and index routes are available")
+    @Test("Health and functional index routes are available")
     func baselineRoutes() async throws {
-        let configuration = try ScannerServerServiceConfiguration(hostname: "127.0.0.1", port: 8080)
-        let application = try ScannerServerApplication.make(configuration: configuration)
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
 
         try await application.test(.router) { client in
             try await client.execute(uri: "/health", method: .get) { response in
@@ -36,10 +38,312 @@ struct ScannerServerApplicationTests {
                 #expect(String(buffer: response.body) == "ok\n")
             }
             try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
                 #expect(response.status == .ok)
                 #expect(response.headers[.contentType] == "text/html; charset=utf-8")
-                #expect(String(buffer: response.body).contains("ScanSnap scanner server"))
+                #expect(body.contains("<h1>scannerserver</h1>"))
+                #expect(body.contains("action=\"/scan\""))
+                #expect(body.contains("name=\"mode_id\""))
+                #expect(body.contains("No scans yet."))
+            }
+            try await client.execute(uri: "/health", method: .post) { response in
+                #expect(response.status == .notFound || response.status == .methodNotAllowed)
             }
         }
     }
+
+    @Test("Mode forms use Python field names, persist settings, and redirect with 303")
+    func modeForms() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await postForm(client, uri: "/modes/default", body: "mode_id=photo-png") { response in
+                expectRedirect(response, to: "/")
+            }
+            var settings = try await fixture.settingsStore.load()
+            #expect(settings.defaultModeID == "photo-png")
+
+            let form = [
+                "mode_id=",
+                "name=%3Cscript%3Ealert%281%29%3C%2Fscript%3E",
+                "SCAN_SIMPLEX=true",
+                "SCAN_FORMAT=png",
+                "SCAN_PAGE_MODE=single",
+                "SCAN_RESOLUTION=600",
+                "SCAN_MODE=Gray",
+                "SCAN_LANGUAGE=eng",
+                "SCAN_OCR_ENABLED=on",
+                "SCAN_CROP_PAGES=on",
+                "set_default=on",
+            ].joined(separator: "&")
+            try await postForm(client, uri: "/modes/save", body: form) { response in
+                #expect(response.status == .seeOther)
+                #expect(response.headers[.location] == "/?edit_mode=script-alert-1-script")
+            }
+
+            settings = try await fixture.settingsStore.load()
+            let mode = try #require(settings.mode(id: "script-alert-1-script"))
+            #expect(mode.name == "<script>alert(1)</script>")
+            #expect(mode.settings.simplex)
+            #expect(mode.settings.source == "ADF Simplex")
+            #expect(mode.settings.format == "png")
+            #expect(mode.settings.pageMode == "single")
+            #expect(mode.settings.ocrEnabled)
+            #expect(!mode.settings.removeBlankPages)
+            #expect(mode.settings.cropPages)
+            #expect(settings.defaultModeID == mode.id)
+
+            try await client.execute(uri: "/?edit_mode=script-alert-1-script", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(!body.contains("<script>alert(1)</script>"))
+                #expect(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"))
+            }
+            try await postForm(client, uri: "/modes/delete", body: "mode_id=script-alert-1-script") { response in
+                expectRedirect(response, to: "/")
+            }
+            settings = try await fixture.settingsStore.load()
+            #expect(settings.mode(id: "script-alert-1-script") == nil)
+            #expect(settings.defaultModeID == settings.modes[0].id)
+        }
+    }
+
+    @Test("Scan form dispatches the selected mode and remains single-flight")
+    func scanFormAndSingleFlight() async throws {
+        let executor = SlowCapturingExecutor()
+        let fixture = try HTTPFixture(
+            environment: ["SCAN_BACKEND": "sane"],
+            executor: executor
+        )
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await postForm(client, uri: "/scan", body: "mode_id=photo-png") { response in
+                expectRedirect(response, to: "/")
+            }
+            try await postForm(client, uri: "/scan", body: "mode_id=duplex-pdf-ocr") { response in
+                expectRedirect(response, to: "/")
+            }
+
+            await Task.yield()
+            let state = await fixture.scanJobs.state
+            #expect(state.status == "running")
+            let requests = await executor.requests
+            #expect(requests.count == 1)
+            #expect(requests.first?.environment?["SCAN_PROFILE_ID"] == "photo-png")
+            #expect(requests.first?.environment?["SCAN_TRIGGER"] == "web")
+            #expect(requests.first?.environment?["SCAN_FORMAT"] == "png")
+        }
+        await fixture.scanJobs.cancel()
+    }
+
+    @Test("Wi-Fi scans require truthful setup state")
+    func scanRequiresSetup() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await postForm(client, uri: "/scan", body: "mode_id=duplex-pdf-ocr") { response in
+                expectRedirect(response, to: "/?setup=setup-required")
+            }
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Live scanner discovery and pairing are not available"))
+                #expect(!body.contains("action=\"/scan\""))
+                #expect(body.contains("action=\"/setup/scanners/discover\""))
+                #expect(body.contains("action=\"/setup/scanners/manual\""))
+                #expect(body.contains("action=\"/setup/scanners/clear\""))
+            }
+        }
+        #expect(await fixture.executor.requests.isEmpty)
+    }
+
+    @Test("Setup routes preserve fields and report unavailable services without fake success")
+    func setupRoutes() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await postForm(client, uri: "/setup/scanners/discover", body: "") { response in
+                expectRedirect(response, to: "/?setup=unavailable")
+            }
+            try await postForm(client, uri: "/setup/scanners/select", body: "device_id=") { response in
+                expectRedirect(response, to: "/?setup=no-device")
+            }
+            try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=&scanner_mac=&scanner_serial=") { response in
+                expectRedirect(response, to: "/?setup=manual-missing")
+            }
+            try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=192.0.2.8&scanner_mac=&scanner_serial=ABC") { response in
+                expectRedirect(response, to: "/?setup=unavailable")
+            }
+            try await postForm(client, uri: "/setup/scanners/password", body: "scanner_password=secret") { response in
+                expectRedirect(response, to: "/?setup=unavailable")
+            }
+            try await postForm(client, uri: "/setup/scanners/clear", body: "") { response in
+                expectRedirect(response, to: "/?setup=cleared")
+            }
+        }
+    }
+
+    @Test("File routes download, view, preview, reject traversal, and delete files")
+    func fileRoutes() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let fileName = "2026-07-10.120000.pdf"
+        let contents = Data("pdf bytes".utf8)
+        try contents.write(to: fixture.outputDirectory.appendingPathComponent(fileName))
+        try Data("outside".utf8).write(to: fixture.outputDirectory.deletingLastPathComponent().appendingPathComponent("outside.pdf"))
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/files/\(fileName)", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "application/pdf")
+                #expect(response.headers[.contentDisposition] == "attachment; filename=\(fileName)")
+                #expect(Data(buffer: response.body) == contents)
+            }
+            try await client.execute(uri: "/view/\(fileName)", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentDisposition] == "inline; filename=\(fileName)")
+            }
+            try await client.execute(uri: "/files/\(fileName)/preview", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "image/jpeg")
+                #expect(response.body.readableBytes > 100)
+            }
+            try await client.execute(uri: "/files/%2E%2E%2Foutside.pdf", method: .get) { response in
+                #expect(response.status == .notFound)
+            }
+            try await postForm(client, uri: "/files/\(fileName)/delete", body: "") { response in
+                expectRedirect(response, to: "/")
+            }
+        }
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputDirectory.appendingPathComponent(fileName).path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputDirectory.appendingPathComponent(".previews/\(fileName).jpg").path))
+    }
+
+    @Test("Bulk delete accepts repeated browser form fields")
+    func bulkDelete() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let names = ["2026-07-10.120000.pdf", "2026-07-10.120100.png"]
+        for name in names {
+            try Data(name.utf8).write(to: fixture.outputDirectory.appendingPathComponent(name))
+        }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            let body = names.map { "files=\($0)" }.joined(separator: "&")
+            try await postForm(client, uri: "/files/delete-selected", body: body) { response in
+                expectRedirect(response, to: "/")
+            }
+        }
+        for name in names {
+            #expect(!FileManager.default.fileExists(atPath: fixture.outputDirectory.appendingPathComponent(name).path))
+        }
+    }
+
+    @Test("Index groups files and escapes every dynamic filename")
+    func indexFileStateIsEscaped() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let fileName = "2026-07-10.<script>.pdf"
+        try Data("pdf".utf8).write(to: fixture.outputDirectory.appendingPathComponent(fileName))
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Friday, 2026-07-10"))
+                #expect(body.contains("2026-07-10.&lt;script&gt;.pdf"))
+                #expect(!body.contains("2026-07-10.<script>.pdf"))
+                #expect(body.contains("/files/2026-07-10.%3Cscript%3E.pdf"))
+            }
+        }
+    }
+}
+
+private struct HTTPFixture: Sendable {
+    let root: URL
+    let outputDirectory: URL
+    let settingsStore: ScanSettingsStore
+    let scanJobs: ScanJobActor
+    let executor: SlowCapturingExecutor
+    let environment: [String: String]
+
+    init(
+        environment additions: [String: String],
+        executor: SlowCapturingExecutor = SlowCapturingExecutor(delay: .zero)
+    ) throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        outputDirectory = root.appendingPathComponent("scans", isDirectory: true)
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        var environment = additions
+        environment["SCAN_OUTPUT_DIR"] = outputDirectory.path
+        environment["SCAN_SETTINGS_PATH"] = outputDirectory.appendingPathComponent(".scanner-settings.json").path
+        environment["SCANNER_CONFIG_PATH"] = outputDirectory.appendingPathComponent(".scannerserver-scanner.json").path
+        self.environment = environment
+        settingsStore = ScanSettingsStore(environment: environment)
+        scanJobs = ScanJobActor(executor: executor)
+        self.executor = executor
+    }
+
+    func application() throws -> some ApplicationProtocol {
+        let dependencies = ScannerServerDependencies(
+            settingsStore: settingsStore,
+            scanJobs: scanJobs,
+            outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
+            scannerSetup: StoredScannerSetupService(store: ScannerConfigStore(environment: environment)),
+            environment: environment
+        )
+        return try ScannerServerApplication.make(
+            configuration: ScannerServerServiceConfiguration(hostname: "127.0.0.1", port: 8080),
+            dependencies: dependencies
+        )
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private actor SlowCapturingExecutor: ProcessExecutor {
+    private(set) var requests: [ProcessRequest] = []
+    private let delay: Duration
+
+    init(delay: Duration = .seconds(30)) {
+        self.delay = delay
+    }
+
+    func execute(_ request: ProcessRequest) async throws -> ProcessResult {
+        requests.append(request)
+        if delay > .zero {
+            try await Task.sleep(for: delay)
+        }
+        return ProcessResult(exitStatus: 0)
+    }
+}
+
+private func postForm(
+    _ client: TestClientProtocol,
+    uri: String,
+    body: String,
+    test: @escaping (TestResponse) async throws -> Void
+) async throws {
+    try await client.execute(
+        uri: uri,
+        method: .post,
+        headers: [.contentType: "application/x-www-form-urlencoded"],
+        body: ByteBuffer(string: body),
+        testCallback: test
+    )
+}
+
+private func expectRedirect(_ response: TestResponse, to location: String) {
+    #expect(response.status == .seeOther)
+    #expect(response.headers[.location] == location)
 }
