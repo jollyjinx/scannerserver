@@ -3,7 +3,7 @@ title: Swift Migration Plan
 description: Plan for migrating scannerserver to a Swift 6.3 Linux service while preserving the container contract.
 type: plan
 audience: maintainers
-status: draft
+status: active
 ---
 
 # Swift Migration Plan
@@ -13,6 +13,19 @@ status: draft
 Replace the long-running Python scannerserver with a Swift 6.3 Linux service that remains a drop-in container replacement for current users.
 
 The first successful replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
+
+## Measured Baseline
+
+Measurements use the ARM64 production containers at idle after the index and health routes have been requested. RSS is read from `/proc/1/status`; image size is reported by `container image list --verbose`.
+
+| Runtime | Idle RSS | Threads | Compressed image |
+| --- | ---: | ---: | ---: |
+| Python baseline | 50,164 kB | 2 | 166.3 MB |
+| Swift 6.3.2 migration image | 34,296 kB | 10 | 238.2 MB |
+
+The Swift service currently reduces idle RSS by 31.6%. The transitional image is 71.9 MB larger because it includes the Swift runtime while still retaining OCRmyPDF, Python, Pillow, and pikepdf for compatibility. Milestone 6 owns removing Python packages after those helpers have native replacements.
+
+The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on ARM64 crashes in the compiler while expanding `@TaskLocal` in `swift-service-context`; the same dependency graph builds successfully with 6.3.2. The package remains `swift-tools-version: 6.3` and Swift 6 language mode.
 
 ## Non-Negotiable Compatibility
 

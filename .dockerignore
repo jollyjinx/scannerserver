@@ -1,4 +1,6 @@
 .git
+.build
+.swiftpm
 .DS_Store
 .env
 scans
