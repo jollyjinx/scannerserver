@@ -644,7 +644,7 @@ private func renderIndexContent(
     if let message = setupMessage(setupMessageCode) {
         html += "<p class=\"notice\">\(htmlEscape(message))</p>"
     }
-    if wifiBackend {
+    if wifiBackend && !setup.configured {
         html += renderScannerSetup(setup)
     }
 
@@ -660,7 +660,12 @@ private func renderIndexContent(
         html += "<button\(job.status == "running" ? " disabled" : "")>Start scan</button>"
         html += "<button class=\"secondary-button\" formaction=\"/modes/default\">Use for button</button>"
         html += "</div></form></section>"
-        html += renderModes(settings: settings, selectedMode: selectedMode, open: editModeID != nil)
+        html += renderModes(
+            settings: settings,
+            selectedMode: selectedMode,
+            scannerSetup: wifiBackend ? setup : nil,
+            open: editModeID != nil
+        )
         html += renderStatus(job: job, ocr: ocr)
         html += renderFiles(groups)
     }
@@ -668,7 +673,11 @@ private func renderIndexContent(
 }
 
 private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
-    var html = "<section><h2>Scanner setup</h2>"
+    "<section>\(renderScannerSetupContent(setup))</section>"
+}
+
+private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
+    var html = "<h2>Scanner setup</h2>"
     if setup.configured {
         html += "<p><strong>\(htmlEscape(setup.name))</strong> <span class=\"status\">configured</span></p>"
         html += "<p class=\"muted\">IP \(htmlEscape(setup.ipAddress))"
@@ -697,11 +706,16 @@ private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
     if setup.needsPassword {
         html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Scanner password<input type=\"password\" name=\"scanner_password\"></label><button>Save password</button></form>"
     }
-    html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div></section>"
+    html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div>"
     return html
 }
 
-private func renderModes(settings: ScanSettings, selectedMode: ScanMode, open: Bool) -> String {
+private func renderModes(
+    settings: ScanSettings,
+    selectedMode: ScanMode,
+    scannerSetup: ScannerSetupState?,
+    open: Bool
+) -> String {
     var html = "<section><details\(open ? " open" : "")><summary>Advanced settings</summary><ul class=\"mode-list\">"
     for mode in settings.modes {
         let badge = mode.id == settings.defaultModeID ? " <span class=\"default-badge\">button</span>" : ""
@@ -731,7 +745,11 @@ private func renderModes(settings: ScanSettings, selectedMode: ScanMode, open: B
     if !selectedMode.id.isEmpty {
         html += "<button class=\"danger-button\" formaction=\"/modes/delete\">Delete mode</button>"
     }
-    html += "</div></form></details></section>"
+    html += "</div></form>"
+    if let scannerSetup {
+        html += "<div class=\"advanced-setup\">\(renderScannerSetupContent(scannerSetup))</div>"
+    }
+    html += "</details></section>"
     return html
 }
 

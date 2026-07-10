@@ -67,6 +67,35 @@ struct ScannerServerApplicationTests {
         }
     }
 
+    @Test("Configured scanner setup is hidden inside advanced settings")
+    func configuredSetupIsAdvanced() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
+        defer { fixture.remove() }
+        let scannerStore = ScannerConfigStore(environment: fixture.environment)
+        try await scannerStore.save(ScannerConfig(
+            status: .configured,
+            scannerIP: "192.0.2.8",
+            mac: "84:25:3f:aa:bb:cc",
+            serial: "ABC1234",
+            name: "Office ScanSnap",
+            pairingKey: "configured-key"
+        ))
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                let advanced = try #require(body.range(of: "<details><summary>Advanced settings</summary>"))
+                let scannerSetup = try #require(body.range(of: "<h2>Scanner setup</h2>"))
+                let advancedEnd = try #require(body.range(of: "</details>", range: advanced.lowerBound..<body.endIndex))
+
+                #expect(body.contains("action=\"/scan\""))
+                #expect(advanced.lowerBound < scannerSetup.lowerBound)
+                #expect(scannerSetup.lowerBound < advancedEnd.lowerBound)
+            }
+        }
+    }
+
     @Test("Mode forms preserve field names, persist settings, and redirect with 303")
     func modeForms() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
