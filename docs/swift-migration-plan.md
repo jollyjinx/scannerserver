@@ -16,6 +16,8 @@ The replacement keeps the same image purpose, ports, environment variables, `/sc
 
 Implementation and the repository’s default container cutover are complete. Registry promotion is pending: `ghcr.io/jollyjinx/scannerserver:latest` still points to the legacy implementation until this branch is merged and the publishing workflow succeeds. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, and the UDP button listener have been exercised against the project iX500. A physical scan, OCR result, and button press remain release acceptance tasks because they require interaction with the scanner and the complete Linux acquisition toolchain.
 
+The production ARM64 image passes its non-root container acceptance flow: health and index routes, native preview generation, deterministic SANE acquisition and PDF conversion, qpdf validation, writable bind mounts, packaged command availability, and arbitrary-UID `SCANNER_URL` setup.
+
 ## Progress
 
 | Milestone | Status |
@@ -52,9 +54,9 @@ Measurements use the ARM64 production containers at idle after the index and hea
 | Runtime | Idle RSS | Threads | Compressed image |
 | --- | ---: | ---: | ---: |
 | Python baseline | 50,164 kB | 2 | 166.3 MB |
-| Swift 6.3.2 production image | 35,912 kB | 13 | 259.8 MB |
+| Swift 6.3.2 production image | 36,180 kB | 11 | 259.9 MB |
 
-The Swift service reduces idle RSS by 28.4%. The image is 93.5 MB larger because it includes the Swift runtime and native qpdf, Poppler, libvips, and ExifTool tooling while retaining OCRmyPDF and its transitive Python runtime for on-demand OCR. No production server, orchestration, button, preview, or document-helper path executes a project Python script.
+The Swift service reduces idle RSS by 27.9%. The image is 93.6 MB larger because it includes the Swift runtime and native qpdf, Poppler, libvips, and ExifTool tooling while retaining OCRmyPDF and its transitive Python runtime for on-demand OCR. No production server, orchestration, button, preview, or document-helper path executes a project Python script.
 
 The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on ARM64 crashes in the compiler while expanding `@TaskLocal` in `swift-service-context`; the same dependency graph builds successfully with 6.3.2. The package remains `swift-tools-version: 6.3` and Swift 6 language mode.
 

@@ -30,7 +30,8 @@ for argument; do
 done
 test -n "${output_pattern}"
 output=$(printf '%s' "${output_pattern}" | sed 's/%04d/0001/')
-printf 'P3\n2 2\n255\n255 255 255 0 0 0 0 0 0 255 255 255\n' > "${output}"
+printf 'P6\n32 32\n255\n' > "${output}"
+head -c 3072 /dev/zero >> "${output}"
 EOF
 chmod 0755 "${fake_bin}/scanimage"
 
@@ -46,7 +47,7 @@ chmod 0755 "${fake_bin}/scanimage"
   --env SCAN_REMOVE_BLANK_PAGES=false \
   --env SCAN_CROP_PAGES=false \
   --env SCAN_OCR_ENABLED=false \
-  --env PATH=/smoke-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  --env PATH=/smoke-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/scannerserver \
   --volume "${fake_bin}:/smoke-bin:ro" \
   --volume "${scan_dir}:/scans" \
   "${image}" >/dev/null
