@@ -44,7 +44,9 @@ After setup, scan either way:
 - Press **Start scan** in the web UI.
 - Press the physical scan button on the iX500.
 
-Raw PDFs appear immediately in `./scans`. Searchable OCR PDFs appear shortly after OCR finishes.
+Raw PDFs appear immediately in `./scans` after acquisition. For OCR-enabled multipage scans,
+blank-page removal and autocrop run on an isolated copy before the searchable `.ocr.pdf` is
+published; the original PDF remains unchanged and available throughout processing.
 
 ## Compose
 

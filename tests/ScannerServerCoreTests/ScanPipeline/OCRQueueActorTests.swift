@@ -34,6 +34,57 @@ struct OCRQueueActorTests {
         #expect(state.queued == 0)
     }
 
+    @Test("Preprocessing uses an isolated copy and publishes OCR beside the source")
+    func isolatedPreprocessing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ocr-queue-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let input = root.appendingPathComponent("scan.pdf")
+        let output = root.appendingPathComponent("scan.ocr.pdf")
+        let workspace = root.appendingPathComponent(".ocr-work.test", isDirectory: true)
+        let stagedInput = workspace.appendingPathComponent("source.pdf")
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            workspaceSuffixProvider: { "test" }
+        )
+
+        await queue.enqueue(
+            input.path,
+            environment: ["SCAN_LANGUAGE": "eng"],
+            removeBlankPages: true,
+            cropPages: true
+        )
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == [
+            "remove-blank-pages", "crop-pdf-pages", "ocrmypdf",
+        ])
+        #expect(requests[0].arguments.first == stagedInput.path)
+        #expect(requests[1].arguments.first == stagedInput.path)
+        #expect(requests[2].arguments == ocrArguments(
+            input: stagedInput.path,
+            output: output.path,
+            language: "eng"
+        ))
+        #expect(requests.allSatisfy { $0.workingDirectory == workspace })
+        #expect(try Data(contentsOf: input) == Data("raw source".utf8))
+        #expect(!FileManager.default.fileExists(atPath: workspace.path))
+        #expect(await queue.state.status == "done")
+        #expect(await queue.state.output == output.path)
+    }
+
     @Test("Invalid and conflicting paths fail without launching OCR")
     func invalidAndConflictingPaths() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -90,9 +141,13 @@ struct OCRQueueActorTests {
     }
 }
 
-private func ocrArguments(input: String, output: String) -> [String] {
+private func ocrArguments(
+    input: String,
+    output: String,
+    language: String = "deu+eng"
+) -> [String] {
     [
-        "--language", "deu+eng",
+        "--language", language,
         "--rotate-pages",
         "--rotate-pages-threshold", "2.0",
         "--deskew",

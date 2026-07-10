@@ -76,7 +76,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 )
             }
 
-            let options = try ProcessingOptions(environment: environment)
+            let options = try DocumentProcessingOptions(environment: environment)
             let outputPaths: [String]
             if configuration.format == "pdf", configuration.pageMode == "multi" {
                 try await processForMultipagePDF(
@@ -255,11 +255,11 @@ public actor NativeScanPipeline: NativeScanExecuting {
         outputDirectory: URL,
         timestamp: ScanTimestamp,
         configuration: ScanPipelineConfiguration,
-        options: ProcessingOptions,
+        options: DocumentProcessingOptions,
         workDirectory: URL,
         executor: NativeScanCapturingExecutor
     ) async throws {
-        if configuration.removeBlankPages {
+        if configuration.removeBlankPages && !configuration.ocrEnabled {
             try await executeDocumentStep(
                 .removeBlankPages,
                 command: options.removeBlankPagesRequest(pdfPath: rawPDF.path).command,
@@ -268,7 +268,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 executor: executor
             )
         }
-        if configuration.cropPages {
+        if configuration.cropPages && !configuration.ocrEnabled {
             try await executeDocumentStep(
                 .cropPages,
                 command: options.cropPagesRequest(pdfPath: rawPDF.path).command,
@@ -301,7 +301,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
         outputDirectory: URL,
         timestamp: ScanTimestamp,
         configuration: ScanPipelineConfiguration,
-        options: ProcessingOptions,
+        options: DocumentProcessingOptions,
         workDirectory: URL,
         executor: NativeScanCapturingExecutor
     ) async throws -> [String] {
@@ -426,7 +426,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
     }
 }
 
-private enum NativeScanConfigurationError: Error, LocalizedError {
+enum NativeScanConfigurationError: Error, LocalizedError {
     case message(String)
 
     var errorDescription: String? {
@@ -440,7 +440,7 @@ private struct NativeScanMissingOutputError: Error, LocalizedError {
     var errorDescription: String? { "No output files were created." }
 }
 
-private struct ProcessingOptions {
+struct DocumentProcessingOptions {
     let creator: String
     let whiteThreshold: Int
     let contentRatioThreshold: Double

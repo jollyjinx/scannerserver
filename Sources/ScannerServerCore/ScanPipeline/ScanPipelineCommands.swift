@@ -3,6 +3,7 @@ import Foundation
 public enum ScanPipelineCommands {
     public static func ocr(
         inputPath: String,
+        outputPath: String? = nil,
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil
     ) -> ProcessRequest {
@@ -17,7 +18,7 @@ public enum ScanPipelineCommands {
                 "--deskew",
                 "--optimize", "1",
                 inputPath,
-                OCRInputPath.outputPath(for: inputPath) ?? inputPath,
+                outputPath ?? OCRInputPath.outputPath(for: inputPath) ?? inputPath,
             ],
             environment: environment,
             workingDirectory: workingDirectory

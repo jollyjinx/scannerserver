@@ -14,7 +14,7 @@ Replace the long-running Python scannerserver with a Swift 6.3 Linux service tha
 
 The replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
 
-Implementation and the repository’s default container cutover are complete. Registry promotion is pending: `ghcr.io/jollyjinx/scannerserver:latest` still points to the legacy implementation until this branch is merged and the publishing workflow succeeds. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, and the UDP button listener have been exercised against the project iX500. A physical scan, OCR result, and button press remain release acceptance tasks because they require interaction with the scanner and the complete Linux acquisition toolchain.
+Implementation and the repository’s default container cutover are complete. Registry promotion is pending: `ghcr.io/jollyjinx/scannerserver:latest` still points to the legacy implementation until this branch is merged and the publishing workflow succeeds. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, the UDP button listener, physical button scanning, source PDF publication, blank/crop processing, and searchable OCR output have been exercised against the project iX500 on the Raspberry Pi deployment.
 
 The production ARM64 image passes its non-root container acceptance flow: health and index routes, native preview generation, deterministic SANE acquisition and PDF conversion, qpdf validation, writable bind mounts, packaged command availability, and arbitrary-UID `SCANNER_URL` setup.
 
@@ -31,7 +31,7 @@ Browser acceptance against that image also passes: changing the physical-button 
 | Native ScanSnap discovery, pairing, and button runtime | Complete |
 | Native document and preview helpers | Complete |
 | Default container cutover | Complete in repository; registry publication pending |
-| Physical scan, OCR, and button acceptance | Pending manual validation |
+| Physical scan, OCR, and button acceptance | Complete |
 
 ## Hardware Evidence
 
@@ -41,7 +41,8 @@ Validation on 2026-07-10 used the Mac's `vlan5` address, `10.112.10.129`. The re
 - The Swift service bound to `10.112.10.129` and discovered the iX500 at `10.112.10.11`.
 - Scanner selection, pairing, compatible config persistence, TCP control/data reachability, and UDP port `55265` listener startup succeeded.
 - A web scan reached the native `scansnap-wifi` acquisition path and reported `Scanning...`, then `No pages scanned` because no document was available in the feeder.
-- A completed page transfer, OCR result, physical button event, and post-scan re-arm remain to be validated.
+- Physical button scans completed on 2026-07-10, including post-scan re-arm, source PDF download,
+  blank/crop processing, searchable OCR output, and preview generation.
 
 After confirming `10.112.10.6` is unused, an administrator can temporarily add and later remove the requested macOS alias:
 

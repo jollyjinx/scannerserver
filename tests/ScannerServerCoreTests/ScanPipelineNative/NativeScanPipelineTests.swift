@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Native scan pipeline")
 struct NativeScanPipelineTests {
-    @Test("SANE arguments, page ordering, metadata, and atomic multipage output")
+    @Test("OCR multipage source is published before blank removal and crop")
     func saneMultipagePDF() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -29,8 +29,8 @@ struct NativeScanPipelineTests {
             "SCAN_RESOLUTION": "600",
             "SCAN_MODE": "Gray",
             "SCAN_SOURCE": "ADF Duplex",
-            "SCAN_REMOVE_BLANK_PAGES": "false",
-            "SCAN_CROP_PAGES": "false",
+            "SCAN_REMOVE_BLANK_PAGES": "true",
+            "SCAN_CROP_PAGES": "true",
         ])
 
         let result = try await pipeline.scan(configuration: configuration)

@@ -1,3 +1,4 @@
+import Foundation
 import ScannerServerCore
 import Testing
 
@@ -40,6 +41,54 @@ struct ScanJobActorTests {
         #expect(state.output == "/scans/scan.pdf")
         #expect(state.started != nil)
         #expect(state.finished != nil)
+    }
+
+    @Test("Multipage source is visible while OCR preprocessing is still running")
+    func sourcePrecedesOCRProcessing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "scan-job-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("scan.pdf")
+        try Data("raw source".utf8).write(to: source)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .suspended(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let ocrQueue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            workspaceSuffixProvider: { "test" }
+        )
+        let scanner = FakeNativeScanner(result: ProcessResult(
+            exitStatus: 0,
+            standardOutput: "\(source.path)\n"
+        ))
+        let actor = ScanJobActor(nativeScanner: scanner, ocrQueue: ocrQueue)
+
+        #expect(await actor.start(configuration: ScanPipelineConfiguration(environment: [:])))
+        await actor.waitUntilIdle()
+        await executor.waitForRequestCount(1)
+
+        #expect(await actor.state.status == "done")
+        #expect(await actor.state.output == source.path)
+        #expect(await ocrQueue.state.status == "running")
+        #expect(await executor.requests().first?.executable == "remove-blank-pages")
+
+        await executor.resumeNextSuspendedExecution()
+        await ocrQueue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "remove-blank-pages", "crop-pdf-pages", "ocrmypdf",
+        ])
+        #expect(try Data(contentsOf: source) == Data("raw source".utf8))
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".ocr-work.test").path
+        ))
     }
 
     @Test("A nonzero scan exit records status, output, and error")

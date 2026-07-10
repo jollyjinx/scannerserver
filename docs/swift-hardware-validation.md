@@ -48,6 +48,7 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 - Run a duplex PDF scan from the web UI and confirm exactly one scan job starts.
 - Attempt a second scan while the first is running and confirm it is ignored without interrupting the active scan.
 - Verify source naming follows `YYYY-MM-DD.HHMMSS.pdf` and the file opens successfully.
+- Confirm the source PDF remains downloadable while blank removal, crop, and OCR run on a copy.
 - With OCR enabled, wait for the serial OCR queue and verify the matching `.ocr.pdf` is searchable.
 - Test simplex, single-page PDF, and PNG modes; verify page numbers use four digits.
 - Enable blank-page removal and crop with the existing fixture document and compare the result with a known-good legacy image.

@@ -74,8 +74,15 @@ public actor ScanJobActor {
         jobState.error = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if result.succeeded, let ocrQueue {
+            let preprocessMultipagePDF = configuration.format == "pdf"
+                && configuration.pageMode == "multi"
             for path in paths where ScanOutputPaths.shouldEnqueueOCR(path: path, configuration: configuration) {
-                await ocrQueue.enqueue(path, environment: configuration.environment)
+                await ocrQueue.enqueue(
+                    path,
+                    environment: configuration.environment,
+                    removeBlankPages: preprocessMultipagePDF && configuration.removeBlankPages,
+                    cropPages: preprocessMultipagePDF && configuration.cropPages
+                )
             }
         }
         worker = nil
