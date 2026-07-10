@@ -23,9 +23,22 @@ env:
   IMAGE_NAME: ghcr.io/jollyjinx/scannerserver
 
 jobs:
+  swift-test:
+    name: Swift 6.3.2 Tests
+    runs-on: ubuntu-latest
+    container: swift:6.3.2-noble
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run Swift tests
+        run: swift test
+
   build:
     name: Build
     runs-on: ubuntu-latest
+    needs: swift-test
 
     steps:
       - name: Check out repository
