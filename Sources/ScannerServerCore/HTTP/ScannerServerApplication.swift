@@ -227,6 +227,7 @@ public struct ScannerServerDependencies: Sendable {
     ) -> ScannerServerDependencies {
         let outputDirectory = URL(fileURLWithPath: environment["SCAN_OUTPUT_DIR"] ?? "/scans", isDirectory: true)
         let processExecutor = FoundationProcessExecutor()
+        let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
         let ocrQueue = OCRQueueActor(executor: processExecutor)
         let settingsStore = ScanSettingsStore(environment: environment)
         let scannerStore = ScannerConfigStore(environment: environment)
@@ -234,7 +235,7 @@ public struct ScannerServerDependencies: Sendable {
             settingsStore: settingsStore,
             scannerStore: scannerStore,
             scanJobs: ScanJobActor(
-                nativeScanner: NativeScanPipeline(executor: processExecutor),
+                nativeScanner: NativeScanPipeline(executor: documentExecutor),
                 ocrQueue: ocrQueue
             ),
             ocrQueue: ocrQueue,

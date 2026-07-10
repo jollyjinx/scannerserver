@@ -128,15 +128,19 @@ private struct LiveCommandFixture {
             at: tools.appendingPathComponent("img2pdf"),
             contents: "#!/bin/sh\nset -eu\nfor argument; do\n  if [ \"${previous:-}\" = -o ]; then output=$argument; fi\n  previous=$argument\ndone\n: > \"$output\"\n"
         )
-        for helper in ["remove-blank-pages", "crop-pdf-pages", "set-pdf-creator"] {
+        for helper in ["remove-blank-pages", "crop-pdf-pages"] {
             try Self.writeExecutable(
                 at: tools.appendingPathComponent(helper),
                 contents: "#!/bin/sh\nset -eu\n"
             )
         }
         try Self.writeExecutable(
-            at: tools.appendingPathComponent("split-pdf-pages"),
-            contents: "#!/bin/sh\nset -eu\noutput=\"$2/$3-page-0001.pdf\"\n: > \"$output\"\nprintf '%s\\n' \"$output\"\n"
+            at: tools.appendingPathComponent("exiftool"),
+            contents: "#!/bin/sh\nset -eu\n"
+        )
+        try Self.writeExecutable(
+            at: tools.appendingPathComponent("qpdf"),
+            contents: "#!/bin/sh\nset -eu\nif [ \"$1\" = --show-npages ]; then printf '1\\n'; exit 0; fi\nfor output; do :; done\n: > \"$output\"\n"
         )
         try Self.writeExecutable(
             at: tools.appendingPathComponent("ocrmypdf"),
