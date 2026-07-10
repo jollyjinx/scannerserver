@@ -5,8 +5,8 @@ FROM ubuntu:24.04 AS scansnap_wifi_build
 ARG SCANSNAP_WIFI_REF=814c0987c9c294f27b18f1835c3c69174889de11
 
 RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
-    && apt-get update \
-    && apt-get install -y --no-upgrade --no-install-recommends \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-upgrade --no-install-recommends \
         build-essential \
         ca-certificates \
         git \
@@ -51,9 +51,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SANE_CONFIG_DIR=/app/sane.d \
     SCANNERSERVER_VERSION=${VCS_REF}
 
-RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
-    && apt-get update \
-    && apt-get install -y --no-upgrade --no-install-recommends \
+RUN sed -i \
+        -e 's/ noble-backports//g' \
+        -e 's|http://ports.ubuntu.com/ubuntu-ports/|https://ports.ubuntu.com/ubuntu-ports/|g' \
+        -e 's|http://archive.ubuntu.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+        -e 's|http://security.ubuntu.com/ubuntu/|https://security.ubuntu.com/ubuntu/|g' \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-upgrade --no-install-recommends \
         avahi-daemon \
         avahi-utils \
         dbus \
