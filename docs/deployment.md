@@ -20,11 +20,11 @@ It supports `linux/amd64` and `linux/arm64`, so it works on x86 Linux hosts and 
 
 ## Container Run
 
-Use host networking so ScanSnap UDP discovery reaches the local network:
+Use host networking so ScanSnap UDP discovery reaches the local network. Host networking and restart policies require options unavailable in Apple’s `container` CLI, so this deployment command uses Docker:
 
 ```bash
 mkdir -p scans
-container run -d \
+docker run -d \
   --name scannerserver \
   --restart unless-stopped \
   --network host \
@@ -47,6 +47,8 @@ cd scannerserver
 mkdir -p scans
 container compose up -d
 ```
+
+Use `docker compose` when the `container-compose` plugin is not installed.
 
 ## Raspberry Pi Macvlan Example
 
@@ -77,13 +79,13 @@ container compose up -d --no-deps scansnap
 
 ## Updating
 
-Standalone `container run`:
+Standalone Docker deployment:
 
 ```bash
-container pull ghcr.io/jollyjinx/scannerserver:latest
-container stop scannerserver
-container rm scannerserver
-# rerun the container run command
+docker pull ghcr.io/jollyjinx/scannerserver:latest
+docker stop scannerserver
+docker rm scannerserver
+# rerun the docker run command
 ```
 
 Compose:
@@ -94,20 +96,11 @@ container compose pull
 container compose up -d
 ```
 
+Use `docker compose` for Compose commands when the `container-compose` plugin is not installed.
+
 ## Build From Source
 
-Local builds are only needed when changing the Swift package or testing Dockerfile changes.
-
-With Compose, add `compose.override.yaml`:
-
-```yaml
-services:
-  scansnap:
-    build: .
-    image: scannerserver:local
-```
-
-Then run:
+Local builds are only needed when changing the Swift package or testing Dockerfile changes. The checked-in Compose service already has `build: .`, so a clean checkout can be built directly:
 
 ```bash
 container compose up -d --build
@@ -127,7 +120,7 @@ By default it builds and pushes:
 ghcr.io/jollyjinx/scannerserver:development-arm64
 ```
 
-The script uses Docker Buildx because the `container` command does not provide the multi-platform Buildx and registry-push options it needs. This is the only Docker-specific build workflow:
+The script uses Docker Buildx because the `container` command does not provide the multi-platform Buildx and registry-push options it needs. This is the Docker-specific publishing workflow:
 
 ```bash
 docker buildx build --platform linux/arm64 --push ...

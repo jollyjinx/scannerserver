@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p "${SCAN_OUTPUT_DIR:-/scans}" "${SANE_CONFIG_DIR:-/app/sane.d}"
+mkdir -p "${SCAN_OUTPUT_DIR:-/scans}"
 
 if [[ -n "${SCANNER_URL:-}" ]]; then
+  bundled_sane_config_dir="${SANE_CONFIG_DIR:-/app/sane.d}"
+  runtime_sane_config_dir="${SANE_RUNTIME_CONFIG_DIR:-/tmp/scannerserver-sane.d}"
+  mkdir -p "${runtime_sane_config_dir}"
+  cp -a "${bundled_sane_config_dir}/." "${runtime_sane_config_dir}/"
+  export SANE_CONFIG_DIR="${runtime_sane_config_dir}"
   scanner_name="${SCANNER_NAME:-ScanSnap iX500}"
   scanner_protocol="${SCANNER_PROTOCOL:-escl}"
-  cat > "${SANE_CONFIG_DIR:-/app/sane.d}/airscan.conf" <<EOF
+  cat > "${SANE_CONFIG_DIR}/airscan.conf" <<EOF
 [devices]
 "${scanner_name}" = ${scanner_protocol}, ${SCANNER_URL}
 EOF

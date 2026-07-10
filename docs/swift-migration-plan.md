@@ -14,7 +14,7 @@ Replace the long-running Python scannerserver with a Swift 6.3 Linux service tha
 
 The replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
 
-Implementation and container cutover are complete. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, and the UDP button listener have been exercised against the project iX500. A physical scan, OCR result, and button press remain release acceptance tasks because they require interaction with the scanner and the complete Linux acquisition toolchain.
+Implementation and the repository’s default container cutover are complete. Registry promotion is pending: `ghcr.io/jollyjinx/scannerserver:latest` still points to the legacy implementation until this branch is merged and the publishing workflow succeeds. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, and the UDP button listener have been exercised against the project iX500. A physical scan, OCR result, and button press remain release acceptance tasks because they require interaction with the scanner and the complete Linux acquisition toolchain.
 
 ## Progress
 
@@ -26,7 +26,7 @@ Implementation and container cutover are complete. Discovery, scanner selection,
 | Scan pipeline and OCR queue | Complete |
 | Native ScanSnap discovery, pairing, and button runtime | Complete |
 | Native document and preview helpers | Complete |
-| Default container cutover | Complete |
+| Default container cutover | Complete in repository; registry publication pending |
 | Physical scan, OCR, and button acceptance | Pending manual validation |
 
 ## Hardware Evidence
@@ -193,8 +193,8 @@ Acceptance:
 
 Acceptance:
 
-- `container compose up -d --build` works from a clean checkout.
-- Existing `container run` command still works.
+- `container compose up -d --build` works from a clean checkout, with `docker compose` as the documented fallback when the plugin is unavailable.
+- The documented Docker host-network deployment remains a drop-in replacement.
 - Scan directory ownership and non-root port binding still work.
 - Docs contain no stale `docker` command unless the section explains why Docker-only functionality is needed.
 

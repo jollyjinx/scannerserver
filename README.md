@@ -16,11 +16,11 @@ The service is implemented as a Swift 6.3 package. Its long-running process is n
 
 ## Quick Start
 
-On the Linux host that can reach the scanner, create a scan directory and start the container:
+On the Linux host that can reach the scanner, create a scan directory and start the container. Host networking and restart policies require options that are not available in Apple’s `container` CLI, so this deployment command uses Docker:
 
 ```bash
 mkdir -p scans
-container run -d \
+docker run -d \
   --name scannerserver \
   --restart unless-stopped \
   --network host \
@@ -57,6 +57,8 @@ mkdir -p scans
 container compose up -d
 ```
 
+Use `docker compose` when the `container-compose` plugin is not installed.
+
 Then open:
 
 ```text
@@ -88,13 +90,13 @@ It does not sweep every IP address in your subnet.
 
 ## Updating
 
-For `container run`:
+For the standalone Docker deployment:
 
 ```bash
-container pull ghcr.io/jollyjinx/scannerserver:latest
-container stop scannerserver
-container rm scannerserver
-# rerun the container run command from Quick Start
+docker pull ghcr.io/jollyjinx/scannerserver:latest
+docker stop scannerserver
+docker rm scannerserver
+# rerun the docker run command from Quick Start
 ```
 
 For Compose:
@@ -105,12 +107,14 @@ container compose pull
 container compose up -d
 ```
 
+Use `docker compose` for these commands when the `container-compose` plugin is not installed.
+
 ## Troubleshooting
 
 Check logs:
 
 ```bash
-container logs -f scannerserver
+docker logs -f scannerserver
 ```
 
 For Compose:

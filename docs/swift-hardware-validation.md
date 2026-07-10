@@ -20,7 +20,7 @@ container build \
 
 mkdir -p scans-swift-hardware
 
-container run \
+docker run \
   --detach \
   --name scannerserver-swift-hardware \
   --network host \
@@ -72,11 +72,11 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 ## Resource Capture
 
 ```bash
-container exec scannerserver-swift-hardware \
+docker exec scannerserver-swift-hardware \
   grep -E '^(Name|VmRSS|VmHWM|Threads):' /proc/1/status
 
 container image list --verbose
-container logs scannerserver-swift-hardware
+docker logs scannerserver-swift-hardware
 ```
 
 Record idle RSS after the index and health routes have been requested, peak RSS during scan and OCR, compressed image size, architecture, Swift image tag, and scanner firmware version in the release notes.
@@ -84,6 +84,6 @@ Record idle RSS after the index and health routes have been requested, peak RSS 
 ## Cleanup
 
 ```bash
-container stop scannerserver-swift-hardware
-container rm scannerserver-swift-hardware
+docker stop scannerserver-swift-hardware
+docker rm scannerserver-swift-hardware
 ```
