@@ -60,11 +60,11 @@ RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
         img2pdf \
         iproute2 \
         libcap2-bin \
+        libimage-exiftool-perl \
         libvips-tools \
         ocrmypdf \
-        python3 \
-        python3-pil \
-        python3-pikepdf \
+        poppler-utils \
+        qpdf \
         sane-airscan \
         sane-utils \
         tesseract-ocr-deu \
@@ -83,21 +83,8 @@ COPY --from=scansnap_wifi_build /out/scansnap-wifi /usr/local/bin/scansnap-wifi
 COPY --from=swift_build /out/scannerserver /opt/scannerserver/scannerserver
 COPY --from=swift_build /out/ScannerServer_ScannerServerCore.resources /opt/scannerserver/ScannerServer_ScannerServerCore.resources
 COPY scripts/entrypoint.sh /usr/local/bin/scansnap-entrypoint
-COPY scripts/crop_pdf_pages.py /usr/local/bin/crop-pdf-pages
-COPY scripts/export_scan_images.py /usr/local/bin/export-scan-images
-COPY scripts/list_devices.sh /usr/local/bin/list-scanners
-COPY scripts/remove_blank_pages.py /usr/local/bin/remove-blank-pages
-COPY scripts/set_pdf_creator.py /usr/local/bin/set-pdf-creator
-COPY scripts/split_pdf_pages.py /usr/local/bin/split-pdf-pages
 
-RUN chmod +x \
-        /usr/local/bin/scansnap-entrypoint \
-        /usr/local/bin/crop-pdf-pages \
-        /usr/local/bin/export-scan-images \
-        /usr/local/bin/list-scanners \
-        /usr/local/bin/remove-blank-pages \
-        /usr/local/bin/set-pdf-creator \
-        /usr/local/bin/split-pdf-pages \
+RUN chmod +x /usr/local/bin/scansnap-entrypoint \
     && setcap cap_net_bind_service=+ep /opt/scannerserver/scannerserver
 
 ENV PATH="${PATH}:/opt/scannerserver"
