@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 enum NativePDFJSONError: Error, Equatable, LocalizedError {
     case malformed(String)
