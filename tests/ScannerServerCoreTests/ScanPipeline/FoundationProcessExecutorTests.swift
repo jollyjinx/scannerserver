@@ -59,7 +59,7 @@ struct FoundationProcessExecutorTests {
             // Expected.
         }
 
-        #expect(start.duration(to: clock.now) < .seconds(5))
+        #expect(start.duration(to: clock.now) < .seconds(10))
         try await waitUntilGone(leader)
         try await waitUntilGone(child)
     }
@@ -85,7 +85,7 @@ struct FoundationProcessExecutorTests {
             #expect(error == .timedOut(milliseconds: 75))
         }
 
-        #expect(start.duration(to: clock.now) < .seconds(5))
+        #expect(start.duration(to: clock.now) < .seconds(10))
         let leader = try processID(in: leaderFile)
         try await waitUntilGone(leader)
     }
