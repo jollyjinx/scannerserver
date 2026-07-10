@@ -4,3 +4,5 @@ scans/
 __pycache__/
 *.pyc
 .env
+/.build/
+.swiftpm/
