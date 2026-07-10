@@ -106,36 +106,41 @@ Local builds are only needed when changing the Swift package or testing Dockerfi
 container compose up -d --build
 ```
 
-## Build And Push Development ARM64
+## Build And Push Development
 
-For Raspberry Pi testing:
+Build and push a development image for both AMD64 and ARM64:
 
 ```bash
-./scripts/build_push_development_arm64.sh
+./scripts/build_push_development.sh
 ```
 
 By default it builds and pushes:
 
 ```text
-ghcr.io/jollyjinx/scannerserver:development-arm64
+ghcr.io/jollyjinx/scannerserver:development
 ```
 
 The script uses Docker Buildx because the `container` command does not provide the multi-platform Buildx and registry-push options it needs. This is the Docker-specific publishing workflow:
 
 ```bash
-docker buildx build --platform linux/arm64 --push ...
+docker buildx build --platform linux/amd64,linux/arm64 --push ...
 ```
 
-Override the target if needed:
+Pass a different tag as the first argument. Override the image repository with `IMAGE` if needed:
 
 ```bash
-IMAGE=ghcr.io/your-user/scannerserver TAG=test-arm64 ./scripts/build_push_development_arm64.sh
+./scripts/build_push_development.sh test
+IMAGE=ghcr.io/your-user/scannerserver ./scripts/build_push_development.sh test
 ```
+
+`TAG` remains supported as an environment fallback when no positional tag is provided. The positional argument takes precedence.
+
+The previous `build_push_development_arm64.sh` path remains as a compatibility wrapper and now also publishes both architectures.
 
 If the container runtime reports `Structure needs cleaning`, prune the builder cache and rerun:
 
 ```bash
 docker buildx prune --all --force
 docker builder prune --all --force
-./scripts/build_push_development_arm64.sh
+./scripts/build_push_development.sh development
 ```
