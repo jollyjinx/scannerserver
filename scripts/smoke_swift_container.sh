@@ -16,8 +16,8 @@ trap cleanup EXIT
 container run \
   --detach \
   --name "${container_name}" \
-  --publish "${port}:8080" \
-  --env WEB_PORT=8080 \
+  --publish "${port}:80" \
+  --env WEB_PORT=80 \
   --env SCAN_OUTPUT_DIR=/scans \
   --env SCAN_BACKEND=sane \
   --volume "${scan_dir}:/scans" \
