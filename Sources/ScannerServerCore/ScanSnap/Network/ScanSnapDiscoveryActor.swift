@@ -61,40 +61,63 @@ public actor ScanSnapDiscoveryActor {
                 allowsFallback: configuration.allowsSourcePortFallback
             )
             let sendPlan = try makeSendPlan(configuration: configuration, clientPort: clientPort)
-            for _ in 0..<configuration.rounds {
-                for item in sendPlan {
-                    for packet in item.packets {
-                        try Task.checkCancellation()
-                        try await transport.send(packet, to: item.address)
-                    }
-                }
-            }
-
-            var devicesByID: [String: ScanSnapDevice] = [:]
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(
                 by: .milliseconds(Int64(clamping: configuration.timeoutMilliseconds))
             )
-            while true {
-                let remaining = scanSnapRemainingMilliseconds(until: deadline, clock: clock)
-                guard remaining > 0,
-                      let datagram = try await transport.receive(
-                          maximumBytes: 512,
-                          timeoutMilliseconds: remaining
-                      )
-                else {
+            var devicesByID: [String: ScanSnapDevice] = [:]
+
+            for roundIndex in 0..<configuration.rounds {
+                guard scanSnapRemainingMilliseconds(until: deadline, clock: clock) > 0 else {
                     break
                 }
-                try Task.checkCancellation()
-                guard datagram.bytes.count >= VENSDeviceInfoParser.packetLength,
-                      let device = try? VENSDeviceInfoParser.parse(
-                          datagram.bytes,
-                          remoteIPAddress: datagram.remoteAddress.host
-                      )
-                else {
-                    continue
+                for item in sendPlan {
+                    do {
+                        for packet in item.packets {
+                            try Task.checkCancellation()
+                            try await transport.send(packet, to: item.address)
+                        }
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        try Task.checkCancellation()
+                        continue
+                    }
                 }
-                devicesByID[device.id] = device
+
+                let remaining = scanSnapRemainingMilliseconds(until: deadline, clock: clock)
+                guard remaining > 0 else { break }
+                let roundsRemaining = UInt64(configuration.rounds - roundIndex)
+                let receiveWindow = max(remaining / roundsRemaining, 1)
+                let windowDeadline = clock.now.advanced(
+                    by: .milliseconds(Int64(clamping: receiveWindow))
+                )
+                let receiveDeadline = min(deadline, windowDeadline)
+
+                while true {
+                    let receiveRemaining = scanSnapRemainingMilliseconds(
+                        until: receiveDeadline,
+                        clock: clock
+                    )
+                    guard receiveRemaining > 0,
+                      let datagram = try await transport.receive(
+                          maximumBytes: 512,
+                          timeoutMilliseconds: receiveRemaining
+                      )
+                    else {
+                        break
+                    }
+                    try Task.checkCancellation()
+                    guard datagram.bytes.count >= VENSDeviceInfoParser.packetLength,
+                          let device = try? VENSDeviceInfoParser.parse(
+                              datagram.bytes,
+                              remoteIPAddress: datagram.remoteAddress.host
+                          )
+                    else {
+                        continue
+                    }
+                    devicesByID[device.id] = device
+                }
             }
 
             await transport.close()
