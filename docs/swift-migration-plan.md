@@ -29,6 +29,22 @@ Implementation and container cutover are complete. Discovery, scanner selection,
 | Default container cutover | Complete |
 | Physical scan, OCR, and button acceptance | Pending manual validation |
 
+## Hardware Evidence
+
+Validation on 2026-07-10 used the Mac's `vlan5` address, `10.112.10.129`. The requested deployment address, `10.112.10.6`, was not assigned to the Mac and adding it requires administrator privileges; it must not be aliased while another deployment container owns that address.
+
+- The Swift service bound to `10.112.10.129` and discovered the iX500 at `10.112.10.11`.
+- Scanner selection, pairing, compatible config persistence, TCP control/data reachability, and UDP port `55265` listener startup succeeded.
+- A web scan reached the native `scansnap-wifi` acquisition path and reported `Scanning...`, then `No pages scanned` because no document was available in the feeder.
+- A completed page transfer, OCR result, physical button event, and post-scan re-arm remain to be validated.
+
+After confirming `10.112.10.6` is unused, an administrator can temporarily add and later remove the requested macOS alias:
+
+```bash
+sudo ifconfig vlan5 alias 10.112.10.6 netmask 255.255.255.0
+sudo ifconfig vlan5 -alias 10.112.10.6
+```
+
 ## Measured Baseline
 
 Measurements use the ARM64 production containers at idle after the index and health routes have been requested. RSS is read from `/proc/1/status`; image size is reported by `container image list --verbose`.
