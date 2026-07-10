@@ -5,7 +5,7 @@ public enum ScanPipelineCommands {
         configuration: ScanPipelineConfiguration,
         workingDirectory: URL? = nil
     ) -> ProcessRequest {
-        ProcessRequest(
+        return ProcessRequest(
             executable: "scan-once",
             environment: configuration.environment,
             workingDirectory: workingDirectory
@@ -17,9 +17,19 @@ public enum ScanPipelineCommands {
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil
     ) -> ProcessRequest {
-        ProcessRequest(
-            executable: "ocr-scan",
-            arguments: [inputPath],
+        let language = environment?["SCAN_LANGUAGE"] ?? "deu+eng"
+        let rotatePagesThreshold = environment?["SCAN_OCR_ROTATE_PAGES_THRESHOLD"] ?? "2.0"
+        return ProcessRequest(
+            executable: "ocrmypdf",
+            arguments: [
+                "--language", language,
+                "--rotate-pages",
+                "--rotate-pages-threshold", rotatePagesThreshold,
+                "--deskew",
+                "--optimize", "1",
+                inputPath,
+                OCRInputPath.outputPath(for: inputPath) ?? inputPath,
+            ],
             environment: environment,
             workingDirectory: workingDirectory
         )
@@ -34,6 +44,15 @@ public enum ScanPipelineCommands {
             environment: environment,
             workingDirectory: workingDirectory
         )
+    }
+}
+
+public enum OCRInputPath {
+    public static func outputPath(for inputPath: String) -> String? {
+        guard inputPath.hasSuffix(".pdf"), !inputPath.hasSuffix(".ocr.pdf") else {
+            return nil
+        }
+        return String(inputPath.dropLast(4)) + ".ocr.pdf"
     }
 }
 

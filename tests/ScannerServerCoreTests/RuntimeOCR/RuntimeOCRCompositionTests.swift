@@ -124,8 +124,8 @@ private struct LiveCommandFixture {
             contents: "#!/bin/sh\nset -eu\n: > \"$SCAN_OUTPUT_DIR/live.pdf\"\nprintf '%s\\n' \"$SCAN_OUTPUT_DIR/live.pdf\"\n"
         )
         try Self.writeExecutable(
-            at: tools.appendingPathComponent("ocr-scan"),
-            contents: "#!/bin/sh\nset -eu\noutput=\"${1%.pdf}.ocr.pdf\"\nprintf '%s\\n' \"$output\"\n"
+            at: tools.appendingPathComponent("ocrmypdf"),
+            contents: "#!/bin/sh\nset -eu\nfor output; do :; done\n: > \"$output\"\nprintf '%s\\n' \"$output\"\n"
         )
 
         var environment = ProcessInfo.processInfo.environment

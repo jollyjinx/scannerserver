@@ -88,6 +88,19 @@ public actor OCRQueueActor {
                 queued: queue.count
             )
 
+            guard let outputPath = OCRInputPath.outputPath(for: job.inputPath) else {
+                queueState.finished = Date()
+                queueState.status = "failed (64)"
+                queueState.error = "Raw PDF must end in .pdf and must not already be an OCR PDF: \(job.inputPath)"
+                continue
+            }
+            guard !FileManager.default.fileExists(atPath: outputPath) else {
+                queueState.finished = Date()
+                queueState.status = "failed (73)"
+                queueState.error = "OCR output file already exists: \(outputPath)"
+                continue
+            }
+
             do {
                 let result = try await executor.execute(ScanPipelineCommands.ocr(
                     inputPath: job.inputPath,
@@ -96,7 +109,8 @@ public actor OCRQueueActor {
                 ))
                 queueState.finished = Date()
                 queueState.status = result.succeeded ? "done" : "failed (\(result.exitStatus))"
-                queueState.output = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                queueState.output = result.succeeded && processOutput.isEmpty ? outputPath : processOutput
                 queueState.error = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
                 queueState.queued = queue.count
             } catch is CancellationError {
