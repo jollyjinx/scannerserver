@@ -16,6 +16,48 @@ actor ButtonFakeScannerProvider: ScanSnapButtonScannerConfigurationProviding {
     }
 }
 
+actor ButtonAsyncGate {
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    var waiterCount: Int { continuations.count }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+
+    func releaseAll() {
+        let waiting = continuations
+        continuations.removeAll()
+        for continuation in waiting {
+            continuation.resume()
+        }
+    }
+}
+
+actor ButtonGatedScannerProvider: ScanSnapButtonScannerConfigurationProviding {
+    private let gate: ButtonAsyncGate
+    private let configuration: ScanSnapButtonScannerConfiguration?
+    private var shouldWait = true
+
+    init(
+        gate: ButtonAsyncGate,
+        configuration: ScanSnapButtonScannerConfiguration? = buttonScannerConfiguration()
+    ) {
+        self.gate = gate
+        self.configuration = configuration
+    }
+
+    func currentButtonScannerConfiguration() async -> ScanSnapButtonScannerConfiguration? {
+        if shouldWait {
+            shouldWait = false
+            await gate.wait()
+        }
+        return configuration
+    }
+}
+
 actor ButtonFakeModeProvider: ScanSnapButtonModeProviding {
     var mode: ScanMode
 
@@ -109,6 +151,42 @@ actor ButtonFakeArmer: ScanSnapButtonArming {
     }
 }
 
+actor ButtonGatedArmer: ScanSnapButtonArming {
+    private let firstCallGate: ButtonAsyncGate
+    private(set) var calls: [ButtonFakeArmer.Call] = []
+    private var callWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    init(firstCallGate: ButtonAsyncGate) {
+        self.firstCallGate = firstCallGate
+    }
+
+    func arm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        calls.append(ButtonFakeArmer.Call(scanner: scanner, configuration: configuration))
+        resumeSatisfiedCallWaiters()
+        if calls.count == 1 {
+            await firstCallGate.wait()
+        }
+    }
+
+    func waitForCallCount(_ count: Int) async {
+        guard calls.count < count else { return }
+        await withCheckedContinuation { continuation in
+            callWaiters.append((count, continuation))
+        }
+    }
+
+    private func resumeSatisfiedCallWaiters() {
+        let satisfied = callWaiters.filter { calls.count >= $0.count }
+        callWaiters.removeAll { calls.count >= $0.count }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
+    }
+}
+
 actor ButtonFakeClock: ScanSnapButtonClock {
     var now: UInt64
 
@@ -123,25 +201,99 @@ actor ButtonFakeClock: ScanSnapButtonClock {
     }
 }
 
+actor ButtonFakeSleeper: ScanSnapSleeper {
+    enum Behavior: Sendable {
+        case immediate
+        case waitForCancellation
+    }
+
+    private let behavior: Behavior
+    private(set) var delays: [UInt64] = []
+    private(set) var wasCancelled = false
+    private var delayWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+    init(behavior: Behavior = .immediate) {
+        self.behavior = behavior
+    }
+
+    func sleep(milliseconds: UInt64) async throws {
+        delays.append(milliseconds)
+        resumeSatisfiedDelayWaiters()
+        switch behavior {
+        case .immediate:
+            try Task.checkCancellation()
+            await Task.yield()
+            try Task.checkCancellation()
+        case .waitForCancellation:
+            do {
+                try await Task.sleep(for: .seconds(60))
+            } catch is CancellationError {
+                wasCancelled = true
+                throw CancellationError()
+            }
+        }
+    }
+
+    func waitForDelayCount(_ count: Int) async {
+        guard delays.count < count else { return }
+        await withCheckedContinuation { continuation in
+            delayWaiters.append((count, continuation))
+        }
+    }
+
+    private func resumeSatisfiedDelayWaiters() {
+        let satisfied = delayWaiters.filter { delays.count >= $0.count }
+        delayWaiters.removeAll { delays.count >= $0.count }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
+    }
+}
+
 actor ButtonFakeUDPTransport: ScanSnapUDPTransport {
+    enum ReceiveBehavior: Sendable {
+        case waitForCancellation
+        case fail
+    }
+
     let boundPort: UInt16
+    let receiveBehavior: ReceiveBehavior
     private(set) var bindCalls: [ScanSnapSocketAddress] = []
     private(set) var isClosed = false
+    private var bindWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(boundPort: UInt16) {
+    init(boundPort: UInt16, receiveBehavior: ReceiveBehavior = .waitForCancellation) {
         self.boundPort = boundPort
+        self.receiveBehavior = receiveBehavior
     }
 
     func bind(to localAddress: ScanSnapSocketAddress, allowsBroadcast: Bool) -> UInt16 {
         bindCalls.append(localAddress)
+        let waiting = bindWaiters
+        bindWaiters.removeAll()
+        for continuation in waiting {
+            continuation.resume()
+        }
         return boundPort
+    }
+
+    func waitUntilBound() async {
+        guard bindCalls.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            bindWaiters.append(continuation)
+        }
     }
 
     func send(_ bytes: [UInt8], to remoteAddress: ScanSnapSocketAddress) {}
 
     func receive(maximumBytes: Int, timeoutMilliseconds: UInt64) async throws -> ScanSnapDatagram? {
-        try await Task.sleep(for: .seconds(60))
-        return nil
+        switch receiveBehavior {
+        case .waitForCancellation:
+            try await Task.sleep(for: .seconds(60))
+            return nil
+        case .fail:
+            throw ButtonFakeError.expected
+        }
     }
 
     func close() {
@@ -150,13 +302,39 @@ actor ButtonFakeUDPTransport: ScanSnapUDPTransport {
 }
 
 actor ButtonFakeUDPFactory: ScanSnapUDPTransportFactory {
-    let transport: ButtonFakeUDPTransport
+    private var transports: [ButtonFakeUDPTransport]
+    private(set) var makeCalls = 0
+    private var makeWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(transport: ButtonFakeUDPTransport = ButtonFakeUDPTransport(boundPort: 55_265)) {
-        self.transport = transport
+        transports = [transport]
     }
 
-    func makeTransport() -> any ScanSnapUDPTransport { transport }
+    init(transports: [ButtonFakeUDPTransport]) {
+        self.transports = transports
+    }
+
+    func makeTransport() throws -> any ScanSnapUDPTransport {
+        makeCalls += 1
+        resumeSatisfiedMakeWaiters()
+        guard !transports.isEmpty else { throw ButtonFakeError.expected }
+        return transports.removeFirst()
+    }
+
+    func waitForMakeCalls(_ count: Int) async {
+        guard makeCalls < count else { return }
+        await withCheckedContinuation { continuation in
+            makeWaiters.append((count, continuation))
+        }
+    }
+
+    private func resumeSatisfiedMakeWaiters() {
+        let satisfied = makeWaiters.filter { makeCalls >= $0.count }
+        makeWaiters.removeAll { makeCalls >= $0.count }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
+    }
 }
 
 actor ButtonFakePairing: ScanSnapButtonPairing {
@@ -178,16 +356,36 @@ actor ButtonFakePairing: ScanSnapButtonPairing {
     }
 }
 
+actor ButtonEventTimeline {
+    private(set) var events: [String] = []
+
+    func record(_ event: String) {
+        events.append(event)
+    }
+}
+
 actor ButtonFakeTCPConnection: ScanSnapTCPConnection {
+    nonisolated let label: String
+
     private var readChunks: [[UInt8]]
     private(set) var writes: [[UInt8]] = []
     private(set) var isClosed = false
+    private let timeline: ButtonEventTimeline?
+    private var readCount = 0
 
-    init(readChunks: [[UInt8]]) {
+    init(
+        label: String = "connection",
+        readChunks: [[UInt8]],
+        timeline: ButtonEventTimeline? = nil
+    ) {
+        self.label = label
         self.readChunks = readChunks
+        self.timeline = timeline
     }
 
-    func read(maximumBytes: Int, timeoutMilliseconds: UInt64) -> [UInt8] {
+    func read(maximumBytes: Int, timeoutMilliseconds: UInt64) async -> [UInt8] {
+        await timeline?.record("\(label).read.\(readCount)")
+        readCount += 1
         guard !readChunks.isEmpty else { return [] }
         let chunk = readChunks.removeFirst()
         guard chunk.count > maximumBytes else { return chunk }
@@ -195,12 +393,14 @@ actor ButtonFakeTCPConnection: ScanSnapTCPConnection {
         return Array(chunk.prefix(maximumBytes))
     }
 
-    func write(_ bytes: [UInt8], timeoutMilliseconds: UInt64) -> Int {
+    func write(_ bytes: [UInt8], timeoutMilliseconds: UInt64) async -> Int {
+        await timeline?.record("\(label).write.\(writes.count)")
         writes.append(bytes)
         return bytes.count
     }
 
-    func close() {
+    func close() async {
+        await timeline?.record("\(label).close")
         isClosed = true
     }
 }
@@ -219,13 +419,22 @@ actor ButtonFakeTCPFactory: ScanSnapTCPConnectionFactory {
         to remoteAddress: ScanSnapSocketAddress,
         binding localAddress: ScanSnapSocketAddress?,
         timeoutMilliseconds: UInt64
-    ) throws -> any ScanSnapTCPConnection {
+    ) async throws -> any ScanSnapTCPConnection {
         ports.append(remoteAddress.port)
         if remoteAddress.port == ScanSnapPacketBuilder.dataPort {
+            await dataConnection.timelineEventForConnect()
             return dataConnection
         }
         guard !controlConnections.isEmpty else { throw ButtonFakeError.expected }
-        return controlConnections.removeFirst()
+        let connection = controlConnections.removeFirst()
+        await connection.timelineEventForConnect()
+        return connection
+    }
+}
+
+extension ButtonFakeTCPConnection {
+    func timelineEventForConnect() async {
+        await timeline?.record("\(label).connect")
     }
 }
 

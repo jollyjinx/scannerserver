@@ -96,29 +96,26 @@ public struct ScanSnapButtonSessionArmer: ScanSnapButtonArming {
                 clientMACAddress: scanner.clientMACAddress
             )
 
-            try await withThrowingTaskGroup(of: Void.self) { handshakes in
-                for step in ScanSnapPacketBuilder.buttonInitializationSequence {
-                    try Task.checkCancellation()
-                    switch step {
-                    case let .handshakeCommand(command):
-                        handshakes.addTask {
-                            try await sendHandshakeCommand(command, scanner: scanner)
-                        }
-                    case let .initializationFrame(index):
-                        guard frames.indices.contains(index) else {
-                            throw ScanSnapButtonArmingError.invalidResponseLength(index)
-                        }
-                        try await connection.writeAll(
-                            frames[index],
-                            timeoutMilliseconds: scanner.connectionTimeoutMilliseconds
-                        )
-                        try await receiveVENS(
-                            from: connection,
-                            timeoutMilliseconds: scanner.connectionTimeoutMilliseconds
-                        )
+            for step in ScanSnapPacketBuilder.buttonInitializationSequence {
+                try Task.checkCancellation()
+                switch step {
+                case let .handshakeCommand(command):
+                    // The scanner requires each control handshake to complete before
+                    // the following data frame is sent on the other connection.
+                    try await sendHandshakeCommand(command, scanner: scanner)
+                case let .initializationFrame(index):
+                    guard frames.indices.contains(index) else {
+                        throw ScanSnapButtonArmingError.invalidResponseLength(index)
                     }
+                    try await connection.writeAll(
+                        frames[index],
+                        timeoutMilliseconds: scanner.connectionTimeoutMilliseconds
+                    )
+                    try await receiveVENS(
+                        from: connection,
+                        timeoutMilliseconds: scanner.connectionTimeoutMilliseconds
+                    )
                 }
-                try await handshakes.waitForAll()
             }
             await connection.close()
         } catch {

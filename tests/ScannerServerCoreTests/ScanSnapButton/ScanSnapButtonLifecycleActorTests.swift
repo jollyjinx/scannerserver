@@ -158,6 +158,139 @@ func buttonLifecycleCancellationAndShutdown() async throws {
     #expect(state.boundPort == nil)
 }
 
+@Test("Stop invalidates suspended notice processing and restart accepts new work")
+func stopInvalidatesSuspendedNoticeProcessing() async throws {
+    let gate = ButtonAsyncGate()
+    let scannerProvider = ButtonGatedScannerProvider(gate: gate)
+    let dispatcher = ButtonFakeScanDispatcher()
+    let transport = ButtonFakeUDPTransport(boundPort: 55_265)
+    let lifecycle = makeLifecycle(
+        udpFactory: ButtonFakeUDPFactory(transport: transport),
+        scannerProvider: scannerProvider,
+        dispatcher: dispatcher
+    )
+
+    let noticeTask = Task {
+        await lifecycle.processNotice(buttonNotice(), atMilliseconds: 10_000)
+    }
+    #expect(await eventually { await gate.waiterCount == 1 })
+
+    await lifecycle.stop()
+    await gate.releaseAll()
+
+    #expect(await noticeTask.value == .ignored(.disabled))
+    #expect(await dispatcher.startedModes.isEmpty)
+
+    #expect(try await lifecycle.start())
+    #expect(await lifecycle.processNotice(
+        buttonNotice(),
+        atMilliseconds: 20_000
+    ) == .scanStarted(modeID: "button-default"))
+    #expect(await dispatcher.startedModes.map(\.id) == ["button-default"])
+    await lifecycle.stop()
+}
+
+@Test("Stop invalidates suspended maintenance without poisoning restart arming")
+func stopInvalidatesSuspendedMaintenance() async throws {
+    let gate = ButtonAsyncGate()
+    let scannerProvider = ButtonGatedScannerProvider(gate: gate)
+    let armer = ButtonFakeArmer()
+    let lifecycle = makeLifecycle(
+        udpFactory: ButtonFakeUDPFactory(),
+        scannerProvider: scannerProvider,
+        armer: armer
+    )
+
+    let maintenanceTask = Task {
+        await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    }
+    #expect(await eventually { await gate.waiterCount == 1 })
+
+    await lifecycle.stop()
+    await gate.releaseAll()
+    await maintenanceTask.value
+
+    #expect(await armer.calls.isEmpty)
+    #expect(try await lifecycle.start())
+    #expect(await eventually(attempts: 500) { await armer.calls.count == 1 })
+    #expect(await eventually { await lifecycle.state.isArmed })
+    await lifecycle.stop()
+}
+
+@Test("A stale arming completion cannot poison a restarted lifecycle")
+func staleArmingCompletionCannotPoisonRestart() async throws {
+    let gate = ButtonAsyncGate()
+    let armer = ButtonGatedArmer(firstCallGate: gate)
+    let lifecycle = makeLifecycle(
+        udpFactory: ButtonFakeUDPFactory(),
+        reachability: ButtonFakeReachability([true, true]),
+        armer: armer
+    )
+
+    await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    #expect(await eventually { await gate.waiterCount == 1 })
+    #expect(await lifecycle.state.isArming)
+
+    let stopTask = Task { await lifecycle.stop() }
+    #expect(await eventually { !(await lifecycle.state.isArming) })
+    await gate.releaseAll()
+    await stopTask.value
+
+    var state = await lifecycle.state
+    #expect(!state.isArmed)
+    #expect(!state.isArming)
+
+    #expect(try await lifecycle.start())
+    await armer.waitForCallCount(2)
+    #expect(await eventually { await lifecycle.state.isArmed })
+    state = await lifecycle.state
+    #expect(state.isRunning)
+    #expect(!state.isArming)
+    await lifecycle.stop()
+}
+
+@Test("Listener retries transient failures with bounded backoff and a fresh transport")
+func listenerRetriesTransientFailures() async throws {
+    let failedTransports = (0..<8).map {
+        ButtonFakeUDPTransport(boundPort: UInt16(50_000 + $0), receiveBehavior: .fail)
+    }
+    let replacement = ButtonFakeUDPTransport(boundPort: 55_265)
+    let factory = ButtonFakeUDPFactory(transports: failedTransports + [replacement])
+    let sleeper = ButtonFakeSleeper()
+    let lifecycle = makeLifecycle(udpFactory: factory, sleeper: sleeper)
+
+    #expect(try await lifecycle.start())
+    await factory.waitForMakeCalls(9)
+    await replacement.waitUntilBound()
+    #expect(await lifecycle.state.boundPort == 55_265)
+    #expect(await sleeper.delays == [100, 200, 400, 800, 1_600, 3_000, 3_000, 3_000])
+    for transport in failedTransports {
+        #expect(await transport.isClosed)
+    }
+
+    await lifecycle.stop()
+    #expect(await replacement.isClosed)
+}
+
+@Test("Stopping during listener backoff cancels retry supervision")
+func stopCancelsListenerBackoff() async throws {
+    let failedTransport = ButtonFakeUDPTransport(boundPort: 50_001, receiveBehavior: .fail)
+    let unusedReplacement = ButtonFakeUDPTransport(boundPort: 50_002)
+    let factory = ButtonFakeUDPFactory(transports: [failedTransport, unusedReplacement])
+    let sleeper = ButtonFakeSleeper(behavior: .waitForCancellation)
+    let lifecycle = makeLifecycle(udpFactory: factory, sleeper: sleeper)
+
+    #expect(try await lifecycle.start())
+    await sleeper.waitForDelayCount(1)
+    #expect(await sleeper.delays == [100])
+
+    await lifecycle.stop()
+
+    #expect(await sleeper.wasCancelled)
+    #expect(await factory.makeCalls == 1)
+    #expect(!(await lifecycle.state.isRunning))
+}
+
 private func makeLifecycle(
     configuration: ScanSnapButtonConfiguration = ScanSnapButtonConfiguration(),
     udpFactory: any ScanSnapUDPTransportFactory = ButtonFakeUDPFactory(),
@@ -166,7 +299,8 @@ private func makeLifecycle(
     dispatcher: any ScanSnapButtonScanDispatching = ButtonFakeScanDispatcher(),
     reachability: any ScanSnapButtonReachabilityChecking = ButtonFakeReachability(),
     armer: any ScanSnapButtonArming = ButtonFakeArmer(),
-    clock: any ScanSnapButtonClock = ButtonFakeClock()
+    clock: any ScanSnapButtonClock = ButtonFakeClock(),
+    sleeper: any ScanSnapSleeper = ButtonFakeSleeper()
 ) -> ScanSnapButtonLifecycleActor {
     ScanSnapButtonLifecycleActor(
         configuration: configuration,
@@ -176,6 +310,7 @@ private func makeLifecycle(
         scanDispatcher: dispatcher,
         reachability: reachability,
         armer: armer,
-        clock: clock
+        clock: clock,
+        sleeper: sleeper
     )
 }

@@ -1,3 +1,5 @@
+import JLog
+
 public enum ScanSnapButtonNoticeIgnoreReason: Sendable, Hashable {
     case disabled
     case scannerNotConfigured
@@ -37,14 +39,18 @@ public actor ScanSnapButtonLifecycleActor {
     private let reachability: any ScanSnapButtonReachabilityChecking
     private let armer: any ScanSnapButtonArming
     private let clock: any ScanSnapButtonClock
+    private let sleeper: any ScanSnapSleeper
 
     private var listenerTask: Task<Void, Never>?
     private var armingTask: Task<Void, Never>?
     private var listenerTransport: (any ScanSnapUDPTransport)?
+    private var lifecycleGeneration: UInt64 = 0
     private var listenerGeneration: UInt64 = 0
     private var armingGeneration: UInt64 = 0
     private var scannerConfigurationGeneration: UInt64 = 0
-    private var acceptsArmingResults = true
+    private var acceptsLifecycleOperations = true
+    private var isStarting = false
+    private var isStopping = false
 
     private var isRunning = false
     private var boundPort: UInt16?
@@ -66,7 +72,8 @@ public actor ScanSnapButtonLifecycleActor {
         scanDispatcher: any ScanSnapButtonScanDispatching,
         reachability: any ScanSnapButtonReachabilityChecking = ScanSnapButtonTCPReachabilityChecker(),
         armer: any ScanSnapButtonArming = ScanSnapButtonSessionArmer(),
-        clock: any ScanSnapButtonClock = SystemScanSnapButtonClock()
+        clock: any ScanSnapButtonClock = SystemScanSnapButtonClock(),
+        sleeper: any ScanSnapSleeper = TaskScanSnapSleeper()
     ) {
         self.configuration = configuration
         self.udpTransportFactory = udpTransportFactory
@@ -76,67 +83,137 @@ public actor ScanSnapButtonLifecycleActor {
         self.reachability = reachability
         self.armer = armer
         self.clock = clock
+        self.sleeper = sleeper
     }
 
     @discardableResult
     public func start() async throws -> Bool {
         guard configuration.isEnabled else { return false }
-        guard listenerTask == nil else { return false }
+        guard listenerTask == nil, !isStarting, !isStopping else { return false }
 
-        let transport = try await udpTransportFactory.makeTransport()
+        lifecycleGeneration &+= 1
+        let lifecycleGeneration = lifecycleGeneration
+        acceptsLifecycleOperations = true
+        isStarting = true
+        scannerConfigurationGeneration &+= 1
+
+        var transport: (any ScanSnapUDPTransport)?
         do {
-            let port = try await transport.bind(
+            let newTransport = try await udpTransportFactory.makeTransport()
+            transport = newTransport
+            guard isCurrentLifecycle(lifecycleGeneration), isStarting else {
+                await newTransport.close()
+                return false
+            }
+            listenerTransport = newTransport
+
+            let port = try await newTransport.bind(
                 to: .anyIPv4(port: configuration.listenerPort),
                 allowsBroadcast: false
             )
+            guard isCurrentLifecycle(lifecycleGeneration), isStarting else {
+                await newTransport.close()
+                return false
+            }
+            let now = await clock.nowMilliseconds()
+            guard isCurrentLifecycle(lifecycleGeneration), isStarting else {
+                await newTransport.close()
+                return false
+            }
+
             listenerGeneration &+= 1
-            let generation = listenerGeneration
-            listenerTransport = transport
+            let listenerGeneration = listenerGeneration
             boundPort = port
             isRunning = true
-            acceptsArmingResults = true
-            nextReachabilityAtMilliseconds = await clock.nowMilliseconds()
+            isStarting = false
+            nextReachabilityAtMilliseconds = now
             listenerTask = Task { [weak self] in
-                await self?.listen(using: transport, generation: generation)
+                await self?.superviseListener(
+                    startingWith: newTransport,
+                    listenerGeneration: listenerGeneration,
+                    lifecycleGeneration: lifecycleGeneration
+                )
             }
             return true
         } catch {
-            await transport.close()
+            let shouldThrow = isCurrentLifecycle(lifecycleGeneration)
+            if shouldThrow {
+                isStarting = false
+                listenerTransport = nil
+                boundPort = nil
+                isRunning = false
+            }
+            await transport?.close()
+            guard shouldThrow else { return false }
             throw error
         }
     }
 
     public func stop() async {
-        acceptsArmingResults = false
+        if isStopping {
+            await listenerTask?.value
+            await armingTask?.value
+            return
+        }
+
+        isStopping = true
+        acceptsLifecycleOperations = false
+        lifecycleGeneration &+= 1
         listenerGeneration &+= 1
         armingGeneration &+= 1
+        scannerConfigurationGeneration &+= 1
         let listener = listenerTask
         let arming = armingTask
-        listenerTask = nil
-        armingTask = nil
+        let transport = listenerTransport
+        isStarting = false
         isRunning = false
         isArming = false
         isArmed = false
         buttonScanInFlight = false
+        rearmRequested = false
         nextArmAtMilliseconds = nil
+        lastScannerConfiguration = nil
         listener?.cancel()
         arming?.cancel()
-        await listenerTransport?.close()
+        await transport?.close()
         await listener?.value
         await arming?.value
+        listenerTask = nil
+        armingTask = nil
         listenerTransport = nil
         boundPort = nil
+        isStopping = false
     }
 
     public func processNotice(_ datagram: ScanSnapDatagram) async -> ScanSnapButtonNoticeResult {
-        await processNotice(datagram, atMilliseconds: clock.nowMilliseconds())
+        let lifecycleGeneration = lifecycleGeneration
+        let now = await clock.nowMilliseconds()
+        return await processNotice(
+            datagram,
+            atMilliseconds: now,
+            lifecycleGeneration: lifecycleGeneration
+        )
     }
 
     public func processNotice(
         _ datagram: ScanSnapDatagram,
         atMilliseconds now: UInt64
     ) async -> ScanSnapButtonNoticeResult {
-        guard configuration.isEnabled else { return .ignored(.disabled) }
+        await processNotice(
+            datagram,
+            atMilliseconds: now,
+            lifecycleGeneration: lifecycleGeneration
+        )
+    }
+
+    private func processNotice(
+        _ datagram: ScanSnapDatagram,
+        atMilliseconds now: UInt64,
+        lifecycleGeneration: UInt64
+    ) async -> ScanSnapButtonNoticeResult {
+        guard configuration.isEnabled, isCurrentLifecycle(lifecycleGeneration) else {
+            return .ignored(.disabled)
+        }
 
         let scanner: ScanSnapButtonScannerConfiguration
         do {
@@ -147,6 +224,7 @@ public actor ScanSnapButtonLifecycleActor {
         } catch {
             return .ignored(.dependencyFailure)
         }
+        guard isCurrentLifecycle(lifecycleGeneration) else { return .ignored(.disabled) }
 
         guard datagram.remoteAddress.host == scanner.scannerIPAddress else {
             return .ignored(.unexpectedSource)
@@ -171,7 +249,9 @@ public actor ScanSnapButtonLifecycleActor {
         if buttonScanInFlight {
             return .ignored(.scanRunning)
         }
-        if await scanDispatcher.isScanRunning() {
+        let scanIsRunning = await scanDispatcher.isScanRunning()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return .ignored(.disabled) }
+        if scanIsRunning {
             return .ignored(.scanRunning)
         }
 
@@ -181,10 +261,13 @@ public actor ScanSnapButtonLifecycleActor {
         } catch {
             return .ignored(.dependencyFailure)
         }
+        guard isCurrentLifecycle(lifecycleGeneration) else { return .ignored(.disabled) }
 
         lastButtonStartedAtMilliseconds = now
         buttonScanInFlight = true
-        guard await scanDispatcher.startButtonScan(mode: mode) else {
+        let scanStarted = await scanDispatcher.startButtonScan(mode: mode)
+        guard isCurrentLifecycle(lifecycleGeneration) else { return .ignored(.disabled) }
+        guard scanStarted else {
             buttonScanInFlight = false
             return .ignored(.scanStartRejected)
         }
@@ -196,48 +279,76 @@ public actor ScanSnapButtonLifecycleActor {
     }
 
     public func runMaintenance() async {
-        await runMaintenance(atMilliseconds: clock.nowMilliseconds())
+        let lifecycleGeneration = lifecycleGeneration
+        let now = await clock.nowMilliseconds()
+        await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
     }
 
     public func runMaintenance(atMilliseconds now: UInt64) async {
+        await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
+    }
+
+    private func runMaintenance(
+        atMilliseconds now: UInt64,
+        lifecycleGeneration: UInt64
+    ) async {
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
+
         let scanner: ScanSnapButtonScannerConfiguration
         do {
             guard let configuredScanner = try await scannerProvider.currentButtonScannerConfiguration() else {
+                guard isCurrentLifecycle(lifecycleGeneration) else { return }
                 resetForMissingScanner(retryAt: adding(configuration.reachabilityIntervalMilliseconds, to: now))
                 return
             }
             scanner = configuredScanner
         } catch {
+            guard isCurrentLifecycle(lifecycleGeneration) else { return }
             nextReachabilityAtMilliseconds = adding(configuration.reachabilityIntervalMilliseconds, to: now)
             return
         }
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
 
         if let previous = lastScannerConfiguration, previous != scanner {
             resetForScannerChange(atMilliseconds: now)
         }
         lastScannerConfiguration = scanner
 
-        guard !buttonScanInFlight, !(await scanDispatcher.isScanRunning()), !isArming else { return }
+        guard !buttonScanInFlight, !isArming else { return }
+        let scanIsRunning = await scanDispatcher.isScanRunning()
+        guard isCurrentLifecycle(lifecycleGeneration), !scanIsRunning else { return }
 
         if rearmRequested {
             rearmRequested = false
-            await checkReachabilityAndArm(scanner: scanner, now: now)
+            await checkReachabilityAndArm(
+                scanner: scanner,
+                now: now,
+                lifecycleGeneration: lifecycleGeneration
+            )
             return
         }
         if isArmed, let nextArmAtMilliseconds, now >= nextArmAtMilliseconds {
-            beginArming(scanner: scanner)
+            beginArming(scanner: scanner, lifecycleGeneration: lifecycleGeneration)
             return
         }
         if !isArmed, now >= nextReachabilityAtMilliseconds {
-            await checkReachabilityAndArm(scanner: scanner, now: now)
+            await checkReachabilityAndArm(
+                scanner: scanner,
+                now: now,
+                lifecycleGeneration: lifecycleGeneration
+            )
         }
     }
 
     public func scanDidFinish() async {
-        await scanDidFinish(atMilliseconds: clock.nowMilliseconds())
+        let lifecycleGeneration = lifecycleGeneration
+        let now = await clock.nowMilliseconds()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        scanDidFinish(atMilliseconds: now)
     }
 
     public func scanDidFinish(atMilliseconds now: UInt64) {
+        guard acceptsLifecycleOperations else { return }
         buttonScanInFlight = false
         lastScanCompletedAtMilliseconds = now
         isArmed = false
@@ -246,10 +357,14 @@ public actor ScanSnapButtonLifecycleActor {
     }
 
     public func scannerConfigurationDidChange() async {
-        resetForScannerChange(atMilliseconds: await clock.nowMilliseconds())
+        let lifecycleGeneration = lifecycleGeneration
+        let now = await clock.nowMilliseconds()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        resetForScannerChange(atMilliseconds: now)
     }
 
     public func requestRearm() {
+        guard acceptsLifecycleOperations else { return }
         rearmRequested = true
         isArmed = false
         nextArmAtMilliseconds = nil
@@ -274,28 +389,123 @@ public actor ScanSnapButtonLifecycleActor {
         bytes.count >= 12 && Array(bytes[4..<8]) == Array("VENS".utf8)
     }
 
-    private func listen(using transport: any ScanSnapUDPTransport, generation: UInt64) async {
-        do {
-            while !Task.isCancelled {
-                await runMaintenance()
-                if let datagram = try await transport.receive(
-                    maximumBytes: 2_048,
-                    timeoutMilliseconds: configuration.listenerPollMilliseconds
-                ) {
-                    _ = await processNotice(datagram)
+    private func superviseListener(
+        startingWith initialTransport: any ScanSnapUDPTransport,
+        listenerGeneration: UInt64,
+        lifecycleGeneration: UInt64
+    ) async {
+        var transport: (any ScanSnapUDPTransport)? = initialTransport
+        var consecutiveFailures = 0
+
+        while !Task.isCancelled, isCurrentListener(
+            listenerGeneration: listenerGeneration,
+            lifecycleGeneration: lifecycleGeneration
+        ) {
+            if transport == nil {
+                do {
+                    try await sleeper.sleep(
+                        milliseconds: listenerRetryDelayMilliseconds(after: consecutiveFailures)
+                    )
+                    try Task.checkCancellation()
+                    guard isCurrentListener(
+                        listenerGeneration: listenerGeneration,
+                        lifecycleGeneration: lifecycleGeneration
+                    ) else { break }
+
+                    let replacement = try await udpTransportFactory.makeTransport()
+                    guard isCurrentListener(
+                        listenerGeneration: listenerGeneration,
+                        lifecycleGeneration: lifecycleGeneration
+                    ) else {
+                        await replacement.close()
+                        break
+                    }
+                    do {
+                        let port = try await replacement.bind(
+                            to: .anyIPv4(port: configuration.listenerPort),
+                            allowsBroadcast: false
+                        )
+                        guard isCurrentListener(
+                            listenerGeneration: listenerGeneration,
+                            lifecycleGeneration: lifecycleGeneration
+                        ) else {
+                            await replacement.close()
+                            break
+                        }
+                        transport = replacement
+                        listenerTransport = replacement
+                        boundPort = port
+                        isRunning = true
+                    } catch {
+                        await replacement.close()
+                        throw error
+                    }
+                } catch is CancellationError {
+                    break
+                } catch {
+                    consecutiveFailures = min(consecutiveFailures + 1, 64)
+                    JLog.warning("ScanSnap button listener restart failed: \(error)")
+                    continue
                 }
             }
-        } catch is CancellationError {
-            // Normal service shutdown.
-        } catch {
-            // A transport failure ends this listener generation; integration may restart it.
+
+            guard let activeTransport = transport else { continue }
+            do {
+                let now = await clock.nowMilliseconds()
+                guard isCurrentListener(
+                    listenerGeneration: listenerGeneration,
+                    lifecycleGeneration: lifecycleGeneration
+                ) else { break }
+                await runMaintenance(
+                    atMilliseconds: now,
+                    lifecycleGeneration: lifecycleGeneration
+                )
+                guard isCurrentListener(
+                    listenerGeneration: listenerGeneration,
+                    lifecycleGeneration: lifecycleGeneration
+                ) else { break }
+
+                let datagram = try await activeTransport.receive(
+                    maximumBytes: 2_048,
+                    timeoutMilliseconds: configuration.listenerPollMilliseconds
+                )
+                guard isCurrentListener(
+                    listenerGeneration: listenerGeneration,
+                    lifecycleGeneration: lifecycleGeneration
+                ) else { break }
+                consecutiveFailures = 0
+                if let datagram {
+                    _ = await processNotice(
+                        datagram,
+                        atMilliseconds: await clock.nowMilliseconds(),
+                        lifecycleGeneration: lifecycleGeneration
+                    )
+                }
+            } catch is CancellationError {
+                break
+            } catch {
+                consecutiveFailures = min(consecutiveFailures + 1, 64)
+                JLog.warning("ScanSnap button listener failed; retrying: \(error)")
+                await activeTransport.close()
+                transport = nil
+                listenerTransport = nil
+                boundPort = nil
+                isRunning = false
+            }
         }
-        await transport.close()
-        finishListener(generation: generation)
+
+        await transport?.close()
+        finishListener(
+            listenerGeneration: listenerGeneration,
+            lifecycleGeneration: lifecycleGeneration
+        )
     }
 
-    private func finishListener(generation: UInt64) {
-        guard generation == listenerGeneration else { return }
+    private func finishListener(listenerGeneration: UInt64, lifecycleGeneration: UInt64) {
+        guard isCurrentListener(
+            listenerGeneration: listenerGeneration,
+            lifecycleGeneration: lifecycleGeneration
+        ) else { return }
         listenerTask = nil
         listenerTransport = nil
         boundPort = nil
@@ -304,16 +514,19 @@ public actor ScanSnapButtonLifecycleActor {
 
     private func checkReachabilityAndArm(
         scanner: ScanSnapButtonScannerConfiguration,
-        now: UInt64
+        now: UInt64,
+        lifecycleGeneration: UInt64
     ) async {
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
         nextReachabilityAtMilliseconds = adding(configuration.reachabilityIntervalMilliseconds, to: now)
-        let generation = scannerConfigurationGeneration
+        let scannerConfigurationGeneration = scannerConfigurationGeneration
         let reachable = await reachability.isReachable(
             scanner: scanner,
             port: configuration.reachabilityPort,
             timeoutMilliseconds: configuration.reachabilityTimeoutMilliseconds
         )
-        guard generation == scannerConfigurationGeneration,
+        guard isCurrentLifecycle(lifecycleGeneration),
+              scannerConfigurationGeneration == self.scannerConfigurationGeneration,
               scanner == lastScannerConfiguration
         else {
             return
@@ -322,11 +535,14 @@ public actor ScanSnapButtonLifecycleActor {
             isArmed = false
             return
         }
-        beginArming(scanner: scanner)
+        beginArming(scanner: scanner, lifecycleGeneration: lifecycleGeneration)
     }
 
-    private func beginArming(scanner: ScanSnapButtonScannerConfiguration) {
-        guard !isArming else { return }
+    private func beginArming(
+        scanner: ScanSnapButtonScannerConfiguration,
+        lifecycleGeneration: UInt64
+    ) {
+        guard isCurrentLifecycle(lifecycleGeneration), !isArming else { return }
         isArming = true
         nextArmAtMilliseconds = nil
         armingGeneration &+= 1
@@ -339,16 +555,25 @@ public actor ScanSnapButtonLifecycleActor {
             } catch {
                 succeeded = false
             }
-            await self?.finishArming(succeeded: succeeded, generation: generation)
+            await self?.finishArming(
+                succeeded: succeeded,
+                generation: generation,
+                lifecycleGeneration: lifecycleGeneration
+            )
         }
     }
 
-    private func finishArming(succeeded: Bool, generation: UInt64) async {
-        guard acceptsArmingResults, generation == armingGeneration else { return }
+    private func finishArming(
+        succeeded: Bool,
+        generation: UInt64,
+        lifecycleGeneration: UInt64
+    ) async {
+        guard isCurrentLifecycle(lifecycleGeneration), generation == armingGeneration else { return }
+        let now = await clock.nowMilliseconds()
+        guard isCurrentLifecycle(lifecycleGeneration), generation == armingGeneration else { return }
         armingTask = nil
         isArming = false
         isArmed = succeeded
-        let now = await clock.nowMilliseconds()
         if succeeded {
             nextArmAtMilliseconds = adding(configuration.armIntervalMilliseconds, to: now)
         } else {
@@ -391,5 +616,21 @@ public actor ScanSnapButtonLifecycleActor {
     private func adding(_ interval: UInt64, to instant: UInt64) -> UInt64 {
         let (result, overflow) = instant.addingReportingOverflow(interval)
         return overflow ? .max : result
+    }
+
+    private func isCurrentLifecycle(_ generation: UInt64) -> Bool {
+        acceptsLifecycleOperations && generation == lifecycleGeneration
+    }
+
+    private func isCurrentListener(
+        listenerGeneration: UInt64,
+        lifecycleGeneration: UInt64
+    ) -> Bool {
+        listenerGeneration == self.listenerGeneration && isCurrentLifecycle(lifecycleGeneration)
+    }
+
+    private func listenerRetryDelayMilliseconds(after failureCount: Int) -> UInt64 {
+        let exponent = min(max(failureCount - 1, 0), 5)
+        return min(100 << exponent, 3_000)
     }
 }

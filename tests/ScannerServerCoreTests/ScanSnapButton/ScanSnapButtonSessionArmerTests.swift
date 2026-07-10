@@ -14,14 +14,21 @@ private let fixedButtonTimestamp = ScanSnapTimestamp(
 func buttonArmingInitializationSequence() async throws {
     let pairing = ButtonFakePairing()
     let response = vensResponse()
+    let timeline = ButtonEventTimeline()
     let dataConnection = ButtonFakeTCPConnection(
-        readChunks: [[UInt8](repeating: 0, count: 16)] + Array(repeating: response, count: 7)
+        label: "data",
+        readChunks: [[UInt8](repeating: 0, count: 16)] + Array(repeating: response, count: 7),
+        timeline: timeline
     )
     let control13 = ButtonFakeTCPConnection(
-        readChunks: [[UInt8](repeating: 0, count: 16), response]
+        label: "control13",
+        readChunks: [[UInt8](repeating: 0, count: 16), response],
+        timeline: timeline
     )
     let control30 = ButtonFakeTCPConnection(
-        readChunks: [[UInt8](repeating: 0, count: 16), response]
+        label: "control30",
+        readChunks: [[UInt8](repeating: 0, count: 16), response],
+        timeline: timeline
     )
     let tcpFactory = ButtonFakeTCPFactory(
         dataConnection: dataConnection,
@@ -58,6 +65,35 @@ func buttonArmingInitializationSequence() async throws {
     #expect(await dataConnection.isClosed)
     #expect(await control13.isClosed)
     #expect(await control30.isClosed)
+    #expect(await timeline.events == [
+        "data.connect",
+        "data.read.0",
+        "control13.connect",
+        "control13.read.0",
+        "control13.write.0",
+        "control13.read.1",
+        "control13.close",
+        "data.write.0",
+        "data.read.1",
+        "control30.connect",
+        "control30.read.0",
+        "control30.write.0",
+        "control30.read.1",
+        "control30.close",
+        "data.write.1",
+        "data.read.2",
+        "data.write.2",
+        "data.read.3",
+        "data.write.3",
+        "data.read.4",
+        "data.write.4",
+        "data.read.5",
+        "data.write.5",
+        "data.read.6",
+        "data.write.6",
+        "data.read.7",
+        "data.close",
+    ])
 }
 
 @Test("Busy pairing exhaustion prevents data-port initialization")
