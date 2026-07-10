@@ -111,11 +111,16 @@ public enum ScannerSetupOutcome: String, Sendable {
 
 public protocol ScannerSetupServing: Sendable {
     func state() async -> ScannerSetupState
+    func ensureDiscoveryStarted() async
     func discover() async -> ScannerSetupOutcome
     func select(deviceID: String) async -> ScannerSetupOutcome
     func configureManually(ipAddress: String, macAddress: String, serial: String) async -> ScannerSetupOutcome
     func savePassword(_ password: String) async -> ScannerSetupOutcome
     func clear() async -> ScannerSetupOutcome
+}
+
+public extension ScannerSetupServing {
+    func ensureDiscoveryStarted() async {}
 }
 
 public actor StoredScannerSetupService: ScannerSetupServing {
@@ -223,7 +228,10 @@ public struct ScannerServerDependencies: Sendable {
             scanJobs: ScanJobActor(executor: processExecutor, ocrQueue: ocrQueue),
             ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
-            scannerSetup: StoredScannerSetupService(store: ScannerConfigStore(environment: environment)),
+            scannerSetup: ScanSnapSetupService(
+                environment: environment,
+                store: ScannerConfigStore(environment: environment)
+            ),
             previewProvider: NativeScanPreviewProvider(executor: processExecutor),
             environment: environment
         )
@@ -558,6 +566,10 @@ private func indexResponse(
         at: dependencies.outputPathResolver.outputDirectory,
         withIntermediateDirectories: true
     )
+    let wifiBackend = dependencies.environment["SCAN_BACKEND", default: "wifi"] == "wifi"
+    if wifiBackend {
+        await dependencies.scannerSetup.ensureDiscoveryStarted()
+    }
     let settings = try await dependencies.settingsStore.load()
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
@@ -569,7 +581,7 @@ private func indexResponse(
         editModeID: query["edit_mode"],
         setupMessageCode: query["setup"],
         setup: setup,
-        wifiBackend: dependencies.environment["SCAN_BACKEND", default: "wifi"] == "wifi",
+        wifiBackend: wifiBackend,
         job: job,
         ocr: ocr,
         groups: groups

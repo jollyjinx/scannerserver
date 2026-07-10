@@ -4,6 +4,41 @@ import Testing
 
 @Suite("Live ScanSnap setup service")
 struct ScanSnapSetupServiceTests {
+    @Test("Automatic discovery starts once and skips configured scanners")
+    func automaticDiscoveryGuard() async throws {
+        let discovery = FakeScanSnapSetupDiscovery([.devices([])])
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: ["SCANSNAP_CLIENT_IP": "192.168.1.10"],
+            store: store,
+            network: FakeScanSnapSetupNetwork(),
+            discovery: discovery,
+            pairing: FakeScanSnapSetupPairing([])
+        )
+
+        await service.ensureDiscoveryStarted()
+        await service.waitForDiscovery()
+        await service.ensureDiscoveryStarted()
+        #expect(await discovery.configurations.count == 1)
+
+        _ = try await store.save(ScannerConfig(
+            status: .configured,
+            scannerIP: "192.168.1.44",
+            pairingKey: "configured-key"
+        ))
+        let configuredDiscovery = FakeScanSnapSetupDiscovery([])
+        let configuredService = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(),
+            discovery: configuredDiscovery,
+            pairing: FakeScanSnapSetupPairing([])
+        )
+        await configuredService.ensureDiscoveryStarted()
+        #expect(await configuredDiscovery.configurations.isEmpty)
+    }
+
     @Test("Discovery is asynchronous, derives routes, filters ARP, and deduplicates")
     func discoveryStateRoutesAndDeduplication() async throws {
         let interface = try ScanSnapSetupIPv4Interface(

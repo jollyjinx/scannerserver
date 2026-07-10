@@ -86,6 +86,15 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         status
     }
 
+    public func ensureDiscoveryStarted() async {
+        guard status == .idle, discoveryTask == nil,
+              await store.activeConfiguration() == nil
+        else {
+            return
+        }
+        _ = await discover()
+    }
+
     public func discover() async -> ScannerSetupOutcome {
         guard discoveryTask == nil else { return .discoveryStarted }
         status = .running
