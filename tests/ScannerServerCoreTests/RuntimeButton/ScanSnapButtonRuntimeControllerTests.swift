@@ -25,7 +25,9 @@ struct ScanSnapButtonRuntimeControllerTests {
                 environment: environment,
                 scannerStore: scannerStore,
                 settingsStore: settingsStore,
-                scanJobs: ScanJobActor(executor: RuntimeButtonProcessExecutor()),
+                scanJobs: ScanJobActor(
+                    nativeScanner: ProcessBackedTestScanner(RuntimeButtonProcessExecutor())
+                ),
                 network: RuntimeButtonFakeNetwork(),
                 udpTransportFactory: factory,
                 reachability: RuntimeButtonUnreachable(),
@@ -61,7 +63,9 @@ struct ScanSnapButtonRuntimeControllerTests {
                 fileURL: directory.appendingPathComponent("settings.json"),
                 environment: environment
             ),
-            scanJobs: ScanJobActor(executor: RuntimeButtonProcessExecutor()),
+            scanJobs: ScanJobActor(
+                nativeScanner: ProcessBackedTestScanner(RuntimeButtonProcessExecutor())
+            ),
             network: RuntimeButtonFakeNetwork(),
             udpTransportFactory: factory,
             reachability: RuntimeButtonUnreachable(),

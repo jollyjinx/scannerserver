@@ -28,7 +28,7 @@ public enum PreviewFallback: Equatable, Sendable {
     }
 }
 
-/// Captures the dimensions, quality, and fallback used by app.py's preview helpers.
+/// Captures the dimensions, quality, and fallback required by the preview contract.
 public struct PreviewToolRequest: Equatable, Sendable {
     public let sourcePath: String
     public let destinationPath: String

@@ -43,7 +43,7 @@ struct ScanSnapButtonScanDispatcherTests {
             environment: environment
         ))
         let executor = RuntimeButtonProcessExecutor()
-        let scanJobs = ScanJobActor(executor: executor)
+        let scanJobs = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
         let dispatcher = ScanJobButtonScanDispatcher(
             scanJobs: scanJobs,
             scannerStore: scannerStore,

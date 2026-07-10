@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Scan settings")
 struct ScanSettingsTests {
-    @Test("Built-in modes and button default match app.py")
+    @Test("Built-in modes and button default preserve the legacy contract")
     func builtIns() {
         let settings = ScanSettings.defaults(environment: [:])
 
@@ -37,7 +37,7 @@ struct ScanSettingsTests {
         #expect(settings.mode(id: "photo-png")?.settings.resolution == "600")
     }
 
-    @Test("Existing app.py JSON normalizes duplicate IDs and invalid values")
+    @Test("Existing settings JSON normalizes duplicate IDs and invalid values")
     func existingJSONShape() throws {
         let data = Data(#"""
         {
@@ -150,7 +150,7 @@ struct ScanSettingsTests {
         #expect(!FileManager.default.fileExists(atPath: file.path + ".tmp"))
     }
 
-    @Test("Store paths and partial JSON inherit the app.py environment")
+    @Test("Store paths and partial JSON inherit the service environment")
     func environmentPathsAndPartialJSON() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScanSettingsTests-\(UUID().uuidString)", isDirectory: true)

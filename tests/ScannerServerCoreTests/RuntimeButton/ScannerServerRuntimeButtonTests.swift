@@ -98,7 +98,7 @@ private struct RuntimeButtonCompositionFixture {
         dependencies = ScannerServerDependencies(
             settingsStore: ScanSettingsStore(environment: environment),
             scannerStore: ScannerConfigStore(environment: environment),
-            scanJobs: ScanJobActor(executor: processExecutor),
+            scanJobs: ScanJobActor(nativeScanner: ProcessBackedTestScanner(processExecutor)),
             ocrQueue: OCRQueueActor(executor: processExecutor),
             outputPathResolver: ScanOutputPathResolver(outputDirectory: root),
             scannerSetup: StoredScannerSetupService(

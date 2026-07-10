@@ -3,7 +3,7 @@ title: Swift Migration Plan
 description: Plan for migrating scannerserver to a Swift 6.3 Linux service while preserving the container contract.
 type: plan
 audience: maintainers
-status: active
+status: current
 ---
 
 # Swift Migration Plan
@@ -12,7 +12,22 @@ status: active
 
 Replace the long-running Python scannerserver with a Swift 6.3 Linux service that remains a drop-in container replacement for current users.
 
-The first successful replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
+The replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
+
+Implementation and container cutover are complete. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, and the UDP button listener have been exercised against the project iX500. A physical scan, OCR result, and button press remain release acceptance tasks because they require interaction with the scanner and the complete Linux acquisition toolchain.
+
+## Progress
+
+| Milestone | Status |
+| --- | --- |
+| Baseline, package skill, and compatibility contract | Complete |
+| SwiftPM scaffold and Swift 6.3 service | Complete |
+| Settings, HTTP UI, and route parity | Complete |
+| Scan pipeline and OCR queue | Complete |
+| Native ScanSnap discovery, pairing, and button runtime | Complete |
+| Native document and preview helpers | Complete |
+| Default container cutover | Complete |
+| Physical scan, OCR, and button acceptance | Pending manual validation |
 
 ## Measured Baseline
 
@@ -21,9 +36,9 @@ Measurements use the ARM64 production containers at idle after the index and hea
 | Runtime | Idle RSS | Threads | Compressed image |
 | --- | ---: | ---: | ---: |
 | Python baseline | 50,164 kB | 2 | 166.3 MB |
-| Swift 6.3.2 migration image | 34,296 kB | 10 | 238.2 MB |
+| Swift 6.3.2 production image | 35,912 kB | 13 | 259.8 MB |
 
-The Swift service currently reduces idle RSS by 31.6%. The transitional image is 71.9 MB larger because it includes the Swift runtime while still retaining OCRmyPDF, Python, Pillow, and pikepdf for compatibility. Milestone 6 owns removing Python packages after those helpers have native replacements.
+The Swift service reduces idle RSS by 28.4%. The image is 93.5 MB larger because it includes the Swift runtime and native qpdf, Poppler, libvips, and ExifTool tooling while retaining OCRmyPDF and its transitive Python runtime for on-demand OCR. No production server, orchestration, button, preview, or document-helper path executes a project Python script.
 
 The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on ARM64 crashes in the compiler while expanding `@TaskLocal` in `swift-service-context`; the same dependency graph builds successfully with 6.3.2. The package remains `swift-tools-version: 6.3` and Swift 6 language mode.
 
@@ -67,13 +82,12 @@ Prefer a lightweight SwiftNIO-based HTTP layer. Hummingbird should be evaluated 
 
 ## Dependency Strategy
 
-Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. That means "all Swift" should be staged:
+Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The implemented boundary is:
 
-1. Replace the always-running Python Flask service, Python button coordinator, and shell orchestration with Swift.
-2. Preserve external native tools for compatibility: SANE tools, Tesseract/OCRmyPDF, image/PDF command-line tools, and possibly the existing `scansnap-wifi` binary during the first milestone.
-3. Port ScanSnap Wi-Fi protocol logic to Swift once the service shell is stable.
-4. Replace Python PDF helper behavior with Swift plus C libraries or native CLI tools. Use qpdf/poppler/mupdf-style tooling if that is simpler and lighter than keeping pikepdf/Pillow.
-5. Treat direct replacement of OCRmyPDF as a later optimization because matching searchable PDF quality is a separate project.
+1. The always-running HTTP service, button coordinator, ScanSnap protocol logic, scan orchestration, settings, and document-processing decisions are Swift.
+2. SANE, Tesseract/OCRmyPDF, qpdf, Poppler, libvips, ExifTool, `img2pdf`, and the existing `scansnap-wifi` acquisition binary remain subprocess tools.
+3. Project-owned Python and scan-orchestration shell helpers are removed from the production image and repository.
+4. Direct replacement of OCRmyPDF is deferred because matching searchable PDF quality is a separate project and Python is not resident while the service is idle.
 
 ## Milestones
 
@@ -120,7 +134,7 @@ Acceptance:
 
 ### 4. Scan Pipeline
 
-- Replace `scan_once.sh` orchestration with Swift process execution.
+- Replace the legacy scan orchestration with Swift process execution.
 - Keep the first implementation calling known-good external tools where that reduces risk.
 - Preserve SANE fallback, Wi-Fi backend invocation, output naming, blank-page removal, crop, metadata, split, PNG export, and OCR queue semantics.
 - Replace tiny Python JSON parsing in the shell path with Swift config loading.

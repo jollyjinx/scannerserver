@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Mode settings")
 struct ModeSettingsTests {
-    @Test("Defaults match app.py")
+    @Test("Defaults preserve the legacy service contract")
     func defaults() {
         let settings = ModeSettings(environment: [:])
 

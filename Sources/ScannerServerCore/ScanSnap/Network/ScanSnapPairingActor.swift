@@ -217,7 +217,7 @@ public actor ScanSnapPairingActor {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            // Release mirrors the Python transport's best-effort session cleanup.
+            // Preserve best-effort session cleanup after pairing attempts.
         }
     }
 

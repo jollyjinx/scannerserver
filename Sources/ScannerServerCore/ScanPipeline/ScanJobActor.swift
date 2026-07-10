@@ -23,48 +23,26 @@ public struct ScanJobState: Equatable, Sendable {
 }
 
 public actor ScanJobActor {
-    private enum ExecutionStrategy: Sendable {
-        case process(any ProcessExecutor)
-        case native(any NativeScanExecuting)
-    }
-
-    private let executionStrategy: ExecutionStrategy
+    private let nativeScanner: any NativeScanExecuting
     private let ocrQueue: OCRQueueActor?
     private var worker: Task<Void, Never>?
     private var jobState = ScanJobState()
 
-    public init(executor: any ProcessExecutor, ocrQueue: OCRQueueActor? = nil) {
-        executionStrategy = .process(executor)
-        self.ocrQueue = ocrQueue
-    }
-
     public init(nativeScanner: any NativeScanExecuting, ocrQueue: OCRQueueActor? = nil) {
-        executionStrategy = .native(nativeScanner)
+        self.nativeScanner = nativeScanner
         self.ocrQueue = ocrQueue
     }
 
     public var state: ScanJobState { jobState }
 
     @discardableResult
-    public func start(
-        configuration: ScanPipelineConfiguration,
-        workingDirectory: URL? = nil
-    ) -> Bool {
+    public func start(configuration: ScanPipelineConfiguration) -> Bool {
         guard worker == nil else { return false }
 
         jobState = ScanJobState(started: Date(), status: "running")
         worker = Task {
             do {
-                let result: ProcessResult
-                switch executionStrategy {
-                case .process(let executor):
-                    result = try await executor.execute(ScanPipelineCommands.scan(
-                        configuration: configuration,
-                        workingDirectory: workingDirectory
-                    ))
-                case .native(let scanner):
-                    result = try await scanner.scan(configuration: configuration)
-                }
+                let result = try await nativeScanner.scan(configuration: configuration)
                 await finish(result: result, configuration: configuration)
             } catch is CancellationError {
                 finishCancellation()

@@ -12,6 +12,8 @@ status: current
 
 It runs on a Raspberry Pi or other Linux host, finds the iX500 on your local network, and lets you scan from a web page or by pressing the scanner's physical button. Scans are written to a host directory as PDFs, with OCR running in the background.
 
+The service is implemented as a Swift 6.3 package. Its long-running process is native Swift; OCRmyPDF, Tesseract, qpdf, Poppler, libvips, ExifTool, SANE, and the ScanSnap acquisition utility remain external command-line tools invoked only for scan processing.
+
 ## Quick Start
 
 On the Linux host that can reach the scanner, create a scan directory and start the container:

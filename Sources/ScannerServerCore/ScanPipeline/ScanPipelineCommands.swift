@@ -1,17 +1,6 @@
 import Foundation
 
 public enum ScanPipelineCommands {
-    public static func scan(
-        configuration: ScanPipelineConfiguration,
-        workingDirectory: URL? = nil
-    ) -> ProcessRequest {
-        return ProcessRequest(
-            executable: "scan-once",
-            environment: configuration.environment,
-            workingDirectory: workingDirectory
-        )
-    }
-
     public static func ocr(
         inputPath: String,
         environment: [String: String]? = nil,
@@ -35,16 +24,6 @@ public enum ScanPipelineCommands {
         )
     }
 
-    public static func listScanners(
-        environment: [String: String]? = nil,
-        workingDirectory: URL? = nil
-    ) -> ProcessRequest {
-        ProcessRequest(
-            executable: "list-scanners",
-            environment: environment,
-            workingDirectory: workingDirectory
-        )
-    }
 }
 
 public enum OCRInputPath {

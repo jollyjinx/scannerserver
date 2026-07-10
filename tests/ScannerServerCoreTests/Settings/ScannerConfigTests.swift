@@ -49,7 +49,7 @@ struct ScannerConfigTests {
         #expect(config.pairingKeyMasked.isEmpty)
     }
 
-    @Test("MAC normalization matches app.py")
+    @Test("MAC normalization preserves the legacy contract")
     func macNormalization() throws {
         #expect(try ScannerConfig.normalizeMACAddress("84-25-3F 00.11.22") == "84:25:3f:00:11:22")
         #expect(throws: SettingsValidationError.invalidMACAddress) {
@@ -127,7 +127,7 @@ struct ScannerConfigTests {
         #expect(await store.activeConfiguration() == nil)
     }
 
-    @Test("Scanner config path follows app.py environment precedence")
+    @Test("Scanner config path follows service environment precedence")
     func environmentPath() {
         #expect(
             ScannerConfigStore.defaultFileURL(environment: ["SCAN_OUTPUT_DIR": "/tmp/scans"]).path

@@ -52,7 +52,7 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("Mode forms use Python field names, persist settings, and redirect with 303")
+    @Test("Mode forms preserve field names, persist settings, and redirect with 303")
     func modeForms() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
         defer { fixture.remove() }
@@ -288,7 +288,7 @@ private struct HTTPFixture: Sendable {
         environment["SCANNER_CONFIG_PATH"] = outputDirectory.appendingPathComponent(".scannerserver-scanner.json").path
         self.environment = environment
         settingsStore = ScanSettingsStore(environment: environment)
-        scanJobs = ScanJobActor(executor: executor)
+        scanJobs = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
         self.executor = executor
     }
 

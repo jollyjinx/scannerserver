@@ -191,7 +191,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         } catch is CancellationError {
             return .unavailable
         } catch {
-            // Python setup accepts an IP-only record when direct lookup cannot wake the scanner.
+            // Compatibility requires an IP-only record when direct lookup cannot wake the scanner.
         }
         return await configure(record)
     }

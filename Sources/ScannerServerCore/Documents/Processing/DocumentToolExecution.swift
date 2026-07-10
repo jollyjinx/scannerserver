@@ -39,7 +39,7 @@ public enum DocumentProcessingError: Error, Equatable, LocalizedError, Sendable 
         result: ProcessResult
     )
 
-    /// Status presented to shell-compatible callers of the former scan_once.sh workflow.
+    /// Status presented to compatibility-oriented document processing callers.
     public var compatibleExitStatus: Int32 {
         switch self {
         case .subprocessFailed(_, _, let result):

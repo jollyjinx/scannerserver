@@ -89,7 +89,10 @@ struct RuntimeOCRCompositionTests {
             .suspended(ProcessResult(exitStatus: 0)),
         ])
         let ocrQueue = OCRQueueActor(executor: executor)
-        let scanJobs = ScanJobActor(executor: executor, ocrQueue: ocrQueue)
+        let scanJobs = ScanJobActor(
+            nativeScanner: ProcessBackedTestScanner(executor),
+            ocrQueue: ocrQueue
+        )
         let dependencies = fixture.dependencies(scanJobs: scanJobs, ocrQueue: ocrQueue)
         let runtime = ScannerServerRuntime(dependencies: dependencies)
 
@@ -128,12 +131,6 @@ private struct LiveCommandFixture {
             at: tools.appendingPathComponent("img2pdf"),
             contents: "#!/bin/sh\nset -eu\nfor argument; do\n  if [ \"${previous:-}\" = -o ]; then output=$argument; fi\n  previous=$argument\ndone\n: > \"$output\"\n"
         )
-        for helper in ["remove-blank-pages", "crop-pdf-pages"] {
-            try Self.writeExecutable(
-                at: tools.appendingPathComponent(helper),
-                contents: "#!/bin/sh\nset -eu\n"
-            )
-        }
         try Self.writeExecutable(
             at: tools.appendingPathComponent("exiftool"),
             contents: "#!/bin/sh\nset -eu\n"
@@ -153,6 +150,8 @@ private struct LiveCommandFixture {
         environment["SCAN_PAGE_MODE"] = "single"
         environment["SCAN_TIMESTAMP"] = timestamp
         environment["SCAN_OCR_ENABLED"] = "true"
+        environment["SCAN_REMOVE_BLANK_PAGES"] = "false"
+        environment["SCAN_CROP_PAGES"] = "false"
         environment["SCAN_OUTPUT_DIR"] = scans.path
         environment["SCAN_SETTINGS_PATH"] = scans.appendingPathComponent(".scanner-settings.json").path
         environment["SCANNER_CONFIG_PATH"] = scans.appendingPathComponent(".scannerserver-scanner.json").path
@@ -192,7 +191,9 @@ private struct HTTPRuntimeFixture {
     ) -> ScannerServerDependencies {
         ScannerServerDependencies(
             settingsStore: ScanSettingsStore(environment: environment),
-            scanJobs: scanJobs ?? ScanJobActor(executor: RuntimeOCRProcessExecutor(stubs: [])),
+            scanJobs: scanJobs ?? ScanJobActor(
+                nativeScanner: ProcessBackedTestScanner(RuntimeOCRProcessExecutor(stubs: []))
+            ),
             ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: StoredScannerSetupService(store: ScannerConfigStore(environment: environment)),

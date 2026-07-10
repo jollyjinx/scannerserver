@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Document processing orchestration")
 struct DocumentProcessingOrchestratorTests {
-    @Test("Commands execute in scan_once.sh order")
+    @Test("Commands execute in compatibility pipeline order")
     func commandOrder() async throws {
         let executor = FakeDocumentProcessExecutor(stubs: [
             .result(ProcessResult(exitStatus: 0)),
@@ -131,7 +131,7 @@ struct DocumentProcessingOrchestratorTests {
         #expect(result.outputPaths == ["/scans/first output.pdf", "/scans/second.pdf"])
     }
 
-    @Test("No emitted paths maps to scan_once.sh exit status 2")
+    @Test("No emitted paths maps to compatibility exit status 2")
     func missingFinalOutput() async throws {
         let finalResult = ProcessResult(exitStatus: 0, standardOutput: " \n\r\n")
         let executor = FakeDocumentProcessExecutor(stubs: [

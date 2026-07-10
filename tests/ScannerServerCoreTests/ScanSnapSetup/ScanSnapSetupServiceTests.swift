@@ -171,7 +171,7 @@ struct ScanSnapSetupServiceTests {
         #expect(call.configuration.scannerIPAddress == device.ipAddress)
     }
 
-    @Test("Manual MAC and IP lookup preserve Python outcomes")
+    @Test("Manual MAC and IP lookup preserve legacy outcomes")
     func manualLookupOutcomes() async throws {
         let found = setupDevice(serial: "")
         let discovery = FakeScanSnapSetupDiscovery([

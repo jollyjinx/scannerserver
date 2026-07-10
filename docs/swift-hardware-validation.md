@@ -14,7 +14,7 @@ Run this checklist against a real ScanSnap iX500 before publishing the Swift ima
 
 ```bash
 container build \
-  --file scannerserver.product.dockerfile \
+  --file Dockerfile \
   --tag scannerserver-swift:hardware \
   .
 
@@ -50,7 +50,7 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 - Verify source naming follows `YYYY-MM-DD.HHMMSS.pdf` and the file opens successfully.
 - With OCR enabled, wait for the serial OCR queue and verify the matching `.ocr.pdf` is searchable.
 - Test simplex, single-page PDF, and PNG modes; verify page numbers use four digits.
-- Enable blank-page removal and crop with the existing fixture document and compare the result with the Python image.
+- Enable blank-page removal and crop with the existing fixture document and compare the result with a known-good legacy image.
 - Confirm creator metadata, previews, inline view, download, selected deletion, and preview-cache deletion.
 
 ## Physical Button
@@ -64,7 +64,7 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 
 ## Restart Compatibility
 
-- Stop the Swift container and copy a known-good Python-generated `.scanner-settings.json` and `.scannerserver-scanner.json` into the scan directory.
+- Stop the Swift container and copy known-good legacy `.scanner-settings.json` and `.scannerserver-scanner.json` files into the scan directory.
 - Restart the Swift container with the same environment and confirm it uses the stored scanner and modes without rewriting their schema.
 - Run one web scan and one button scan, then restart again while OCR output is present.
 - Confirm existing PDF, OCR PDF, PNG, and preview entries remain visible and deletable.

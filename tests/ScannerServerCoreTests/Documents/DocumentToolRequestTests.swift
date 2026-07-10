@@ -55,7 +55,7 @@ struct DocumentToolRequestTests {
         #expect(command.arguments.suffix(2) == ["--keep-original-boxes", "--debug"])
     }
 
-    @Test("Metadata, splitting, and image export commands match Python CLIs")
+    @Test("Metadata, splitting, and image export requests preserve compatibility")
     func positionalCommands() throws {
         let timestamp = try ScanTimestamp(rawValue: "2026-07-10.142305")
         let split = SplitPDFPagesRequest(

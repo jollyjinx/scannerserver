@@ -96,7 +96,7 @@ container compose up -d
 
 ## Build From Source
 
-Local builds are only needed when changing the app or testing Dockerfile changes.
+Local builds are only needed when changing the Swift package or testing Dockerfile changes.
 
 With Compose, add `compose.override.yaml`:
 

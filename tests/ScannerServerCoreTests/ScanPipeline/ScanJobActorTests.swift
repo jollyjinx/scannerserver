@@ -25,7 +25,7 @@ struct ScanJobActorTests {
         let executor = FakeProcessExecutor(stubs: [
             .suspended(ProcessResult(exitStatus: 0, standardOutput: "/scans/scan.pdf\n")),
         ])
-        let actor = ScanJobActor(executor: executor)
+        let actor = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
         let configuration = ScanPipelineConfiguration(environment: [:])
 
         #expect(await actor.start(configuration: configuration))
@@ -51,7 +51,7 @@ struct ScanJobActorTests {
                 standardError: "scanner configuration missing\n"
             )),
         ])
-        let actor = ScanJobActor(executor: executor)
+        let actor = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
 
         #expect(await actor.start(configuration: ScanPipelineConfiguration(environment: [:])))
         await actor.waitUntilIdle()
@@ -64,7 +64,7 @@ struct ScanJobActorTests {
     @Test("Executor failures are recorded")
     func executorFailure() async {
         let executor = FakeProcessExecutor(stubs: [.failure(.expectedFailure)])
-        let actor = ScanJobActor(executor: executor)
+        let actor = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
 
         #expect(await actor.start(configuration: ScanPipelineConfiguration(environment: [:])))
         await actor.waitUntilIdle()
@@ -77,7 +77,7 @@ struct ScanJobActorTests {
         let executor = FakeProcessExecutor(stubs: [
             .suspended(ProcessResult(exitStatus: 0)),
         ])
-        let actor = ScanJobActor(executor: executor)
+        let actor = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
 
         #expect(await actor.start(configuration: ScanPipelineConfiguration(environment: [:])))
         await executor.waitForRequestCount(1)

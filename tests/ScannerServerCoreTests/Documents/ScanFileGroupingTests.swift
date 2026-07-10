@@ -7,7 +7,7 @@ struct ScanFileGroupingTests {
     private let utc = TimeZone(secondsFromGMT: 0)!
 
     @Test(
-        "Variant, kind, rank, and base-name match app.py",
+        "Variant, kind, rank, and base-name preserve the legacy contract",
         arguments: [
             ("2026-07-10.120000.pdf", ScanFileVariant.source, 0, "2026-07-10.120000.pdf", ScanFileKind.sourceScan),
             ("2026-07-10.120000.ocr.pdf", .ocr, 1, "2026-07-10.120000.pdf", .ocrPDF),
@@ -32,7 +32,7 @@ struct ScanFileGroupingTests {
         #expect(file.kind == kind)
     }
 
-    @Test("Documents group, sort, and choose source/OCR/PNG paths like app.py")
+    @Test("Documents preserve legacy grouping, sorting, and preferred paths")
     func groupingAndViewSelection() throws {
         let files = try [
             file("2026-07-09.090000.pdf"),
