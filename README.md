@@ -137,6 +137,7 @@ If discovery still fails but you know the scanner IP, enter the IP address manua
 - [Deployment and builds](docs/deployment.md)
 - [Configuration and scan behavior](docs/configuration.md)
 - [ScanSnap protocol notes](docs/protocol.md)
+- [Swift hardware validation](docs/swift-hardware-validation.md)
 
 ## Documentation Front Matter
 
