@@ -394,11 +394,9 @@ struct NativeDocumentToolExecutorTests {
         ])
     }
 
-    @Test("Unrecognized and malformed requests pass through unchanged")
+    @Test("Malformed native requests fail while unrecognized requests pass through")
     func passThrough() async throws {
         let delegatedResults = [
-            ProcessResult(exitStatus: 0, standardOutput: "blank\n"),
-            ProcessResult(exitStatus: 0, standardOutput: "crop\n"),
             ProcessResult(exitStatus: 4, standardError: "usage\n"),
         ]
         let underlying = FakeNativeDocumentProcessExecutor(stubs: delegatedResults.map { .result($0) })
@@ -407,8 +405,14 @@ struct NativeDocumentToolExecutorTests {
             fileSystem: FakeNativeDocumentFileSystem()
         )
         let requests = [
-            ProcessRequest(executable: "remove-blank-pages", arguments: ["/work/raw.pdf"]),
-            ProcessRequest(executable: "crop-pdf-pages", arguments: ["/work/raw.pdf"]),
+            ProcessRequest(
+                executable: "remove-blank-pages",
+                arguments: ["/work/raw.pdf", "--white-threshold", "256"]
+            ),
+            ProcessRequest(
+                executable: "crop-pdf-pages",
+                arguments: ["/work/raw.pdf", "--min-density", "nan"]
+            ),
             ProcessRequest(executable: "set-pdf-creator", arguments: ["/work/raw.pdf"]),
         ]
 
@@ -416,10 +420,10 @@ struct NativeDocumentToolExecutorTests {
         let second = try await executor.execute(requests[1])
         let third = try await executor.execute(requests[2])
 
-        #expect(first == delegatedResults[0])
-        #expect(second == delegatedResults[1])
-        #expect(third == delegatedResults[2])
-        #expect(await underlying.requests() == requests)
+        #expect(first.exitStatus == 2)
+        #expect(second.exitStatus == 2)
+        #expect(third == delegatedResults[0])
+        #expect(await underlying.requests() == [requests[2]])
     }
 
     private func finalizationRequest(executable: String) -> ProcessRequest {

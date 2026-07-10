@@ -3,6 +3,7 @@ import ScannerServerCore
 
 enum FakeNativeDocumentToolError: Error, Sendable {
     case missingStub
+    case replacementFailed
 }
 
 actor FakeNativeDocumentProcessExecutor: ProcessExecutor {
@@ -79,11 +80,14 @@ final class FakeNativeDocumentFileSystem: NativeDocumentFileSystem, @unchecked S
     private struct State {
         var items: Set<String> = []
         var dimensions: [String: NativeDocumentImageDimensions] = [:]
+        var data: [String: Data] = [:]
         var publicationConflicts: Set<String> = []
+        var replacementFailures: Set<String> = []
         var temporaryDirectoryCount = 0
         var temporaryDirectories: [String] = []
         var removedPaths: [String] = []
         var placements: [Placement] = []
+        var replacements: [Placement] = []
     }
 
     private let lock = NSLock()
@@ -119,6 +123,7 @@ final class FakeNativeDocumentFileSystem: NativeDocumentFileSystem, @unchecked S
                 $0 != url.path && !$0.hasPrefix(prefix)
             })
             state.dimensions = state.dimensions.filter { !$0.key.hasPrefix(prefix) }
+            state.data = state.data.filter { !$0.key.hasPrefix(prefix) }
             state.removedPaths.append(url.path)
         }
     }
@@ -144,6 +149,22 @@ final class FakeNativeDocumentFileSystem: NativeDocumentFileSystem, @unchecked S
         withState { $0.dimensions[url.path] }
     }
 
+    func readData(at url: URL) throws -> Data {
+        try withState { state in
+            guard let data = state.data[url.path] else {
+                throw CocoaError(.fileReadNoSuchFile)
+            }
+            return data
+        }
+    }
+
+    func writeData(_ data: Data, to url: URL) throws {
+        withState { state in
+            state.items.insert(url.path)
+            state.data[url.path] = data
+        }
+    }
+
     func placeFileExclusively(at source: URL, destination: URL) throws {
         try withState { state in
             if state.items.contains(destination.path)
@@ -153,6 +174,20 @@ final class FakeNativeDocumentFileSystem: NativeDocumentFileSystem, @unchecked S
             }
             state.items.insert(destination.path)
             state.placements.append(Placement(
+                source: source.path,
+                destination: destination.path
+            ))
+        }
+    }
+
+    func replaceFileAtomically(at destination: URL, with source: URL) throws {
+        try withState { state in
+            if state.replacementFailures.contains(destination.path) {
+                throw FakeNativeDocumentToolError.replacementFailed
+            }
+            state.items.insert(destination.path)
+            state.items.remove(source.path)
+            state.replacements.append(Placement(
                 source: source.path,
                 destination: destination.path
             ))
@@ -172,9 +207,22 @@ final class FakeNativeDocumentFileSystem: NativeDocumentFileSystem, @unchecked S
         }
     }
 
+    func addData(_ data: Data, at path: String) {
+        withState { state in
+            state.items.insert(path)
+            state.data[path] = data
+        }
+    }
+
     func conflictOnPublication(at path: String) {
         withState { state in
             _ = state.publicationConflicts.insert(path)
+        }
+    }
+
+    func failReplacement(at path: String) {
+        withState { state in
+            _ = state.replacementFailures.insert(path)
         }
     }
 
@@ -192,6 +240,14 @@ final class FakeNativeDocumentFileSystem: NativeDocumentFileSystem, @unchecked S
 
     func recordedPlacements() -> [Placement] {
         withState { $0.placements }
+    }
+
+    func recordedReplacements() -> [Placement] {
+        withState { $0.replacements }
+    }
+
+    func recordedData(at path: String) -> Data? {
+        withState { $0.data[path] }
     }
 
     private func withState<T>(_ body: (inout State) throws -> T) rethrows -> T {

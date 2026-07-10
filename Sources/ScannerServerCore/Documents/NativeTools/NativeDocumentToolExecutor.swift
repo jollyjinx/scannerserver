@@ -6,8 +6,8 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
         let destination: URL
     }
 
-    private let executor: any ProcessExecutor
-    private let fileSystem: any NativeDocumentFileSystem
+    let executor: any ProcessExecutor
+    let fileSystem: any NativeDocumentFileSystem
 
     public init(
         executor: any ProcessExecutor,
@@ -21,6 +21,30 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
         try Task.checkCancellation()
 
         switch request.executable {
+        case "remove-blank-pages":
+            do {
+                return try await removeBlankPages(
+                    options: NativeRemoveBlankPagesOptions(arguments: request.arguments),
+                    request: request
+                )
+            } catch NativeDocumentCommandOptionsError.invalidArguments {
+                return generatedFailure(
+                    status: 2,
+                    diagnostic: "remove-blank-pages: invalid arguments"
+                )
+            }
+        case "crop-pdf-pages":
+            do {
+                return try await cropPDFPages(
+                    options: NativeCropPDFPagesOptions(arguments: request.arguments),
+                    request: request
+                )
+            } catch NativeDocumentCommandOptionsError.invalidArguments {
+                return generatedFailure(
+                    status: 2,
+                    diagnostic: "crop-pdf-pages: invalid arguments"
+                )
+            }
         case "set-pdf-creator":
             guard request.arguments.count == 3, request.arguments[1] == "--creator" else {
                 return try await executor.execute(request)
@@ -306,7 +330,7 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
         )
     }
 
-    private func largestPNG(in files: [URL]) throws -> URL? {
+    func largestPNG(in files: [URL]) throws -> URL? {
         var largest: (url: URL, pixels: UInt64)?
         for file in files {
             guard let dimensions = try fileSystem.pngDimensions(at: file) else { continue }
@@ -354,7 +378,7 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
         )
     }
 
-    private func nativeRequest(
+    func nativeRequest(
         executable: String,
         arguments: [String],
         inheriting request: ProcessRequest
@@ -367,7 +391,7 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
         )
     }
 
-    private func resolvedURL(
+    func resolvedURL(
         _ path: String,
         request: ProcessRequest,
         isDirectory: Bool
@@ -392,14 +416,14 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
         )
     }
 
-    private func generatedFailure(status: Int32, diagnostic: String) -> ProcessResult {
+    func generatedFailure(status: Int32, diagnostic: String) -> ProcessResult {
         ProcessResult(
             exitStatus: status,
             standardError: diagnostic.hasSuffix("\n") ? diagnostic : "\(diagnostic)\n"
         )
     }
 
-    private func joinedDiagnostics(_ first: String, _ second: String) -> String {
+    func joinedDiagnostics(_ first: String, _ second: String) -> String {
         guard !first.isEmpty else { return second }
         guard !second.isEmpty else { return first }
         return first.hasSuffix("\n") ? first + second : first + "\n" + second

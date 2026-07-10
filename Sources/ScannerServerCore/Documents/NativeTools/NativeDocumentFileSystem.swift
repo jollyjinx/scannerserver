@@ -42,7 +42,10 @@ public protocol NativeDocumentFileSystem: Sendable {
         pathExtension: String
     ) throws -> [URL]
     func pngDimensions(at url: URL) throws -> NativeDocumentImageDimensions?
+    func readData(at url: URL) throws -> Data
+    func writeData(_ data: Data, to url: URL) throws
     func placeFileExclusively(at source: URL, destination: URL) throws
+    func replaceFileAtomically(at destination: URL, with source: URL) throws
 }
 
 public struct FoundationNativeDocumentFileSystem: NativeDocumentFileSystem {
@@ -113,6 +116,14 @@ public struct FoundationNativeDocumentFileSystem: NativeDocumentFileSystem {
         )
     }
 
+    public func readData(at url: URL) throws -> Data {
+        try Data(contentsOf: url)
+    }
+
+    public func writeData(_ data: Data, to url: URL) throws {
+        try data.write(to: url, options: .atomic)
+    }
+
     public func placeFileExclusively(at source: URL, destination: URL) throws {
         let result = source.path.withCString { sourcePath in
             destination.path.withCString { destinationPath in
@@ -127,6 +138,29 @@ public struct FoundationNativeDocumentFileSystem: NativeDocumentFileSystem {
             throw NSError(
                 domain: NSPOSIXErrorDomain,
                 code: Int(errorNumber),
+                userInfo: [NSFilePathErrorKey: destination.path]
+            )
+        }
+    }
+
+    public func replaceFileAtomically(at destination: URL, with source: URL) throws {
+        let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
+        if let permissions = attributes[.posixPermissions] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: permissions],
+                ofItemAtPath: source.path
+            )
+        }
+
+        let result = source.path.withCString { sourcePath in
+            destination.path.withCString { destinationPath in
+                rename(sourcePath, destinationPath)
+            }
+        }
+        guard result == 0 else {
+            throw NSError(
+                domain: NSPOSIXErrorDomain,
+                code: Int(errno),
                 userInfo: [NSFilePathErrorKey: destination.path]
             )
         }
