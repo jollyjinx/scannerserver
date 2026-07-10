@@ -188,6 +188,7 @@ public struct CompatibleScanPreviewProvider: ScanPreviewProviding {
 public struct ScannerServerDependencies: Sendable {
     public let settingsStore: ScanSettingsStore
     public let scanJobs: ScanJobActor
+    public let ocrQueue: OCRQueueActor
     public let outputPathResolver: ScanOutputPathResolver
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
@@ -196,6 +197,7 @@ public struct ScannerServerDependencies: Sendable {
     public init(
         settingsStore: ScanSettingsStore,
         scanJobs: ScanJobActor,
+        ocrQueue: OCRQueueActor? = nil,
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
@@ -203,6 +205,7 @@ public struct ScannerServerDependencies: Sendable {
     ) {
         self.settingsStore = settingsStore
         self.scanJobs = scanJobs
+        self.ocrQueue = ocrQueue ?? OCRQueueActor(executor: FoundationProcessExecutor())
         self.outputPathResolver = outputPathResolver
         self.scannerSetup = scannerSetup
         self.previewProvider = previewProvider
@@ -213,9 +216,12 @@ public struct ScannerServerDependencies: Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ScannerServerDependencies {
         let outputDirectory = URL(fileURLWithPath: environment["SCAN_OUTPUT_DIR"] ?? "/scans", isDirectory: true)
+        let processExecutor = FoundationProcessExecutor()
+        let ocrQueue = OCRQueueActor(executor: processExecutor)
         return ScannerServerDependencies(
             settingsStore: ScanSettingsStore(environment: environment),
-            scanJobs: ScanJobActor(executor: FoundationProcessExecutor()),
+            scanJobs: ScanJobActor(executor: processExecutor, ocrQueue: ocrQueue),
+            ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: StoredScannerSetupService(store: ScannerConfigStore(environment: environment)),
             environment: environment
@@ -553,6 +559,7 @@ private func indexResponse(
     )
     let settings = try await dependencies.settingsStore.load()
     let job = await dependencies.scanJobs.state
+    let ocr = await dependencies.ocrQueue.state
     let setup = await dependencies.scannerSetup.state()
     let query = queryValues(request.uri.query)
     let groups = scanFileGroups(outputDirectory: dependencies.outputPathResolver.outputDirectory)
@@ -563,6 +570,7 @@ private func indexResponse(
         setup: setup,
         wifiBackend: dependencies.environment["SCAN_BACKEND", default: "wifi"] == "wifi",
         job: job,
+        ocr: ocr,
         groups: groups
     )
     let html = template.replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
@@ -592,6 +600,7 @@ private func renderIndexContent(
     setup: ScannerSetupState,
     wifiBackend: Bool,
     job: ScanJobState,
+    ocr: OCRQueueState,
     groups: [ScanDayGroup]
 ) -> String {
     let selectedMode: ScanMode
@@ -622,7 +631,7 @@ private func renderIndexContent(
         html += "<button class=\"secondary-button\" formaction=\"/modes/default\">Use for button</button>"
         html += "</div></form></section>"
         html += renderModes(settings: settings, selectedMode: selectedMode, open: editModeID != nil)
-        html += renderJob(job)
+        html += renderStatus(job: job, ocr: ocr)
         html += renderFiles(groups)
     }
     return html
@@ -696,12 +705,21 @@ private func renderModes(settings: ScanSettings, selectedMode: ScanMode, open: B
     return html
 }
 
-private func renderJob(_ job: ScanJobState) -> String {
+private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     var html = "<section><h2>Status</h2><p><span class=\"status\">\(htmlEscape(job.status))</span></p>"
     if let started = job.started { html += "<p>Started: \(htmlEscape(timestamp(started)))</p>" }
     if let finished = job.finished { html += "<p>Finished: \(htmlEscape(timestamp(finished)))</p>" }
     if !job.output.isEmpty { html += "<pre>\(htmlEscape(job.output))</pre>" }
     if !job.error.isEmpty { html += "<pre>\(htmlEscape(job.error))</pre>" }
+
+    html += "<h2>OCR</h2><p><span class=\"status\">\(htmlEscape(ocr.status))</span>"
+    if ocr.queued > 0 { html += " \(ocr.queued) queued" }
+    html += "</p>"
+    if let started = ocr.started { html += "<p>Started: \(htmlEscape(timestamp(started)))</p>" }
+    if let finished = ocr.finished { html += "<p>Finished: \(htmlEscape(timestamp(finished)))</p>" }
+    if !ocr.input.isEmpty { html += "<p>Input: \(htmlEscape(ocr.input))</p>" }
+    if !ocr.output.isEmpty { html += "<pre>\(htmlEscape(ocr.output))</pre>" }
+    if !ocr.error.isEmpty { html += "<pre>\(htmlEscape(ocr.error))</pre>" }
     return html + "</section>"
 }
 

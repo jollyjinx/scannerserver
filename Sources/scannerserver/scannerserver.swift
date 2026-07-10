@@ -27,9 +27,9 @@ struct ScannerServerCommand: AsyncParsableCommand {
             environment: ProcessInfo.processInfo.environment
         )
         let configuration = try environmentConfiguration.overriding(hostname: host, port: port)
-        let application = try ScannerServerApplication.make(configuration: configuration)
+        let runtime = ScannerServerRuntime.live()
 
         JLog.notice("Starting scannerserver on \(configuration.hostname):\(configuration.port)")
-        try await application.runService()
+        try await runtime.run(configuration: configuration)
     }
 }
