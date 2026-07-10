@@ -57,18 +57,30 @@ public protocol ScanSnapSetupNetworkProviding: Sendable {
 }
 
 public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding {
-    public init() {}
+    private let executor: any ProcessExecutor
+    private let commandTimeoutMilliseconds: UInt64
+    private let commandEnvironment: [String: String]?
+
+    public init(
+        executor: any ProcessExecutor = FoundationProcessExecutor(),
+        commandTimeoutMilliseconds: UInt64 = 2_000,
+        commandEnvironment: [String: String]? = nil
+    ) {
+        self.executor = executor
+        self.commandTimeoutMilliseconds = commandTimeoutMilliseconds
+        self.commandEnvironment = commandEnvironment
+    }
 
     public func ipv4Interfaces() async throws -> [ScanSnapSetupIPv4Interface] {
-        if let data = try? Self.run("ip", ["-j", "-4", "addr", "show", "scope", "global"]),
+        if let data = try await optionalRun("ip", ["-j", "-4", "addr", "show", "scope", "global"]),
            let interfaces = try? Self.parseInterfaces(data), !interfaces.isEmpty {
             return interfaces
         }
-        return try Self.parseIfconfig(Self.run("ifconfig", []))
+        return try Self.parseIfconfig(try await run("ifconfig", []))
     }
 
     public func arpNeighbors() async throws -> [ScanSnapSetupARPNeighbor] {
-        if let data = try? Self.run("ip", ["-j", "-4", "neigh", "show"]),
+        if let data = try await optionalRun("ip", ["-j", "-4", "neigh", "show"]),
            let neighbors = try? Self.parseNeighbors(data) {
             return neighbors
         }
@@ -80,7 +92,7 @@ public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding 
 
     public func clientIPAddress(for scannerIPAddress: String) async throws -> String {
         let scannerIPAddress = try ScannerConfig.normalizeIPv4Address(scannerIPAddress)
-        if let data = try? Self.run("ip", ["-j", "-4", "route", "get", scannerIPAddress]),
+        if let data = try await optionalRun("ip", ["-j", "-4", "route", "get", scannerIPAddress]),
            let address = Self.routeSourceAddress(data) {
             return address
         }
@@ -102,7 +114,7 @@ public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding 
                bytes != [UInt8](repeating: 0, count: 6) {
                 return bytes
             }
-            if let output = try? Self.run("ifconfig", [name]),
+            if let output = try await optionalRun("ifconfig", [name]),
                let text = String(data: output, encoding: .utf8),
                let token = text.split(whereSeparator: \.isWhitespace)
                     .drop(while: { $0 != "ether" }).dropFirst().first,
@@ -113,22 +125,31 @@ public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding 
         throw ScanSnapSetupConfigurationError.noClientMACAddress
     }
 
-    private static func run(_ executable: String, _ arguments: [String]) throws -> Data {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [executable] + arguments
-        process.standardOutput = output
-        process.standardError = Pipe()
-        try process.run()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
+    private func optionalRun(_ executable: String, _ arguments: [String]) async throws -> Data? {
+        do {
+            return try await run(executable, arguments)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+    }
+
+    private func run(_ executable: String, _ arguments: [String]) async throws -> Data {
+        let result = try await executor.execute(ProcessRequest(
+            executable: executable,
+            arguments: arguments,
+            environment: commandEnvironment,
+            timeoutMilliseconds: commandTimeoutMilliseconds
+        ))
+        guard result.succeeded else {
+            let detail = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = detail.isEmpty ? "" : ": \(detail)"
             throw ScanSnapSetupConfigurationError.systemLookupFailed(
-                "\(executable) \(arguments.joined(separator: " ")) failed"
+                "\(executable) \(arguments.joined(separator: " ")) failed\(suffix)"
             )
         }
-        return data
+        return Data(result.standardOutput.utf8)
     }
 
     private static func parseInterfaces(_ data: Data) throws -> [ScanSnapSetupIPv4Interface] {

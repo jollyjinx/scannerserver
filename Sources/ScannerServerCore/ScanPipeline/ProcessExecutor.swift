@@ -1,21 +1,29 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 public struct ProcessRequest: Equatable, Sendable {
     public let executable: String
     public let arguments: [String]
     public let environment: [String: String]?
     public let workingDirectory: URL?
+    public let timeoutMilliseconds: UInt64?
 
     public init(
         executable: String,
         arguments: [String] = [],
         environment: [String: String]? = nil,
-        workingDirectory: URL? = nil
+        workingDirectory: URL? = nil,
+        timeoutMilliseconds: UInt64? = nil
     ) {
         self.executable = executable
         self.arguments = arguments
         self.environment = environment
         self.workingDirectory = workingDirectory
+        self.timeoutMilliseconds = timeoutMilliseconds
     }
 }
 
@@ -39,83 +47,97 @@ public protocol ProcessExecutor: Sendable {
 
 public enum ProcessExecutorError: Error, Equatable, LocalizedError, Sendable {
     case executableNotFound(String)
+    case launchFailed(executable: String, code: Int32)
+    case waitFailed(code: Int32)
+    case readFailed(code: Int32)
+    case timedOut(milliseconds: UInt64)
 
     public var errorDescription: String? {
         switch self {
         case .executableNotFound(let executable):
             "Executable not found in PATH: \(executable)"
+        case let .launchFailed(executable, code):
+            "Could not launch \(executable): POSIX error \(code)"
+        case .waitFailed(let code):
+            "Could not wait for subprocess: POSIX error \(code)"
+        case .readFailed(let code):
+            "Could not read subprocess output: POSIX error \(code)"
+        case .timedOut(let milliseconds):
+            "Subprocess timed out after \(milliseconds) ms"
         }
     }
 }
 
 public actor FoundationProcessExecutor: ProcessExecutor {
-    private var runningProcesses: [UUID: Process] = [:]
+    private struct RunningProcess: Sendable {
+        let processID: pid_t
+    }
 
-    public init() {}
+    private struct SpawnedProcess: Sendable {
+        let processID: pid_t
+        let standardOutput: Int32
+        let standardError: Int32
+    }
+
+    private enum WaitOutcome: Sendable {
+        case exited(Int32)
+    }
+
+    private var runningProcesses: [UUID: RunningProcess] = [:]
+    private let terminationGracePeriodMilliseconds: UInt64
+
+    public init(terminationGracePeriodMilliseconds: UInt64 = 250) {
+        self.terminationGracePeriodMilliseconds = terminationGracePeriodMilliseconds
+    }
 
     public func execute(_ request: ProcessRequest) async throws -> ProcessResult {
         try Task.checkCancellation()
 
-        let process = Process()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
+        let executableURL = try executableURL(for: request)
+        let spawned = try Self.spawn(request, executableURL: executableURL)
         let identifier = UUID()
-
-        process.executableURL = try executableURL(for: request)
-        process.arguments = request.arguments
-        process.environment = request.environment
-        process.currentDirectoryURL = request.workingDirectory
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        runningProcesses[identifier] = process
+        runningProcesses[identifier] = RunningProcess(processID: spawned.processID)
 
         defer {
             runningProcesses[identifier] = nil
-            try? outputPipe.fileHandleForReading.close()
-            try? errorPipe.fileHandleForReading.close()
+            Self.closeDescriptor(spawned.standardOutput)
+            Self.closeDescriptor(spawned.standardError)
         }
 
-        async let outputData = Self.readToEnd(outputPipe.fileHandleForReading)
-        async let errorData = Self.readToEnd(errorPipe.fileHandleForReading)
+        async let outputData = Self.readToEnd(spawned.standardOutput)
+        async let errorData = Self.readToEnd(spawned.standardError)
 
         do {
             let status = try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { continuation in
-                    process.terminationHandler = { terminatedProcess in
-                        continuation.resume(returning: terminatedProcess.terminationStatus)
-                    }
-                    do {
-                        try process.run()
-                        try? outputPipe.fileHandleForWriting.close()
-                        try? errorPipe.fileHandleForWriting.close()
-                    } catch {
-                        try? outputPipe.fileHandleForWriting.close()
-                        try? errorPipe.fileHandleForWriting.close()
-                        continuation.resume(throwing: error)
-                    }
-                }
+                try await waitForTermination(
+                    identifier: identifier,
+                    processID: spawned.processID,
+                    timeoutMilliseconds: request.timeoutMilliseconds
+                )
             } onCancel: {
-                Task { await self.terminate(identifier) }
+                Task { await self.requestTermination(identifier) }
             }
 
             try Task.checkCancellation()
-            let (capturedOutput, capturedError) = await (outputData, errorData)
+            let (capturedOutput, capturedError) = try await (outputData, errorData)
             return ProcessResult(
                 exitStatus: status,
                 standardOutput: String(decoding: capturedOutput, as: UTF8.self),
                 standardError: String(decoding: capturedError, as: UTF8.self)
             )
         } catch {
-            if process.isRunning {
-                process.terminate()
-            }
+            requestTermination(identifier)
             throw error
         }
     }
 
     private func executableURL(for request: ProcessRequest) throws -> URL {
         if request.executable.contains("/") {
-            return URL(fileURLWithPath: request.executable)
+            let path = URL(fileURLWithPath: request.executable).path
+            guard FileManager.default.isExecutableFile(atPath: path) else {
+                throw ProcessExecutorError.executableNotFound(request.executable)
+            }
+            return URL(fileURLWithPath: path)
         }
 
         let path = request.environment?["PATH"] ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
@@ -130,13 +152,207 @@ public actor FoundationProcessExecutor: ProcessExecutor {
         throw ProcessExecutorError.executableNotFound(request.executable)
     }
 
-    private func terminate(_ identifier: UUID) {
-        guard let process = runningProcesses[identifier], process.isRunning else { return }
-        process.terminate()
+    private func waitForTermination(
+        identifier: UUID,
+        processID: pid_t,
+        timeoutMilliseconds: UInt64?
+    ) async throws -> Int32 {
+        guard let timeoutMilliseconds else {
+            return try await Self.wait(for: processID)
+        }
+
+        return try await withThrowingTaskGroup(of: WaitOutcome.self) { group in
+            group.addTask {
+                .exited(try await Self.wait(for: processID))
+            }
+            group.addTask {
+                try await Task.sleep(for: .milliseconds(Int64(clamping: timeoutMilliseconds)))
+                try Task.checkCancellation()
+                await self.requestTermination(identifier)
+                throw ProcessExecutorError.timedOut(milliseconds: timeoutMilliseconds)
+            }
+
+            defer { group.cancelAll() }
+            guard let outcome = try await group.next() else {
+                throw CancellationError()
+            }
+            switch outcome {
+            case .exited(let status):
+                return status
+            }
+        }
+    }
+
+    private func requestTermination(_ identifier: UUID) {
+        guard let running = runningProcesses[identifier] else { return }
+        Self.signalProcessGroup(running.processID, signal: SIGTERM)
+
+        guard terminationGracePeriodMilliseconds > 0 else {
+            Self.signalProcessGroup(running.processID, signal: SIGKILL)
+            return
+        }
+
+        let gracePeriod = terminationGracePeriodMilliseconds
+        Task {
+            try? await Task.sleep(for: .milliseconds(Int64(clamping: gracePeriod)))
+            guard runningProcesses[identifier]?.processID == running.processID else { return }
+            Self.signalProcessGroup(running.processID, signal: SIGKILL)
+        }
+    }
+
+    private nonisolated static func spawn(
+        _ request: ProcessRequest,
+        executableURL: URL
+    ) throws -> SpawnedProcess {
+        var outputDescriptors = [Int32](repeating: -1, count: 2)
+        var errorDescriptors = [Int32](repeating: -1, count: 2)
+        guard pipe(&outputDescriptors) == 0 else {
+            throw ProcessExecutorError.launchFailed(executable: request.executable, code: errno)
+        }
+        guard pipe(&errorDescriptors) == 0 else {
+            let code = errno
+            closeDescriptor(outputDescriptors[0])
+            closeDescriptor(outputDescriptors[1])
+            throw ProcessExecutorError.launchFailed(executable: request.executable, code: code)
+        }
+
+        #if canImport(Darwin)
+        var fileActions: posix_spawn_file_actions_t? = nil
+        var attributes: posix_spawnattr_t? = nil
+        #else
+        var fileActions = posix_spawn_file_actions_t()
+        var attributes = posix_spawnattr_t()
+        #endif
+        var processID: pid_t = 0
+
+        let cleanupDescriptors = {
+            closeDescriptor(outputDescriptors[0])
+            closeDescriptor(outputDescriptors[1])
+            closeDescriptor(errorDescriptors[0])
+            closeDescriptor(errorDescriptors[1])
+        }
+
+        var code = posix_spawn_file_actions_init(&fileActions)
+        guard code == 0 else {
+            cleanupDescriptors()
+            throw ProcessExecutorError.launchFailed(executable: request.executable, code: code)
+        }
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
+
+        code = posix_spawnattr_init(&attributes)
+        guard code == 0 else {
+            cleanupDescriptors()
+            throw ProcessExecutorError.launchFailed(executable: request.executable, code: code)
+        }
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        code = posix_spawn_file_actions_adddup2(&fileActions, outputDescriptors[1], STDOUT_FILENO)
+        if code == 0 {
+            code = posix_spawn_file_actions_adddup2(&fileActions, errorDescriptors[1], STDERR_FILENO)
+        }
+        for descriptor in outputDescriptors + errorDescriptors where code == 0 {
+            code = posix_spawn_file_actions_addclose(&fileActions, descriptor)
+        }
+        if code == 0, let workingDirectory = request.workingDirectory {
+            code = workingDirectory.path.withCString {
+                posix_spawn_file_actions_addchdir_np(&fileActions, $0)
+            }
+        }
+        if code == 0 {
+            code = posix_spawnattr_setpgroup(&attributes, 0)
+        }
+        if code == 0 {
+            code = posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        }
+        guard code == 0 else {
+            cleanupDescriptors()
+            throw ProcessExecutorError.launchFailed(executable: request.executable, code: code)
+        }
+
+        let arguments = [executableURL.path] + request.arguments
+        let environment = (request.environment ?? ProcessInfo.processInfo.environment)
+            .map { "\($0.key)=\($0.value)" }
+            .sorted()
+
+        code = withCStringArray(arguments) { argumentPointer in
+            withCStringArray(environment) { environmentPointer in
+                executableURL.path.withCString { executablePointer in
+                    posix_spawn(
+                        &processID,
+                        executablePointer,
+                        &fileActions,
+                        &attributes,
+                        argumentPointer,
+                        environmentPointer
+                    )
+                }
+            }
+        }
+
+        closeDescriptor(outputDescriptors[1])
+        closeDescriptor(errorDescriptors[1])
+        outputDescriptors[1] = -1
+        errorDescriptors[1] = -1
+
+        guard code == 0 else {
+            cleanupDescriptors()
+            throw ProcessExecutorError.launchFailed(executable: request.executable, code: code)
+        }
+
+        return SpawnedProcess(
+            processID: processID,
+            standardOutput: outputDescriptors[0],
+            standardError: errorDescriptors[0]
+        )
+    }
+
+    private nonisolated static func withCStringArray<Result>(
+        _ values: [String],
+        _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> Result
+    ) -> Result {
+        let strings = values.map { strdup($0) }
+        defer { strings.forEach { free($0) } }
+        var pointers: [UnsafeMutablePointer<CChar>?] = strings + [nil]
+        return pointers.withUnsafeMutableBufferPointer { buffer in
+            body(buffer.baseAddress!)
+        }
     }
 
     @concurrent
-    private nonisolated static func readToEnd(_ handle: FileHandle) async -> Data {
-        handle.readDataToEndOfFile()
+    private nonisolated static func wait(for processID: pid_t) async throws -> Int32 {
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(processID, &status, 0)
+            if result == processID {
+                let signal = status & 0x7f
+                return signal == 0 ? (status >> 8) & 0xff : 128 + signal
+            }
+            if result == -1, errno == EINTR { continue }
+            throw ProcessExecutorError.waitFailed(code: errno)
+        }
+    }
+
+    @concurrent
+    private nonisolated static func readToEnd(_ descriptor: Int32) async throws -> Data {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
+        while true {
+            let count = read(descriptor, &buffer, buffer.count)
+            if count > 0 {
+                data.append(buffer, count: count)
+            } else if count == 0 {
+                return data
+            } else if errno != EINTR {
+                throw ProcessExecutorError.readFailed(code: errno)
+            }
+        }
+    }
+
+    private nonisolated static func signalProcessGroup(_ processID: pid_t, signal: Int32) {
+        _ = kill(-processID, signal)
+    }
+
+    private nonisolated static func closeDescriptor(_ descriptor: Int32) {
+        if descriptor >= 0 { _ = close(descriptor) }
     }
 }
