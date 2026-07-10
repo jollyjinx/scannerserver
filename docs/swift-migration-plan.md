@@ -18,6 +18,8 @@ Implementation and the repository’s default container cutover are complete. Re
 
 The production ARM64 image passes its non-root container acceptance flow: health and index routes, native preview generation, deterministic SANE acquisition and PDF conversion, qpdf validation, writable bind mounts, packaged command availability, and arbitrary-UID `SCANNER_URL` setup.
 
+Browser acceptance against that image also passes: changing the physical-button default survives navigation, the PDF view route opens the fixture, and bulk deletion removes the selected document without losing the mode setting.
+
 ## Progress
 
 | Milestone | Status |
@@ -35,6 +37,7 @@ The production ARM64 image passes its non-root container acceptance flow: health
 
 Validation on 2026-07-10 used the Mac's `vlan5` address, `10.112.10.129`. The requested deployment address, `10.112.10.6`, was not assigned to the Mac and adding it requires administrator privileges; it must not be aliased while another deployment container owns that address.
 
+- An explicit service bind to `10.112.10.6` failed with macOS `errno 49` (`Can't assign requested address`); `arp` showed no owner for the address, and passwordless administrator access was unavailable.
 - The Swift service bound to `10.112.10.129` and discovered the iX500 at `10.112.10.11`.
 - Scanner selection, pairing, compatible config persistence, TCP control/data reachability, and UDP port `55265` listener startup succeeded.
 - A web scan reached the native `scansnap-wifi` acquisition path and reported `Scanning...`, then `No pages scanned` because no document was available in the feeder.
