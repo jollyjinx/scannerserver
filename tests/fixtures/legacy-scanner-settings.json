@@ -1,0 +1,38 @@
+{
+  "default_mode_id": "receipts",
+  "modes": [
+    {
+      "id": "receipts",
+      "name": "Receipt archive",
+      "settings": {
+        "SCAN_CROP_PAGES": "false",
+        "SCAN_FORMAT": "pdf",
+        "SCAN_LANGUAGE": "deu+eng",
+        "SCAN_MODE": "Gray",
+        "SCAN_OCR_ENABLED": "true",
+        "SCAN_PAGE_MODE": "multi",
+        "SCAN_REMOVE_BLANK_PAGES": "true",
+        "SCAN_RESOLUTION": "400",
+        "SCAN_SIMPLEX": "false",
+        "SCAN_SOURCE": "ADF Duplex"
+      }
+    },
+    {
+      "id": "archive-photo",
+      "name": "Archive photo",
+      "settings": {
+        "SCAN_CROP_PAGES": "true",
+        "SCAN_FORMAT": "png",
+        "SCAN_LANGUAGE": "eng",
+        "SCAN_MODE": "Color",
+        "SCAN_OCR_ENABLED": "false",
+        "SCAN_PAGE_MODE": "single",
+        "SCAN_REMOVE_BLANK_PAGES": "false",
+        "SCAN_RESOLUTION": "600",
+        "SCAN_SIMPLEX": "true",
+        "SCAN_SOURCE": "ADF Simplex"
+      }
+    }
+  ],
+  "version": 1
+}

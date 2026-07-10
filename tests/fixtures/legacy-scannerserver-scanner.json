@@ -1,0 +1,14 @@
+{
+  "last_error": "",
+  "mac": "84:25:3f:aa:bb:cc",
+  "name": "ScanSnap iX500 Fixture",
+  "pairing_key": "179130178176",
+  "pairing_key_masked": "17...76",
+  "password_source": "serial-suffix",
+  "scanner_ip": "192.0.2.44",
+  "serial": "TEST00001234",
+  "source": "stored",
+  "status": "configured",
+  "updated_at": "2026-01-02T03:04:05+00:00",
+  "version": 1
+}
