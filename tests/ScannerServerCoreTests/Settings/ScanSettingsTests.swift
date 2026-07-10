@@ -172,4 +172,35 @@ struct ScanSettingsTests {
         #expect(loaded.defaultMode.settings.language == "nld+eng")
         #expect(loaded.defaultMode.settings.format == "png")
     }
+
+    @Test("Concurrent store mutations preserve every mode update")
+    func concurrentMutations() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScanSettingsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanSettingsStore(
+            fileURL: directory.appendingPathComponent("settings.json"),
+            environment: [:]
+        )
+
+        _ = try await store.load()
+        async let first = store.saveMode(
+            name: "Receipts",
+            settings: .standard,
+            existingID: nil,
+            setDefault: false
+        )
+        async let second = store.saveMode(
+            name: "Letters",
+            settings: .standard,
+            existingID: nil,
+            setDefault: false
+        )
+        let identifiers = try await [first, second]
+        let loaded = try await store.load()
+
+        #expect(Set(identifiers) == ["receipts", "letters"])
+        #expect(loaded.mode(id: "receipts") != nil)
+        #expect(loaded.mode(id: "letters") != nil)
+    }
 }

@@ -38,12 +38,13 @@ struct NativeScanPipelineTests {
 
         #expect(result.exitStatus == 0)
         #expect(result.standardOutput == "\(finalPDF.path)\n")
-        #expect(result.standardError.contains("scanadf: scanner warming up"))
+        #expect(result.standardError.contains("scanimage: scanner warming up"))
         #expect(try Data(contentsOf: finalPDF) == Data("multipage-pdf".utf8))
-        #expect(requests.map(\.executable) == ["scanadf", "img2pdf", "set-pdf-creator"])
+        #expect(requests.map(\.executable) == ["scanimage", "img2pdf", "set-pdf-creator"])
         #expect(requests[0].arguments == [
             "--device-name", "fujitsu:ScanSnap-iX500:001",
-            "--output-file", fixture.work.appendingPathComponent("page-%04d.pnm").path,
+            "--batch=\(fixture.work.appendingPathComponent("page-%04d.pnm").path)",
+            "--format=pnm",
             "--resolution", "600",
             "--mode", "Gray",
             "--source", "ADF Duplex",
@@ -212,7 +213,7 @@ struct NativeScanPipelineTests {
         #expect(result.exitStatus == 2)
         #expect(result.standardOutput.isEmpty)
         #expect(result.standardError.contains("No pages were scanned"))
-        #expect(await executor.requests().map(\.executable) == ["scanadf"])
+        #expect(await executor.requests().map(\.executable) == ["scanimage"])
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 

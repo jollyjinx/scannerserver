@@ -88,6 +88,10 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         status
     }
 
+    public func discoveryInProgress() -> Bool {
+        status == .running
+    }
+
     public func ensureDiscoveryStarted() async {
         guard status == .idle, discoveryTask == nil,
               await store.activeConfiguration() == nil

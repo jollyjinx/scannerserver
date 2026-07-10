@@ -53,6 +53,41 @@ public actor ScanSettingsStore {
         return settings
     }
 
+    @discardableResult
+    public func setDefaultMode(id: String?) throws -> Bool {
+        guard let id else { return false }
+        var settings = try load()
+        guard settings.setDefaultMode(id: id) else { return false }
+        try write(settings.normalized(environment: environment))
+        return true
+    }
+
+    public func saveMode(
+        name: String,
+        settings modeSettings: ModeSettings,
+        existingID: String?,
+        setDefault: Bool
+    ) throws -> String {
+        var settings = try load()
+        let modeID = settings.saveMode(
+            name: name,
+            settings: modeSettings,
+            existingID: existingID,
+            setDefault: setDefault
+        )
+        try write(settings.normalized(environment: environment))
+        return modeID
+    }
+
+    @discardableResult
+    public func deleteMode(id: String?) throws -> Bool {
+        guard let id else { return false }
+        var settings = try load()
+        guard settings.deleteMode(id: id) else { return false }
+        try write(settings.normalized(environment: environment))
+        return true
+    }
+
     private func write(_ settings: ScanSettings) throws {
         try AtomicJSONFile.write(settings, to: fileURL)
     }

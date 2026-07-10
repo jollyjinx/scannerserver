@@ -172,7 +172,8 @@ public actor NativeScanPipeline: NativeScanExecuting {
         switch nonEmpty(environment["SCAN_BACKEND"]) ?? "wifi" {
         case "sane":
             var arguments = [
-                "--output-file", workDirectory.appendingPathComponent("page-%04d.pnm").path,
+                "--batch=\(workDirectory.appendingPathComponent("page-%04d.pnm").path)",
+                "--format=pnm",
                 "--resolution", configuration.resolution,
                 "--mode", configuration.mode,
                 "--source", configuration.source,
@@ -181,7 +182,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 arguments.insert(contentsOf: ["--device-name", device], at: 0)
             }
             let scanResult = try await executor.execute(ProcessRequest(
-                executable: "scanadf",
+                executable: "scanimage",
                 arguments: arguments,
                 environment: environment,
                 workingDirectory: workDirectory

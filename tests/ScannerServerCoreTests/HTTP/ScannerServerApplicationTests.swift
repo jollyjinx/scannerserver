@@ -52,6 +52,21 @@ struct ScannerServerApplicationTests {
         }
     }
 
+    @Test("First-run page refreshes only while scanner discovery is running")
+    func discoveryRefresh() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
+        defer { fixture.remove() }
+        let scannerSetup = RunningDiscoverySetupService()
+        let application = try fixture.application(scannerSetup: scannerSetup)
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains(#"<meta http-equiv="refresh" content="2">"#))
+            }
+        }
+    }
+
     @Test("Mode forms preserve field names, persist settings, and redirect with 303")
     func modeForms() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
@@ -292,12 +307,16 @@ private struct HTTPFixture: Sendable {
         self.executor = executor
     }
 
-    func application() throws -> some ApplicationProtocol {
+    func application(
+        scannerSetup: (any ScannerSetupServing)? = nil
+    ) throws -> some ApplicationProtocol {
         let dependencies = ScannerServerDependencies(
             settingsStore: settingsStore,
             scanJobs: scanJobs,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
-            scannerSetup: StoredScannerSetupService(store: ScannerConfigStore(environment: environment)),
+            scannerSetup: scannerSetup ?? StoredScannerSetupService(
+                store: ScannerConfigStore(environment: environment)
+            ),
             environment: environment
         )
         return try ScannerServerApplication.make(
@@ -309,6 +328,27 @@ private struct HTTPFixture: Sendable {
     func remove() {
         try? FileManager.default.removeItem(at: root)
     }
+}
+
+private actor RunningDiscoverySetupService: ScannerSetupServing {
+    func state() -> ScannerSetupState {
+        ScannerSetupState(serviceAvailable: true)
+    }
+
+    func discoveryInProgress() -> Bool { true }
+    func ensureDiscoveryStarted() {}
+    func shutdown() {}
+    func discover() -> ScannerSetupOutcome { .discoveryStarted }
+    func select(deviceID: String) -> ScannerSetupOutcome { .unavailable }
+
+    func configureManually(
+        ipAddress: String,
+        macAddress: String,
+        serial: String
+    ) -> ScannerSetupOutcome { .unavailable }
+
+    func savePassword(_ password: String) -> ScannerSetupOutcome { .unavailable }
+    func clear() -> ScannerSetupOutcome { .cleared }
 }
 
 private actor SlowCapturingExecutor: ProcessExecutor {

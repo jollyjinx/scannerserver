@@ -32,6 +32,7 @@ func buttonEnvironmentConfiguration() {
 
 @Test("Legacy registration interval remains the arm interval fallback")
 func legacyButtonRegistrationInterval() {
+    let defaults = ScanSnapButtonConfiguration(environment: [:])
     let legacy = ScanSnapButtonConfiguration(environment: [
         "SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS": "17",
     ])
@@ -40,6 +41,7 @@ func legacyButtonRegistrationInterval() {
         "SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS": "17",
     ])
 
+    #expect(defaults.cooldownMilliseconds == 10_000)
     #expect(legacy.armIntervalMilliseconds == 17_000)
     #expect(currentWins.armIntervalMilliseconds == 11_000)
 }

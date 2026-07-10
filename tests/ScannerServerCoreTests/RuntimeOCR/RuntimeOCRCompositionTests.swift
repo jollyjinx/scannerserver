@@ -124,8 +124,8 @@ private struct LiveCommandFixture {
         outputURL = scans.appendingPathComponent("\(timestamp)-page-0001.ocr.pdf")
 
         try Self.writeExecutable(
-            at: tools.appendingPathComponent("scanadf"),
-            contents: "#!/bin/sh\nset -eu\noutput_pattern=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --output-file ]; then output_pattern=$2; shift 2; else shift; fi\ndone\noutput=$(printf '%s' \"$output_pattern\" | sed 's/%04d/0001/')\n: > \"$output\"\n"
+            at: tools.appendingPathComponent("scanimage"),
+            contents: "#!/bin/sh\nset -eu\noutput_pattern=\"\"\nfor argument; do\n  case \"$argument\" in --batch=*) output_pattern=${argument#--batch=};; esac\ndone\noutput=$(printf '%s' \"$output_pattern\" | sed 's/%04d/0001/')\n: > \"$output\"\n"
         )
         try Self.writeExecutable(
             at: tools.appendingPathComponent("img2pdf"),

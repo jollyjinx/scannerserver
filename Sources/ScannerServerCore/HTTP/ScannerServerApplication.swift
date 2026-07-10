@@ -111,6 +111,7 @@ public enum ScannerSetupOutcome: String, Sendable {
 
 public protocol ScannerSetupServing: Sendable {
     func state() async -> ScannerSetupState
+    func discoveryInProgress() async -> Bool
     func ensureDiscoveryStarted() async
     func shutdown() async
     func discover() async -> ScannerSetupOutcome
@@ -121,6 +122,7 @@ public protocol ScannerSetupServing: Sendable {
 }
 
 public extension ScannerSetupServing {
+    func discoveryInProgress() async -> Bool { false }
     func ensureDiscoveryStarted() async {}
     func shutdown() async {}
 }
@@ -307,33 +309,25 @@ public enum ScannerServerApplication {
 
         router.post("/modes/default") { request, context -> Response in
             let form = try await decodeForm(ModeIDForm.self, request: request, context: context)
-            var settings = try await dependencies.settingsStore.load()
-            if let modeID = form.modeID, settings.setDefaultMode(id: modeID) {
-                try await dependencies.settingsStore.save(settings)
-            }
+            try await dependencies.settingsStore.setDefaultMode(id: form.modeID)
             return .redirect(to: "/")
         }
 
         router.post("/modes/save") { request, context -> Response in
             let form = try await decodeForm(ModeSaveForm.self, request: request, context: context)
-            var settings = try await dependencies.settingsStore.load()
             let modeSettings = form.modeSettings
-            let modeID = settings.saveMode(
+            let modeID = try await dependencies.settingsStore.saveMode(
                 name: form.name ?? "Scan mode",
                 settings: modeSettings,
                 existingID: form.modeID,
                 setDefault: form.setDefault != nil
             )
-            try await dependencies.settingsStore.save(settings)
             return .redirect(to: "/?edit_mode=\(urlQueryValue(modeID))")
         }
 
         router.post("/modes/delete") { request, context -> Response in
             let form = try await decodeForm(ModeIDForm.self, request: request, context: context)
-            var settings = try await dependencies.settingsStore.load()
-            if let modeID = form.modeID, settings.deleteMode(id: modeID) {
-                try await dependencies.settingsStore.save(settings)
-            }
+            try await dependencies.settingsStore.deleteMode(id: form.modeID)
             return .redirect(to: "/")
         }
 
@@ -586,6 +580,12 @@ private func indexResponse(
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
     let setup = await dependencies.scannerSetup.state()
+    let discoveryInProgress: Bool
+    if wifiBackend {
+        discoveryInProgress = await dependencies.scannerSetup.discoveryInProgress()
+    } else {
+        discoveryInProgress = false
+    }
     let query = queryValues(request.uri.query)
     let groups = scanFileGroups(outputDirectory: dependencies.outputPathResolver.outputDirectory)
     let content = renderIndexContent(
@@ -598,7 +598,12 @@ private func indexResponse(
         ocr: ocr,
         groups: groups
     )
-    let html = template.replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
+    let refresh = discoveryInProgress
+        ? #"<meta http-equiv="refresh" content="2">"#
+        : ""
+    let html = template
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: refresh)
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
     return dataResponse(Data(html.utf8), contentType: "text/html; charset=utf-8")
 }
 
