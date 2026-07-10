@@ -75,12 +75,20 @@ Calculation:
 Quick calculator:
 
 ```bash
-python3 - <<'PY'
-serial = "AWRHC08122"
-password = serial.rstrip()[-4:]
-key = "pFusCANsNapFiPfu"
-print("".join(str(ord(char) + ord(key[index]) + 11) for index, char in enumerate(password)))
-PY
+swift - <<'SWIFT'
+import Foundation
+
+let serial = "AWRHC08122"
+let password = String(
+    serial.reversed().drop(while: \.isWhitespace).prefix(4).reversed()
+)
+let key = Array("pFusCANsNapFiPfu".unicodeScalars)
+let pairingKey = password.unicodeScalars.enumerated().map { index, character in
+    String(character.value + key[index].value + 11)
+}.joined()
+
+print(pairingKey)
+SWIFT
 ```
 
 If the scanner password was changed in ScanSnap Wireless Setup Tool, use that password instead of the serial suffix. If you do not know the changed password, reset/reconfigure the scanner wireless settings or capture the key from an already configured official ScanSnap client.
