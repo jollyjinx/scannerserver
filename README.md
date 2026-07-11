@@ -1,11 +1,3 @@
----
-title: scannerserver
-description: Web scanner service for Fujitsu/Ricoh ScanSnap iX500 devices on Linux.
-type: overview
-audience: users
-status: current
----
-
 # scannerserver
 
 `scannerserver` is a containerized web scanner service for the Fujitsu/Ricoh ScanSnap iX500.
@@ -142,24 +134,11 @@ If discovery still fails but you know the scanner IP, enter the IP address manua
 
 ## More Documentation
 
+- [Documentation index](docs/index.md)
 - [Deployment and builds](docs/deployment.md)
 - [Configuration and scan behavior](docs/configuration.md)
 - [ScanSnap protocol notes](docs/protocol.md)
 - [Swift hardware validation](docs/swift-hardware-validation.md)
-
-## Documentation Front Matter
-
-All Markdown documentation in this repository starts with YAML front matter so agents and documentation tooling can classify files before reading the full body.
-
-Required fields:
-
-| Field | Purpose |
-| --- | --- |
-| `title` | Human-readable page title |
-| `description` | One-sentence summary of the page |
-| `type` | Document category, such as `overview`, `guide`, or `reference` |
-| `audience` | Primary reader, such as `users`, `operators`, or `maintainers` |
-| `status` | Lifecycle state, currently `current` for maintained docs |
 
 ## References
 
