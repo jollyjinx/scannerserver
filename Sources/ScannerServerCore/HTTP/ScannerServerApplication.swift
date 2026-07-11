@@ -202,6 +202,7 @@ public struct ScannerServerDependencies: Sendable {
     public let outputPathResolver: ScanOutputPathResolver
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
+    public let webUpdates: WebUpdateNotifier
     public let environment: [String: String]
 
     public init(
@@ -212,6 +213,7 @@ public struct ScannerServerDependencies: Sendable {
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
+        webUpdates: WebUpdateNotifier? = nil,
         environment: [String: String]
     ) {
         self.settingsStore = settingsStore
@@ -221,6 +223,7 @@ public struct ScannerServerDependencies: Sendable {
         self.outputPathResolver = outputPathResolver
         self.scannerSetup = scannerSetup
         self.previewProvider = previewProvider
+        self.webUpdates = webUpdates ?? scanJobs.webUpdates
         self.environment = environment
     }
 
@@ -230,7 +233,8 @@ public struct ScannerServerDependencies: Sendable {
         let outputDirectory = URL(fileURLWithPath: environment["SCAN_OUTPUT_DIR"] ?? "/scans", isDirectory: true)
         let processExecutor = FoundationProcessExecutor()
         let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
-        let ocrQueue = OCRQueueActor(executor: processExecutor)
+        let webUpdates = WebUpdateNotifier()
+        let ocrQueue = OCRQueueActor(executor: processExecutor, webUpdates: webUpdates)
         let settingsStore = ScanSettingsStore(environment: environment)
         let scannerStore = ScannerConfigStore(environment: environment)
         return ScannerServerDependencies(
@@ -238,7 +242,8 @@ public struct ScannerServerDependencies: Sendable {
             scannerStore: scannerStore,
             scanJobs: ScanJobActor(
                 nativeScanner: NativeScanPipeline(executor: documentExecutor),
-                ocrQueue: ocrQueue
+                ocrQueue: ocrQueue,
+                webUpdates: webUpdates
             ),
             ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
@@ -247,6 +252,7 @@ public struct ScannerServerDependencies: Sendable {
                 store: scannerStore
             ),
             previewProvider: NativeScanPreviewProvider(executor: processExecutor),
+            webUpdates: webUpdates,
             environment: environment
         )
     }
@@ -286,6 +292,18 @@ public enum ScannerServerApplication {
             try await indexResponse(request: request, template: indexTemplate, dependencies: dependencies)
         }
         router.get("/health") { _, _ in "ok\n" }
+        router.get("/updates") { request, _ -> Response in
+            let value = queryValues(request.uri.query)["since"] ?? ""
+            guard let since = UInt64(value) else {
+                return textResponse("Invalid revision\n", status: .badRequest)
+            }
+            let revision = await dependencies.webUpdates.wait(after: since)
+            return dataResponse(
+                Data("\(revision)\n".utf8),
+                contentType: "text/plain; charset=utf-8",
+                additionalHeaders: [.cacheControl: "no-store"]
+            )
+        }
 
         router.post("/scan") { request, context -> Response in
             let form = try await decodeForm(ModeIDForm.self, request: request, context: context)
@@ -304,6 +322,10 @@ public enum ScannerServerApplication {
                 modeOverrides: mode.environment(trigger: "web")
             )
             _ = await dependencies.scanJobs.start(configuration: configuration)
+            return .redirect(to: "/")
+        }
+        router.post("/ocr/cancel") { _, _ -> Response in
+            await dependencies.ocrQueue.cancelAll()
             return .redirect(to: "/")
         }
 
@@ -587,6 +609,7 @@ private func indexResponse(
         discoveryInProgress = false
     }
     let query = queryValues(request.uri.query)
+    let webRevision = await dependencies.webUpdates.currentRevision
     let groups = scanFileGroups(outputDirectory: dependencies.outputPathResolver.outputDirectory)
     let content = renderIndexContent(
         settings: settings,
@@ -603,6 +626,7 @@ private func indexResponse(
         : ""
     let html = template
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: refresh)
+        .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "\(webRevision)")
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
     return dataResponse(Data(html.utf8), contentType: "text/html; charset=utf-8")
 }
@@ -773,18 +797,32 @@ private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     html += "<h2>OCR</h2><p><span class=\"status\">\(htmlEscape(ocr.status))</span>"
     if ocr.queued > 0 { html += " \(ocr.queued) queued" }
     html += "</p>"
+    if ocr.status == "running" || ocr.status == "queued" || ocr.queued > 0 {
+        html += "<form method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel OCR</button></form>"
+    }
     if let started = ocr.started { html += "<p>Started: \(htmlEscape(timestamp(started)))</p>" }
     if let finished = ocr.finished { html += "<p>Finished: \(htmlEscape(timestamp(finished)))</p>" }
     if !ocr.input.isEmpty { html += "<p>Input: \(htmlEscape(ocr.input))</p>" }
     if !ocr.output.isEmpty { html += "<pre>\(htmlEscape(ocr.output))</pre>" }
     if !ocr.error.isEmpty { html += "<pre>\(htmlEscape(ocr.error))</pre>" }
+    if !ocr.recentJobs.isEmpty {
+        html += "<h3>Recent OCR jobs</h3><ul class=\"ocr-history\">"
+        for recent in ocr.recentJobs {
+            let name = URL(fileURLWithPath: recent.input).lastPathComponent
+            html += "<li><span class=\"file-name\">\(htmlEscape(name))</span>: "
+            html += "\(htmlEscape(recent.status)) in \(htmlEscape(elapsedTime(recent.duration)))</li>"
+        }
+        html += "</ul>"
+    }
     return html + "</section>"
 }
 
 private func renderFiles(_ groups: [ScanDayGroup]) -> String {
     var html = "<section><h2>Files</h2>"
     guard !groups.isEmpty else { return html + "<p>No scans yet.</p></section>" }
-    html += "<form method=\"post\" action=\"/files/delete-selected\"><button class=\"danger-button\">Delete selected</button><div class=\"file-groups\">"
+    html += "<form method=\"post\" action=\"/files/delete-selected\"><div class=\"button-row\">"
+    html += "<label><input type=\"checkbox\" data-select-all> Select all</label>"
+    html += "<button class=\"danger-button\">Delete selected</button></div><div class=\"file-groups\">"
     for group in groups {
         html += "<div><h3>\(htmlEscape(group.day))</h3><ul class=\"file-list\">"
         for document in group.files {
@@ -813,6 +851,17 @@ private func modeSummary(_ mode: ScanMode) -> String {
     let ocr = value.ocrEnabled ? "OCR on" : "OCR off"
     let crop = value.cropPages ? "autocrop on" : "autocrop off"
     return "\(sides), \(output), \(pages), \(ocr), \(crop), \(value.resolution) dpi \(value.mode)"
+}
+
+private func elapsedTime(_ interval: TimeInterval) -> String {
+    if interval < 10 {
+        return String(format: "%.1f s", interval)
+    }
+    if interval < 60 {
+        return String(format: "%.0f s", interval)
+    }
+    let totalSeconds = Int(interval.rounded())
+    return "\(totalSeconds / 60)m \(totalSeconds % 60)s"
 }
 
 private func option(value: String, label: String, selected: Bool) -> String {

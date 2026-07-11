@@ -72,6 +72,7 @@ The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on A
 - Keep `/scans/.scanner-settings.json` and `/scans/.scannerserver-scanner.json` readable by the migrated service.
 - Keep output naming: `YYYY-MM-DD.HHMMSS.pdf`, `YYYY-MM-DD.HHMMSS.ocr.pdf`, `YYYY-MM-DD.HHMMSS-page-0001.pdf`, page OCR variants, PNG exports, and `.previews`.
 - Keep the web UI workflows: first-run scanner setup, manual scanner setup, scan start, mode save/delete/default, grouped scan list, preview, download, delete, OCR status, and physical button scans.
+- Keep OCR work observable and controllable: the web UI can cancel the active OCR subprocess together with queued jobs and shows bounded recent-job durations (per page when the scan mode emits one PDF per page, per document for multipage PDFs).
 - Use `container` in docs and normal workflows. Use `docker` only where a required option is unavailable through `container`, such as a documented buildx publishing path.
 
 ## Architecture
@@ -101,6 +102,8 @@ Tests/
 The executable target owns command-line parsing, environment loading, signal setup, HTTP server startup, and runtime wiring. The library owns scanner discovery, pairing, button handling, scan orchestration, OCR queueing, settings persistence, file grouping, preview generation, and testable domain logic.
 
 Hummingbird provides the lightweight SwiftNIO-based HTTP layer, `swift-argument-parser` owns CLI parsing, and `JLog` provides service logging.
+
+The browser keeps one cancellable long-poll request open to `/updates`. Scan and OCR actors increment a shared revision and resume suspended requests only when visible state changes. This avoids interval polling and idle busy-waiting; the client uses a five-second reconnect backoff only after connection failure.
 
 ## Dependency Strategy
 
@@ -148,6 +151,7 @@ Acceptance:
 - Render the current HTML/CSS from Swift templates or typed HTML builders.
 - Preserve route paths and form field names.
 - Keep previews/download/delete behavior compatible.
+- Refresh scan, OCR, and file state through the actor-backed `/updates` long-poll rather than periodic browser polling.
 
 Acceptance:
 

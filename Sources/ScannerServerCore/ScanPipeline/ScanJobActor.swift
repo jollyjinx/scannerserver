@@ -23,31 +23,38 @@ public struct ScanJobState: Equatable, Sendable {
 }
 
 public actor ScanJobActor {
+    public nonisolated let webUpdates: WebUpdateNotifier
     private let nativeScanner: any NativeScanExecuting
     private let ocrQueue: OCRQueueActor?
     private var worker: Task<Void, Never>?
     private var jobState = ScanJobState()
 
-    public init(nativeScanner: any NativeScanExecuting, ocrQueue: OCRQueueActor? = nil) {
+    public init(
+        nativeScanner: any NativeScanExecuting,
+        ocrQueue: OCRQueueActor? = nil,
+        webUpdates: WebUpdateNotifier = WebUpdateNotifier()
+    ) {
         self.nativeScanner = nativeScanner
         self.ocrQueue = ocrQueue
+        self.webUpdates = webUpdates
     }
 
     public var state: ScanJobState { jobState }
 
     @discardableResult
-    public func start(configuration: ScanPipelineConfiguration) -> Bool {
+    public func start(configuration: ScanPipelineConfiguration) async -> Bool {
         guard worker == nil else { return false }
 
         jobState = ScanJobState(started: Date(), status: "running")
+        await webUpdates.notify()
         worker = Task {
             do {
                 let result = try await nativeScanner.scan(configuration: configuration)
                 await finish(result: result, configuration: configuration)
             } catch is CancellationError {
-                finishCancellation()
+                await finishCancellation()
             } catch {
-                finish(error: error)
+                await finish(error: error)
             }
         }
         return true
@@ -86,18 +93,21 @@ public actor ScanJobActor {
             }
         }
         worker = nil
+        await webUpdates.notify()
     }
 
-    private func finishCancellation() {
+    private func finishCancellation() async {
         jobState.finished = Date()
         jobState.status = "cancelled"
         worker = nil
+        await webUpdates.notify()
     }
 
-    private func finish(error: any Error) {
+    private func finish(error: any Error) async {
         jobState.finished = Date()
         jobState.status = "failed"
         jobState.error = error.localizedDescription
         worker = nil
+        await webUpdates.notify()
     }
 }

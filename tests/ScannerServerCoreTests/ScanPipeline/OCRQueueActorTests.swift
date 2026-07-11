@@ -32,6 +32,10 @@ struct OCRQueueActorTests {
         #expect(state.output == "/scans/three.ocr.pdf")
         #expect(state.error.isEmpty)
         #expect(state.queued == 0)
+        #expect(state.recentJobs.map(\.input) == [
+            "/scans/three.pdf", "/scans/two.pdf", "/scans/one.pdf",
+        ])
+        #expect(state.recentJobs.allSatisfy { $0.status == "done" && $0.duration >= 0 })
     }
 
     @Test("Preprocessing uses an isolated copy and publishes OCR beside the source")
@@ -138,6 +142,8 @@ struct OCRQueueActorTests {
         #expect(await executor.requests().count == 1)
         #expect(await queue.state.status == "cancelled")
         #expect(await queue.state.queued == 0)
+        #expect(await queue.state.recentJobs.first?.input == "/scans/one.pdf")
+        #expect(await queue.state.recentJobs.first?.status == "cancelled")
     }
 }
 

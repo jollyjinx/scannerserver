@@ -33,5 +33,41 @@
   </head>
   <body>
     <main><!-- SCANNER_SERVER_CONTENT --></main>
+    <script>
+      (() => {
+        const selectAll = document.querySelector("[data-select-all]");
+        const fileCheckboxes = Array.from(document.querySelectorAll('input[name="files"]'));
+        const updateSelectAll = () => {
+          if (!selectAll) return;
+          const selectedCount = fileCheckboxes.filter((checkbox) => checkbox.checked).length;
+          selectAll.checked = selectedCount === fileCheckboxes.length;
+          selectAll.indeterminate = selectedCount > 0 && selectedCount < fileCheckboxes.length;
+        };
+        selectAll?.addEventListener("change", () => {
+          fileCheckboxes.forEach((checkbox) => { checkbox.checked = selectAll.checked; });
+          updateSelectAll();
+        });
+        fileCheckboxes.forEach((checkbox) => checkbox.addEventListener("change", updateSelectAll));
+        updateSelectAll();
+
+        const revision = SCANNER_SERVER_REVISION;
+        const reconnect = () => window.setTimeout(waitForUpdate, 5000);
+        async function waitForUpdate() {
+          try {
+            const response = await fetch(`/updates?since=${revision}`, { cache: "no-store" });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const nextRevision = Number.parseInt(await response.text(), 10);
+            if (nextRevision > revision) {
+              window.location.reload();
+            } else {
+              reconnect();
+            }
+          } catch (error) {
+            reconnect();
+          }
+        }
+        waitForUpdate();
+      })();
+    </script>
   </body>
 </html>

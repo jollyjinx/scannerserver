@@ -45,9 +45,31 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("action=\"/scan\""))
                 #expect(body.contains("name=\"mode_id\""))
                 #expect(body.contains("No scans yet."))
+                #expect(body.contains("fetch(`/updates?since=${revision}`"))
+                #expect(!body.contains("SCANNER_SERVER_REVISION"))
             }
             try await client.execute(uri: "/health", method: .post) { response in
                 #expect(response.status == .notFound || response.status == .methodNotAllowed)
+            }
+        }
+    }
+
+    @Test("Browser update request completes only after a server state revision")
+    func browserUpdates() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+        let revision = await fixture.scanJobs.webUpdates.notify()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/updates?since=0", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "text/plain; charset=utf-8")
+                #expect(response.headers[.cacheControl] == "no-store")
+                #expect(String(buffer: response.body) == "\(revision)\n")
+            }
+            try await client.execute(uri: "/updates?since=invalid", method: .get) { response in
+                #expect(response.status == .badRequest)
             }
         }
     }
@@ -210,6 +232,38 @@ struct ScannerServerApplicationTests {
         #expect(await fixture.executor.requests.isEmpty)
     }
 
+    @Test("OCR can be cancelled from the web page and records elapsed jobs")
+    func cancelOCR() async throws {
+        let executor = SlowCapturingExecutor(delay: .seconds(30))
+        let fixture = try HTTPFixture(
+            environment: ["SCAN_BACKEND": "sane"],
+            executor: executor
+        )
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        await fixture.ocrQueue.enqueue("/scans/page-0001.pdf")
+        while await executor.requests.isEmpty { await Task.yield() }
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                #expect(String(buffer: response.body).contains("action=\"/ocr/cancel\""))
+            }
+            try await postForm(client, uri: "/ocr/cancel", body: "") { response in
+                expectRedirect(response, to: "/")
+            }
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Recent OCR jobs"))
+                #expect(body.contains("page-0001.pdf"))
+                #expect(body.contains("cancelled in "))
+            }
+        }
+
+        #expect(await fixture.ocrQueue.state.status == "cancelled")
+        #expect(await fixture.ocrQueue.state.queued == 0)
+    }
+
     @Test("Setup routes preserve fields and report unavailable services without fake success")
     func setupRoutes() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
@@ -311,6 +365,8 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("2026-07-10.&lt;script&gt;.pdf"))
                 #expect(!body.contains("2026-07-10.<script>.pdf"))
                 #expect(body.contains("/files/2026-07-10.%3Cscript%3E.pdf"))
+                #expect(body.contains(#"<input type="checkbox" data-select-all> Select all"#))
+                #expect(body.contains(#"document.querySelectorAll('input[name="files"]')"#))
             }
         }
     }
@@ -321,6 +377,7 @@ private struct HTTPFixture: Sendable {
     let outputDirectory: URL
     let settingsStore: ScanSettingsStore
     let scanJobs: ScanJobActor
+    let ocrQueue: OCRQueueActor
     let executor: SlowCapturingExecutor
     let environment: [String: String]
 
@@ -337,7 +394,12 @@ private struct HTTPFixture: Sendable {
         environment["SCANNER_CONFIG_PATH"] = outputDirectory.appendingPathComponent(".scannerserver-scanner.json").path
         self.environment = environment
         settingsStore = ScanSettingsStore(environment: environment)
-        scanJobs = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
+        let webUpdates = WebUpdateNotifier()
+        scanJobs = ScanJobActor(
+            nativeScanner: ProcessBackedTestScanner(executor),
+            webUpdates: webUpdates
+        )
+        ocrQueue = OCRQueueActor(executor: executor, webUpdates: webUpdates)
         self.executor = executor
     }
 
@@ -347,6 +409,7 @@ private struct HTTPFixture: Sendable {
         let dependencies = ScannerServerDependencies(
             settingsStore: settingsStore,
             scanJobs: scanJobs,
+            ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: scannerSetup ?? StoredScannerSetupService(
                 store: ScannerConfigStore(environment: environment)
