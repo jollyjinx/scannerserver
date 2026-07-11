@@ -735,7 +735,17 @@ private func renderModes(
     html += select(name: "SCAN_PAGE_MODE", label: "Pages", values: [("multi", "Multipage file"), ("single", "One file per page")], selected: selectedMode.settings.pageMode)
     html += select(name: "SCAN_RESOLUTION", label: "Resolution", values: ["200", "300", "400", "600"].map { ($0, "\($0) dpi") }, selected: selectedMode.settings.resolution)
     html += select(name: "SCAN_MODE", label: "Color mode", values: ["Color", "Gray", "Lineart"].map { ($0, $0) }, selected: selectedMode.settings.mode)
-    html += "<label>OCR language<input name=\"SCAN_LANGUAGE\" value=\"\(htmlEscape(selectedMode.settings.language))\"></label></div>"
+    html += select(
+        name: "SCAN_LANGUAGE",
+        label: "OCR language",
+        values: [
+            ("deu+eng", "German + English"),
+            ("deu", "German"),
+            ("eng", "English"),
+        ],
+        selected: selectedMode.settings.language
+    )
+    html += "</div>"
     html += "<div class=\"checkbox-grid\">"
     html += checkbox(name: "SCAN_OCR_ENABLED", label: "OCR", checked: selectedMode.settings.ocrEnabled)
     html += checkbox(name: "SCAN_CROP_PAGES", label: "Autocrop", checked: selectedMode.settings.cropPages)

@@ -143,6 +143,11 @@ struct ScannerServerApplicationTests {
                 let body = String(buffer: response.body)
                 #expect(!body.contains("<script>alert(1)</script>"))
                 #expect(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"))
+                #expect(body.contains(#"<select name="SCAN_LANGUAGE">"#))
+                #expect(body.contains(#"<option value="deu+eng">German + English</option>"#))
+                #expect(body.contains(#"<option value="deu">German</option>"#))
+                #expect(body.contains(#"<option value="eng" selected>English</option>"#))
+                #expect(!body.contains(#"<input name="SCAN_LANGUAGE""#))
             }
             try await postForm(client, uri: "/modes/delete", body: "mode_id=script-alert-1-script") { response in
                 expectRedirect(response, to: "/")
