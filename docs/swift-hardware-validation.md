@@ -60,6 +60,7 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 - Press the physical scan button once and confirm one scan starts with the configured default mode and `SCAN_TRIGGER=button`.
 - Press repeatedly during debounce, cooldown, and an active scan; confirm no duplicate scan starts.
 - Wait for scan completion and confirm the session re-arms without restarting the container.
+- Press the button with an empty feeder, wait for the brief orange error indication to clear, then load paper and confirm the next button press scans without restarting the scanner or container.
 - Change the default mode and scanner configuration, then confirm the next button scan uses the new values.
 - Temporarily disconnect the scanner, reconnect it, and confirm reachability retry and periodic re-arming recover.
 

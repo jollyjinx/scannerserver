@@ -30,15 +30,20 @@ actor RuntimeButtonFakeNetwork: ScanSnapSetupNetworkProviding {
 }
 
 actor RuntimeButtonProcessExecutor: ProcessExecutor {
+    let result: ProcessResult
     private var recordedRequests: [ProcessRequest] = []
     private var executionContinuation: CheckedContinuation<Void, Never>?
+
+    init(result: ProcessResult = ProcessResult(exitStatus: 0)) {
+        self.result = result
+    }
 
     func execute(_ request: ProcessRequest) async throws -> ProcessResult {
         recordedRequests.append(request)
         await withCheckedContinuation { continuation in
             executionContinuation = continuation
         }
-        return ProcessResult(exitStatus: 0)
+        return result
     }
 
     func requests() -> [ProcessRequest] {
@@ -125,12 +130,12 @@ func runtimeButtonNotice(source: String) -> ScanSnapDatagram {
 }
 
 func runtimeButtonEventually(
-    attempts: Int = 200,
+    attempts: Int = 1_000,
     condition: @escaping @Sendable () async -> Bool
 ) async -> Bool {
     for _ in 0..<attempts {
         if await condition() { return true }
-        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(1))
     }
     return false
 }

@@ -90,4 +90,63 @@ struct ScanSnapButtonScanDispatcherTests {
         #expect(!(await lifecycle.state.buttonScanInFlight))
         #expect(!(await dispatcher.isScanRunning()))
     }
+
+    @Test("Failed button scan requests scanner-session recovery")
+    func failedScanRequestsRecovery() async throws {
+        let directory = try runtimeButtonTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = [
+            "SCAN_OUTPUT_DIR": directory.path,
+            "SCANSNAP_CLIENT_IP": "192.168.60.10",
+            "SCANSNAP_CLIENT_MAC": "02:11:22:33:44:55",
+        ]
+        let scannerStore = ScannerConfigStore(
+            fileURL: directory.appendingPathComponent("scanner.json"),
+            environment: environment
+        )
+        _ = try await scannerStore.save(ScannerConfig(
+            status: .configured,
+            scannerIP: "192.168.60.44",
+            pairingKey: "active-key"
+        ))
+        let executor = RuntimeButtonProcessExecutor(result: ProcessResult(
+            exitStatus: 1,
+            standardError: "Error: no document in scanner\n"
+        ))
+        let scanJobs = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
+        let dispatcher = ScanJobButtonScanDispatcher(
+            scanJobs: scanJobs,
+            scannerStore: scannerStore,
+            environment: environment
+        )
+        let armer = ButtonFakeArmer()
+        let lifecycle = ScanSnapButtonLifecycleActor(
+            scannerProvider: StoreBackedScanSnapButtonScannerConfigurationProvider(
+                store: scannerStore,
+                environment: environment,
+                network: RuntimeButtonFakeNetwork()
+            ),
+            modeProvider: ButtonFakeModeProvider(),
+            scanDispatcher: dispatcher,
+            reachability: ButtonFakeReachability([true]),
+            armer: armer,
+            clock: ButtonFakeClock(12_000)
+        )
+        await dispatcher.attach(lifecycle: lifecycle)
+
+        #expect(await lifecycle.processNotice(
+            runtimeButtonNotice(source: "192.168.60.44"),
+            atMilliseconds: 10_000
+        ) == .scanStarted(modeID: "button-default"))
+        #expect(await runtimeButtonEventually { await executor.requests().count == 1 })
+        await executor.complete()
+        await scanJobs.waitUntilIdle()
+        #expect(await runtimeButtonEventually { await lifecycle.state.rearmRequested })
+
+        await lifecycle.runMaintenance(atMilliseconds: 12_000)
+
+        #expect(await runtimeButtonEventually { await armer.recoveryCalls.count == 1 })
+        #expect(await armer.calls.isEmpty)
+        #expect(await runtimeButtonEventually { await lifecycle.state.isArmed })
+    }
 }

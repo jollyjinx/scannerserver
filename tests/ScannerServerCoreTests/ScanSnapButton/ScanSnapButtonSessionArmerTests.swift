@@ -122,3 +122,30 @@ func busyPairingDoesNotInitializeDataPort() async {
     #expect(await pairing.configurations.first?.retryPolicy == .buttonArming)
     #expect(await tcpFactory.ports.isEmpty)
 }
+
+@Test("Recovery releases the failed scan session before retaining a fresh button session")
+func recoveryReleasesBeforeButtonArming() async throws {
+    let pairing = ButtonFakePairing()
+    let response = vensResponse()
+    let dataConnection = ButtonFakeTCPConnection(
+        readChunks: [[UInt8](repeating: 0, count: 16)] + Array(repeating: response, count: 7)
+    )
+    let controlConnections = (0..<2).map { _ in
+        ButtonFakeTCPConnection(readChunks: [[UInt8](repeating: 0, count: 16), response])
+    }
+    let armer = ScanSnapButtonSessionArmer(
+        pairing: pairing,
+        connectionFactory: ButtonFakeTCPFactory(
+            dataConnection: dataConnection,
+            controlConnections: controlConnections
+        ),
+        timestampProvider: { fixedButtonTimestamp }
+    )
+
+    try await armer.recoverAndArm(
+        scanner: buttonScannerConfiguration(),
+        configuration: ScanSnapButtonConfiguration(armTimeoutMilliseconds: 10_000)
+    )
+
+    #expect(await pairing.configurations.map(\.retryPolicy) == [.pairingTest, .buttonArming])
+}

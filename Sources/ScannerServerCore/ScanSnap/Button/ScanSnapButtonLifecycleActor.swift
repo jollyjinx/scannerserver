@@ -58,6 +58,7 @@ public actor ScanSnapButtonLifecycleActor {
     private var isArming = false
     private var buttonScanInFlight = false
     private var rearmRequested = false
+    private var recoveryArmRequested = false
     private var nextArmAtMilliseconds: UInt64?
     private var nextReachabilityAtMilliseconds: UInt64 = 0
     private var lastButtonStartedAtMilliseconds: UInt64?
@@ -171,6 +172,7 @@ public actor ScanSnapButtonLifecycleActor {
         isArmed = false
         buttonScanInFlight = false
         rearmRequested = false
+        recoveryArmRequested = false
         nextArmAtMilliseconds = nil
         lastScannerConfiguration = nil
         listener?.cancel()
@@ -340,20 +342,21 @@ public actor ScanSnapButtonLifecycleActor {
         }
     }
 
-    public func scanDidFinish() async {
+    public func scanDidFinish(succeeded: Bool = true) async {
         let lifecycleGeneration = lifecycleGeneration
         let now = await clock.nowMilliseconds()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
-        scanDidFinish(atMilliseconds: now)
+        scanDidFinish(succeeded: succeeded, atMilliseconds: now)
     }
 
-    public func scanDidFinish(atMilliseconds now: UInt64) {
+    public func scanDidFinish(succeeded: Bool = true, atMilliseconds now: UInt64) {
         guard acceptsLifecycleOperations else { return }
         buttonScanInFlight = false
         lastScanCompletedAtMilliseconds = now
         isArmed = false
         nextArmAtMilliseconds = nil
         rearmRequested = true
+        recoveryArmRequested = recoveryArmRequested || !succeeded
     }
 
     public func scannerConfigurationDidChange() async {
@@ -547,12 +550,20 @@ public actor ScanSnapButtonLifecycleActor {
         nextArmAtMilliseconds = nil
         armingGeneration &+= 1
         let generation = armingGeneration
+        let isRecovery = recoveryArmRequested
         armingTask = Task { [weak self, armer, configuration] in
             let succeeded: Bool
             do {
-                try await armer.arm(scanner: scanner, configuration: configuration)
+                if isRecovery {
+                    try await armer.recoverAndArm(scanner: scanner, configuration: configuration)
+                } else {
+                    try await armer.arm(scanner: scanner, configuration: configuration)
+                }
                 succeeded = true
+            } catch is CancellationError {
+                succeeded = false
             } catch {
+                JLog.warning("ScanSnap button \(isRecovery ? "recovery " : "")arming failed: \(error)")
                 succeeded = false
             }
             await self?.finishArming(
@@ -575,6 +586,7 @@ public actor ScanSnapButtonLifecycleActor {
         isArming = false
         isArmed = succeeded
         if succeeded {
+            recoveryArmRequested = false
             nextArmAtMilliseconds = adding(configuration.armIntervalMilliseconds, to: now)
         } else {
             nextArmAtMilliseconds = nil
@@ -606,6 +618,7 @@ public actor ScanSnapButtonLifecycleActor {
         nextArmAtMilliseconds = nil
         nextReachabilityAtMilliseconds = now
         rearmRequested = false
+        recoveryArmRequested = false
     }
 
     private func isWithin(_ interval: UInt64, of earlier: UInt64?, at now: UInt64) -> Bool {

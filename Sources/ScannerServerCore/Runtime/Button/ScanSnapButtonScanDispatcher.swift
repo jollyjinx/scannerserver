@@ -1,4 +1,5 @@
 import Foundation
+import JLog
 
 public actor ScanJobButtonScanDispatcher: ScanSnapButtonScanDispatching {
     private let scanJobs: ScanJobActor
@@ -53,15 +54,19 @@ public actor ScanJobButtonScanDispatcher: ScanSnapButtonScanDispatching {
         completionTask = Task { [weak self, scanJobs] in
             await scanJobs.waitUntilIdle()
             guard !Task.isCancelled else { return }
-            await self?.scanDidFinish(generation: generation)
+            let succeeded = await scanJobs.state.status == "done"
+            if !succeeded {
+                JLog.warning("ScanSnap button scan failed; recovering scanner session")
+            }
+            await self?.scanDidFinish(generation: generation, succeeded: succeeded)
         }
         return true
     }
 
-    private func scanDidFinish(generation: UInt64) async {
+    private func scanDidFinish(generation: UInt64, succeeded: Bool) async {
         guard generation == completionGeneration else { return }
         if let lifecycle {
-            await lifecycle.scanDidFinish()
+            await lifecycle.scanDidFinish(succeeded: succeeded)
         }
         guard generation == completionGeneration else { return }
         completionTask = nil

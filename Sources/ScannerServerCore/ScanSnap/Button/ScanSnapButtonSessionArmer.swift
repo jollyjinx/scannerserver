@@ -35,10 +35,38 @@ public struct ScanSnapButtonSessionArmer: ScanSnapButtonArming {
         scanner: ScanSnapButtonScannerConfiguration,
         configuration: ScanSnapButtonConfiguration
     ) async throws {
-        let timeout = configuration.armTimeoutMilliseconds
+        try await runWithTimeout(configuration.armTimeoutMilliseconds) {
+            try await armWithoutTimeout(scanner: scanner, configuration: configuration)
+        }
+    }
+
+    public func recoverAndArm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        try await runWithTimeout(configuration.armTimeoutMilliseconds) {
+            let recoveryResult = try await pairing.pair(
+                configuration: pairingConfiguration(
+                    scanner: scanner,
+                    configuration: configuration,
+                    retryPolicy: .pairingTest
+                ),
+                timestamp: timestampProvider()
+            )
+            guard recoveryResult.accepted else {
+                throw ScanSnapButtonArmingError.pairingRejected(recoveryResult.status)
+            }
+            try await armWithoutTimeout(scanner: scanner, configuration: configuration)
+        }
+    }
+
+    private func runWithTimeout(
+        _ timeout: UInt64,
+        operation: @escaping @Sendable () async throws -> Void
+    ) async throws {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                try await armWithoutTimeout(scanner: scanner, configuration: configuration)
+                try await operation()
             }
             group.addTask {
                 try await Task.sleep(for: .milliseconds(Int64(clamping: timeout)))
@@ -54,7 +82,27 @@ public struct ScanSnapButtonSessionArmer: ScanSnapButtonArming {
         scanner: ScanSnapButtonScannerConfiguration,
         configuration: ScanSnapButtonConfiguration
     ) async throws {
-        let pairingConfiguration = ScanSnapPairingConfiguration(
+        let result = try await pairing.pair(
+            configuration: pairingConfiguration(
+                scanner: scanner,
+                configuration: configuration,
+                retryPolicy: .buttonArming
+            ),
+            timestamp: timestampProvider()
+        )
+        guard result.accepted else {
+            throw ScanSnapButtonArmingError.pairingRejected(result.status)
+        }
+
+        try await initializeDataSession(scanner: scanner)
+    }
+
+    private func pairingConfiguration(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration,
+        retryPolicy: ScanSnapSessionRetryPolicy
+    ) -> ScanSnapPairingConfiguration {
+        ScanSnapPairingConfiguration(
             scannerIPAddress: scanner.scannerIPAddress,
             clientIPAddress: scanner.clientIPAddress,
             clientMACAddress: scanner.clientMACAddress,
@@ -66,18 +114,9 @@ public struct ScanSnapButtonSessionArmer: ScanSnapButtonArming {
             registrationRounds: scanner.registrationRounds,
             registrationTimeoutMilliseconds: scanner.registrationTimeoutMilliseconds,
             connectionTimeoutMilliseconds: scanner.connectionTimeoutMilliseconds,
-            retryPolicy: .buttonArming,
+            retryPolicy: retryPolicy,
             allowsSourcePortFallback: scanner.allowsRegistrationSourcePortFallback
         )
-        let result = try await pairing.pair(
-            configuration: pairingConfiguration,
-            timestamp: timestampProvider()
-        )
-        guard result.accepted else {
-            throw ScanSnapButtonArmingError.pairingRejected(result.status)
-        }
-
-        try await initializeDataSession(scanner: scanner)
     }
 
     private func initializeDataSession(scanner: ScanSnapButtonScannerConfiguration) async throws {

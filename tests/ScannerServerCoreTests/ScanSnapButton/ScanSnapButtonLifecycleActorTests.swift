@@ -114,6 +114,26 @@ func busyReachabilityRetryAndRearm() async {
     #expect(await eventually { await lifecycle.state.isArmed })
 }
 
+@Test("Failed scans recover the scanner session before re-arming")
+func failedScanRecoversBeforeRearming() async {
+    let reachability = ButtonFakeReachability([true])
+    let armer = ButtonFakeArmer()
+    let clock = ButtonFakeClock(12_000)
+    let lifecycle = makeLifecycle(reachability: reachability, armer: armer, clock: clock)
+
+    #expect(await lifecycle.processNotice(
+        buttonNotice(),
+        atMilliseconds: 10_000
+    ) == .scanStarted(modeID: "button-default"))
+    await lifecycle.scanDidFinish(succeeded: false, atMilliseconds: 12_000)
+
+    await lifecycle.runMaintenance(atMilliseconds: 12_000)
+
+    #expect(await eventually { await armer.recoveryCalls.count == 1 })
+    #expect(await armer.calls.isEmpty)
+    #expect(await eventually { await lifecycle.state.isArmed })
+}
+
 @Test("Configuration-change hook disarms and schedules an immediate reachable rearm")
 func configurationChangeRearmHook() async {
     let reachability = ButtonFakeReachability([true, true])

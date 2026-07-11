@@ -35,6 +35,20 @@ public protocol ScanSnapButtonArming: Sendable {
         scanner: ScanSnapButtonScannerConfiguration,
         configuration: ScanSnapButtonConfiguration
     ) async throws
+
+    func recoverAndArm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws
+}
+
+public extension ScanSnapButtonArming {
+    func recoverAndArm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        try await arm(scanner: scanner, configuration: configuration)
+    }
 }
 
 public protocol ScanSnapButtonClock: Sendable {

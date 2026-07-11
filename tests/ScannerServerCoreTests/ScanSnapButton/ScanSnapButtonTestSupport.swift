@@ -124,6 +124,7 @@ actor ButtonFakeArmer: ScanSnapButtonArming {
 
     let behavior: Behavior
     private(set) var calls: [Call] = []
+    private(set) var recoveryCalls: [Call] = []
     private(set) var wasCancelled = false
 
     init(behavior: Behavior = .succeed) {
@@ -135,6 +136,26 @@ actor ButtonFakeArmer: ScanSnapButtonArming {
         configuration: ScanSnapButtonConfiguration
     ) async throws {
         calls.append(Call(scanner: scanner, configuration: configuration))
+        switch behavior {
+        case .succeed:
+            return
+        case .fail:
+            throw ButtonFakeError.expected
+        case .waitForCancellation:
+            do {
+                try await Task.sleep(for: .seconds(60))
+            } catch is CancellationError {
+                wasCancelled = true
+                throw CancellationError()
+            }
+        }
+    }
+
+    func recoverAndArm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        recoveryCalls.append(Call(scanner: scanner, configuration: configuration))
         switch behavior {
         case .succeed:
             return
