@@ -13,7 +13,7 @@ Run this checklist against a real ScanSnap iX500 before publishing the Swift ima
 ## Build And Start
 
 ```bash
-container build \
+docker build \
   --file Dockerfile \
   --tag scannerserver-swift:hardware \
   .
@@ -77,7 +77,7 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 docker exec scannerserver-swift-hardware \
   grep -E '^(Name|VmRSS|VmHWM|Threads):' /proc/1/status
 
-container image list --verbose
+docker image list --verbose
 docker logs scannerserver-swift-hardware
 ```
 

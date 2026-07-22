@@ -134,13 +134,13 @@ environment:
 Check logs:
 
 ```bash
-container logs -f scannerserver
+docker logs -f scannerserver
 ```
 
 For Compose:
 
 ```bash
-container compose logs -f scansnap
+docker compose logs -f scansnap
 ```
 
 Check the scanner from the host:
@@ -152,8 +152,8 @@ ping SCANNER_IP
 Check the container network view:
 
 ```bash
-container compose exec scansnap ip addr
-container compose exec scansnap ip neigh show
+docker compose exec scansnap ip addr
+docker compose exec scansnap ip neigh show
 ```
 
 If button presses do nothing, look for:

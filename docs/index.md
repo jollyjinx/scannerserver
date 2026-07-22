@@ -14,6 +14,7 @@ Use this page as the entry point for repository documentation. The root [`README
 
 | Document | Use it for | Primary audience |
 | --- | --- | --- |
+| [`../AI/README.md`](../AI/README.md) | Agent routing, package shape, compatibility boundaries, and validation baseline | Agents |
 | [`configuration.md`](configuration.md) | Environment variables, scan modes, output names, OCR, blank-page removal, and cropping | Operators |
 | [`deployment.md`](deployment.md) | Published images, host networking, Compose, local builds, and image publishing | Operators |
 | [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, ports, and physical-button protocol | Maintainers |
@@ -23,9 +24,9 @@ Use this page as the entry point for repository documentation. The root [`README
 
 ## Front Matter Convention
 
-All repository documentation Markdown files, including agent instructions, must begin with YAML front matter. The root `README.md` is the only exception because GitHub presents it directly to both people and agents.
+Maintained topic documentation under `docs/` and `AI/` begins with YAML front matter. The root `README.md` is the human-facing exception because GitHub presents it directly. `AGENTS.md` may use skill-compatible `name` and `description` front matter when it is intended to act as repository-local agent guidance.
 
-Every documentation file must provide these fields:
+Topic documentation must provide these fields:
 
 | Field | Purpose |
 | --- | --- |

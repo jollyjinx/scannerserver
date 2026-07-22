@@ -14,7 +14,7 @@ Replace the long-running Python scannerserver with a Swift 6.3 Linux service tha
 
 The replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
 
-Implementation and the repository’s default container cutover are complete. Registry promotion is pending: `ghcr.io/jollyjinx/scannerserver:latest` still points to the legacy implementation until this branch is merged and the publishing workflow succeeds. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, the UDP button listener, physical button scanning, source PDF publication, blank/crop processing, and searchable OCR output have been exercised against the project iX500 on the Raspberry Pi deployment.
+Implementation, the repository’s default container cutover, and registry promotion are complete. The main-branch container workflow for commit `ecc051b` completed successfully on 2026-07-12, and release `2.0.1` was published afterward. `ghcr.io/jollyjinx/scannerserver:latest` now follows the Swift service on the default branch. Discovery, scanner selection, pairing, persisted configuration, TCP reachability, the UDP button listener, physical button scanning, source PDF publication, blank/crop processing, and searchable OCR output have been exercised against the project iX500 on the Raspberry Pi deployment.
 
 The production ARM64 image passes its non-root container acceptance flow: health and index routes, native preview generation, deterministic SANE acquisition and PDF conversion, qpdf validation, writable bind mounts, packaged command availability, and arbitrary-UID `SCANNER_URL` setup.
 
@@ -30,8 +30,9 @@ Browser acceptance against that image also passes: changing the physical-button 
 | Scan pipeline and OCR queue | Complete |
 | Native ScanSnap discovery, pairing, and button runtime | Complete |
 | Native document and preview helpers | Complete |
-| Default container cutover | Complete in repository; registry publication pending |
+| Default container cutover | Complete; main, `latest`, and release `2.0.1` published |
 | Physical scan, OCR, and button acceptance | Complete |
+| Main-branch registry publication | Complete on 2026-07-12 |
 
 ## Hardware Evidence
 
@@ -53,7 +54,7 @@ sudo ifconfig vlan5 -alias 10.112.10.6
 
 ## Measured Baseline
 
-Measurements use the ARM64 production containers at idle after the index and health routes have been requested. RSS is read from `/proc/1/status`; image size is reported by `container image list --verbose`.
+Measurements use the ARM64 production containers at idle after the index and health routes have been requested. RSS is read from `/proc/1/status`; image size is reported by `docker image list --verbose`.
 
 | Runtime | Idle RSS | Threads | Compressed image |
 | --- | ---: | ---: | ---: |
@@ -73,7 +74,7 @@ The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on A
 - Keep output naming: `YYYY-MM-DD.HHMMSS.pdf`, `YYYY-MM-DD.HHMMSS.ocr.pdf`, `YYYY-MM-DD.HHMMSS-page-0001.pdf`, page OCR variants, PNG exports, and `.previews`.
 - Keep the web UI workflows: first-run scanner setup, manual scanner setup, scan start, mode save/delete/default, grouped scan list, preview, download, delete, OCR status, and physical button scans.
 - Keep OCR work observable and controllable: the web UI can cancel the active OCR subprocess together with queued jobs and shows bounded recent-job durations (per page when the scan mode emits one PDF per page, per document for multipage PDFs).
-- Use `container` in docs and normal workflows. Use `docker` only where a required option is unavailable through `container`, such as a documented buildx publishing path.
+- Use Docker commands consistently in documentation, development workflows, smoke tests, and publishing examples.
 
 ## Architecture
 
@@ -131,7 +132,7 @@ Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The imple
 Acceptance:
 
 - `swift build` and `swift test` pass.
-- `container build` succeeds for the Swift image.
+- `docker build` succeeds for the Swift image.
 - A local container responds on the configured web port.
 
 ### 2. Model And Settings Parity
@@ -203,10 +204,10 @@ Acceptance:
 
 Acceptance:
 
-- `container compose up -d --build` works from a clean checkout, with `docker compose` as the documented fallback when the plugin is unavailable.
+- `docker compose up -d --build` works from a clean checkout.
 - The documented Docker host-network deployment remains a drop-in replacement.
 - Scan directory ownership and non-root port binding still work.
-- Docs contain no stale `docker` command unless the section explains why Docker-only functionality is needed.
+- Documentation uses Docker consistently for build, run, Compose, smoke-test, and publishing workflows.
 
 ## Test Plan
 

@@ -42,13 +42,11 @@ Using only `-p 8080:8080` puts the container on a bridge network. The web UI is 
 The repository includes a simple host-network `compose.yaml`:
 
 ```bash
-git clone https://github.com/jollyjinx/scannerserver.git
+git clone https://gitmaster.jinx.eu/jnxpublic/scannerserver.git
 cd scannerserver
 mkdir -p scans
-container compose up -d
+docker compose up -d
 ```
-
-Use `docker compose` when the `container-compose` plugin is not installed.
 
 ## Raspberry Pi Macvlan Example
 
@@ -73,8 +71,8 @@ NETWORK_PREFIX=10.112
 If you already have a larger home-lab Compose file, copy only the scanner service into it instead of replacing your stack.
 
 ```bash
-container compose config --quiet
-container compose up -d --no-deps scansnap
+docker compose config --quiet
+docker compose up -d --no-deps scansnap
 ```
 
 ## Updating
@@ -92,18 +90,16 @@ Compose:
 
 ```bash
 git pull
-container compose pull
-container compose up -d
+docker compose pull
+docker compose up -d
 ```
-
-Use `docker compose` for Compose commands when the `container-compose` plugin is not installed.
 
 ## Build From Source
 
 Local builds are only needed when changing the Swift package or testing Dockerfile changes. The checked-in Compose service already has `build: .`, so a clean checkout can be built directly:
 
 ```bash
-container compose up -d --build
+docker compose up -d --build
 ```
 
 ## Build And Push Development
@@ -120,7 +116,7 @@ By default it builds and pushes:
 ghcr.io/jollyjinx/scannerserver:development
 ```
 
-The script uses Docker Buildx because the `container` command does not provide the multi-platform Buildx and registry-push options it needs. This is the Docker-specific publishing workflow:
+The script uses Docker Buildx for the multi-platform registry-publishing workflow:
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 --push ...

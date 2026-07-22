@@ -45,13 +45,11 @@ published; the original PDF remains unchanged and available throughout processin
 Compose is optional. If you prefer it, clone the repo and use the included host-network compose file:
 
 ```bash
-git clone https://github.com/jollyjinx/scannerserver.git
+git clone https://gitmaster.jinx.eu/jnxpublic/scannerserver.git
 cd scannerserver
 mkdir -p scans
-container compose up -d
+docker compose up -d
 ```
-
-Use `docker compose` when the `container-compose` plugin is not installed.
 
 Then open:
 
@@ -97,11 +95,9 @@ For Compose:
 
 ```bash
 git pull
-container compose pull
-container compose up -d
+docker compose pull
+docker compose up -d
 ```
-
-Use `docker compose` for these commands when the `container-compose` plugin is not installed.
 
 ## Troubleshooting
 
@@ -114,7 +110,7 @@ docker logs -f scannerserver
 For Compose:
 
 ```bash
-container compose logs -f scansnap
+docker compose logs -f scansnap
 ```
 
 If setup finds no scanner, make sure:
@@ -127,7 +123,7 @@ If setup finds no scanner, make sure:
 With Compose:
 
 ```bash
-container compose exec scansnap ip neigh show
+docker compose exec scansnap ip neigh show
 ```
 
 If discovery still fails but you know the scanner IP, enter the IP address manually on the setup page.
