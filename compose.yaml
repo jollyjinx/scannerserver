@@ -7,20 +7,6 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     network_mode: host
     environment:
-      SCAN_OUTPUT_DIR: /scans
-      SCAN_BACKEND: wifi
-      SCAN_LANGUAGE: deu+eng
-      SCAN_RESOLUTION: "300"
-      SCAN_MODE: Color
-      SCAN_SOURCE: ADF Duplex
-      SCAN_FORMAT: pdf
-      TZ: ${TZ:-Europe/Berlin}
       WEB_PORT: "80"
-      SCANNER_IP: ${SCANNER_IP:-}
-      SCANSNAP_BUTTON_SCAN_ENABLED: "true"
-      SCANSNAP_BUTTON_PORT: "55265"
-      SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS: "60"
-      SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS: "45"
-      SCANSNAP_PAIRING_KEY: ${SCANSNAP_PAIRING_KEY:-}
     volumes:
       - ./scans:/scans

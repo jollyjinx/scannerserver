@@ -29,7 +29,6 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   --user "$(id -u):$(id -g)" \
-  -e TZ=Europe/Berlin \
   -e WEB_PORT=80 \
   -v "$PWD/scans:/scans" \
   ghcr.io/jollyjinx/scannerserver:latest
@@ -66,7 +65,8 @@ Set the network prefix in the environment used by Compose:
 NETWORK_PREFIX=10.112
 ```
 
-`SCANNER_IP` and `SCANSNAP_PAIRING_KEY` are optional if you use the web setup.
+The service derives its container IP from the macvlan interface. Scanner selection and pairing
+are handled by the first-run web setup.
 
 If you already have a larger home-lab Compose file, copy only the scanner service into it instead of replacing your stack.
 

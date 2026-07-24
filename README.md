@@ -17,7 +17,6 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   --user "$(id -u):$(id -g)" \
-  -e TZ=Europe/Berlin \
   -e WEB_PORT=80 \
   -v "$PWD/scans:/scans" \
   ghcr.io/jollyjinx/scannerserver:latest
