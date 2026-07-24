@@ -125,6 +125,24 @@ public extension ScannerSetupServing {
     func discoveryInProgress() async -> Bool { false }
     func ensureDiscoveryStarted() async {}
     func shutdown() async {}
+
+    func configureManually(
+        ipAddress: String,
+        macAddress: String,
+        serial: String,
+        securityKey: String
+    ) async -> ScannerSetupOutcome {
+        let outcome = await configureManually(
+            ipAddress: ipAddress,
+            macAddress: macAddress,
+            serial: serial
+        )
+        let securityKey = securityKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard outcome == .passwordNeeded, !securityKey.isEmpty else {
+            return outcome
+        }
+        return await savePassword(securityKey)
+    }
 }
 
 public actor StoredScannerSetupService: ScannerSetupServing {
@@ -375,7 +393,8 @@ public enum ScannerServerApplication {
                 setup: await dependencies.scannerSetup.configureManually(
                     ipAddress: ipAddress,
                     macAddress: macAddress,
-                    serial: form.scannerSerial ?? ""
+                    serial: form.scannerSerial ?? "",
+                    securityKey: form.scannerSecurityKey ?? ""
                 )
             )
         }
@@ -488,10 +507,12 @@ private struct ScannerManualForm: Decodable {
     let scannerIP: String?
     let scannerMAC: String?
     let scannerSerial: String?
+    let scannerSecurityKey: String?
     enum CodingKeys: String, CodingKey {
         case scannerIP = "scanner_ip"
         case scannerMAC = "scanner_mac"
         case scannerSerial = "scanner_serial"
+        case scannerSecurityKey = "scanner_security_key"
     }
 }
 
@@ -725,10 +746,14 @@ private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
     }
     html += "<form method=\"post\" action=\"/setup/scanners/manual\">"
     html += "<label>Scanner IP<input name=\"scanner_ip\" value=\"\(htmlEscape(setup.ipAddress))\"></label>"
-    html += "<label>Ethernet address<input name=\"scanner_mac\"></label>"
-    html += "<label>Serial<input name=\"scanner_serial\"></label><button>Continue setup</button></form>"
+    html += "<p class=\"muted\">For a scanner on another network, enter its IP address and either the product serial number or its security key/password.</p>"
+    html += "<label>Product serial number<input name=\"scanner_serial\"></label>"
+    html += "<label>Security key or scanner password<input type=\"password\" name=\"scanner_security_key\"></label>"
+    html += "<label>Ethernet address (same network only)<input name=\"scanner_mac\"></label>"
+    html += "<p class=\"muted\">The security key cannot be derived from the Ethernet address. The address only helps discovery on the same local network.</p>"
+    html += "<button>Connect scanner</button></form>"
     if setup.needsPassword {
-        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Scanner password<input type=\"password\" name=\"scanner_password\"></label><button>Save password</button></form>"
+        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Security key or scanner password<input type=\"password\" name=\"scanner_password\"></label><button>Save security key</button></form>"
     }
     html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div>"
     return html
@@ -885,8 +910,8 @@ private func setupMessage(_ code: String?) -> String? {
     case "manual-missing": "Enter a scanner IP address or Ethernet address."
     case "manual-not-found": "No scanner matching those details was found."
     case "manual-invalid": "The scanner details are invalid."
-    case "password-needed": "Enter the scanner password to finish setup."
-    case "password-failed": "The scanner password was rejected."
+    case "password-needed": "Enter the scanner security key or password to finish setup."
+    case "password-failed": "The scanner security key or password was rejected."
     case "configured": "Scanner configured."
     case "cleared": "Scanner setup cleared."
     case "setup-required": "Choose a Wi-Fi scanner before starting a scan."

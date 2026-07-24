@@ -226,6 +226,8 @@ struct ScannerServerApplicationTests {
                 #expect(!body.contains("action=\"/scan\""))
                 #expect(body.contains("action=\"/setup/scanners/discover\""))
                 #expect(body.contains("action=\"/setup/scanners/manual\""))
+                #expect(body.contains("name=\"scanner_security_key\""))
+                #expect(body.contains("security key cannot be derived from the Ethernet address"))
                 #expect(body.contains("action=\"/setup/scanners/clear\""))
             }
         }
@@ -277,10 +279,10 @@ struct ScannerServerApplicationTests {
             try await postForm(client, uri: "/setup/scanners/select", body: "device_id=") { response in
                 expectRedirect(response, to: "/?setup=no-device")
             }
-            try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=&scanner_mac=&scanner_serial=") { response in
+            try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=&scanner_mac=&scanner_serial=&scanner_security_key=") { response in
                 expectRedirect(response, to: "/?setup=manual-missing")
             }
-            try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=192.0.2.8&scanner_mac=&scanner_serial=ABC") { response in
+            try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=192.0.2.8&scanner_mac=&scanner_serial=ABC&scanner_security_key=secret") { response in
                 expectRedirect(response, to: "/?setup=unavailable")
             }
             try await postForm(client, uri: "/setup/scanners/password", body: "scanner_password=secret") { response in
@@ -290,6 +292,32 @@ struct ScannerServerApplicationTests {
                 expectRedirect(response, to: "/?setup=cleared")
             }
         }
+    }
+
+    @Test("Manual setup accepts a security key in the initial form")
+    func manualSetupSecurityKey() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
+        defer { fixture.remove() }
+        let scannerSetup = CapturingManualSetupService()
+        let application = try fixture.application(scannerSetup: scannerSetup)
+
+        try await application.test(.router) { client in
+            let form = [
+                "scanner_ip=192.0.2.8",
+                "scanner_mac=",
+                "scanner_serial=AWRHC08122",
+                "scanner_security_key=8122",
+            ].joined(separator: "&")
+            try await postForm(client, uri: "/setup/scanners/manual", body: form) { response in
+                expectRedirect(response, to: "/?setup=configured")
+            }
+        }
+
+        let request = try #require(await scannerSetup.manualRequests.first)
+        #expect(request.ipAddress == "192.0.2.8")
+        #expect(request.macAddress.isEmpty)
+        #expect(request.serial == "AWRHC08122")
+        #expect(await scannerSetup.securityKeys == ["8122"])
     }
 
     @Test("File routes download, view, preview, reject traversal, and delete files")
@@ -445,6 +473,44 @@ private actor RunningDiscoverySetupService: ScannerSetupServing {
     ) -> ScannerSetupOutcome { .unavailable }
 
     func savePassword(_ password: String) -> ScannerSetupOutcome { .unavailable }
+    func clear() -> ScannerSetupOutcome { .cleared }
+}
+
+private actor CapturingManualSetupService: ScannerSetupServing {
+    struct ManualRequest: Sendable {
+        let ipAddress: String
+        let macAddress: String
+        let serial: String
+    }
+
+    private(set) var manualRequests: [ManualRequest] = []
+    private(set) var securityKeys: [String] = []
+
+    func state() -> ScannerSetupState {
+        ScannerSetupState(serviceAvailable: true)
+    }
+
+    func discover() -> ScannerSetupOutcome { .discoveryStarted }
+    func select(deviceID: String) -> ScannerSetupOutcome { .unavailable }
+
+    func configureManually(
+        ipAddress: String,
+        macAddress: String,
+        serial: String
+    ) -> ScannerSetupOutcome {
+        manualRequests.append(ManualRequest(
+            ipAddress: ipAddress,
+            macAddress: macAddress,
+            serial: serial
+        ))
+        return .passwordNeeded
+    }
+
+    func savePassword(_ password: String) -> ScannerSetupOutcome {
+        securityKeys.append(password)
+        return .configured
+    }
+
     func clear() -> ScannerSetupOutcome { .cleared }
 }
 

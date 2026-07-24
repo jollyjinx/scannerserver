@@ -35,12 +35,28 @@ The web setup flow:
 
 1. Sends VENS discovery/registration packets to LAN broadcast addresses and ARP neighbors with known ScanSnap/Silex MAC prefixes.
 2. Lists discovered ScanSnap devices.
-3. Lets the user choose one, or enter an IP address manually.
+3. Lets the user choose one, or enter an IP address with an optional serial number or security key/password.
 4. Derives the default pairing identity from the discovered serial number.
 5. Tests the pairing identity against TCP `53219`.
 6. Saves the working scanner IP and pairing identity in `/scans/.scannerserver-scanner.json`.
 
 Discovery intentionally does not sweep every IP address in the subnet.
+
+## Scanner On Another Network
+
+Layer-2 broadcast discovery and ARP Ethernet addresses do not normally cross a router. To configure
+a scanner on another routed network, enter its routable IPv4 address and either:
+
+- the product serial number, when the scanner still uses its factory-default password; or
+- the scanner security key/password (or an already-derived pairing identity).
+
+When targeted UDP discovery reaches the scanner, the app can read the serial number automatically.
+If that UDP lookup is blocked, the supplied serial or security key lets setup continue without it.
+The Ethernet/MAC address is not sufficient to calculate the password or pairing identity.
+
+The routed path and its firewall must still permit UDP `52217` for discovery/registration and TCP
+`53218`/`53219` for scanner control and data. Physical-button delivery additionally requires the
+scanner to reach the service on UDP `55265`.
 
 ## Pairing Key From Serial Number
 

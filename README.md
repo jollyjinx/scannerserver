@@ -65,10 +65,15 @@ The setup flow:
 3. Lets you choose the scanner, or enter its IP address manually.
 4. Reads the scanner serial number before pairing.
 5. Tries the factory-default password derived from the serial number.
-6. Asks for the scanner password only if the default one was changed.
+6. Asks for the scanner security key/password only if the default one was changed.
 7. Saves the working scanner config in `/scans/.scannerserver-scanner.json`.
 
 It does not sweep every IP address in your subnet.
+
+For a scanner on another routed network, enter its IP address manually and provide either its
+product serial number or its security key/password. An Ethernet/MAC address cannot be used to
+calculate the security key and normally does not cross routers; it only helps discovery when the
+scanner is on the same local network.
 
 ## Features
 

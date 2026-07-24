@@ -215,6 +215,41 @@ struct ScanSnapSetupServiceTests {
         ) == .manualInvalid)
     }
 
+    @Test("Routed manual setup accepts a security key without device discovery")
+    func routedManualSetupWithSecurityKey() async throws {
+        let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
+        let pairing = FakeScanSnapSetupPairing([acceptedPairing()])
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(routeIPAddress: "10.20.30.10"),
+            discovery: discovery,
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+
+        #expect(await service.configureManually(
+            ipAddress: "192.0.2.44",
+            macAddress: "",
+            serial: "",
+            securityKey: "8122"
+        ) == .configured)
+
+        let config = try #require(await store.loadStored())
+        #expect(config.status == .configured)
+        #expect(config.scannerIP == "192.0.2.44")
+        #expect(config.pairingKey == "179130178176")
+        #expect(config.passwordSource == "user-password")
+        let discoveryConfiguration = try #require(await discovery.configurations.first)
+        #expect(discoveryConfiguration.routes.first?.targetIPAddresses == ["192.0.2.44"])
+        let pairingCall = try #require(await pairing.calls.first)
+        #expect(pairingCall.configuration.scannerIPAddress == "192.0.2.44")
+        #expect(pairingCall.configuration.clientIPAddress == "10.20.30.10")
+        #expect(pairingCall.configuration.identity.value == "179130178176")
+    }
+
     @Test("Password candidates accept derived passwords or a provided pairing key")
     func passwordAcceptanceAndPrecedence() async throws {
         let (store, directory) = setupStore()
