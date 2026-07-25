@@ -18,10 +18,26 @@ ghcr.io/jollyjinx/scannerserver:latest
 
 It supports `linux/amd64` and `linux/arm64`, so it works on x86 Linux hosts and Raspberry Pi systems.
 
-The GitHub Actions workflow publishes this multi-architecture image to GHCR. Gitmaster Actions
-runs tests and an ARM64 container smoke build on its Apple Silicon runner, but does not publish
-an image. This keeps registry credentials and publication on GitHub while validating the same
-architecture used by Raspberry Pi and Apple Silicon deployments on Gitmaster.
+The GitHub Actions workflow publishes this multi-architecture image to GHCR.
+
+Every branch push to Gitmaster runs the tests, builds and smoke-tests an ARM64 image on the
+Apple Silicon runner, and then publishes the verified image to Gitmaster's container registry:
+
+```text
+gitmaster.jinx.eu/jnxpublic/scannerserver:<branch-tag>
+```
+
+Ordinary branch names are used directly after conversion to lowercase. Characters that Docker
+tags cannot contain are replaced with `-`, so `feature/scanner-ui` is published as
+`gitmaster.jinx.eu/jnxpublic/scannerserver:feature-scanner-ui`. The built-in, job-scoped
+`GITEA_TOKEN` authenticates the push; no long-lived registry credential is stored in the
+repository.
+
+For example:
+
+```bash
+docker pull gitmaster.jinx.eu/jnxpublic/scannerserver:development
+```
 
 Gitmaster executes workflow steps inside a Linux job container while Docker Desktop runs the
 Docker daemon on the Mac host. Paths such as `/workspace/...` therefore exist only inside the
