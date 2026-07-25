@@ -104,7 +104,7 @@ jobs:
         env:
           BRANCH_REF: ${{ github.ref }}
           REGISTRY_ACTOR: ${{ github.actor }}
-          REGISTRY_TOKEN: ${{ secrets.GITEA_TOKEN }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
         run: |
           branch_name="${BRANCH_REF#refs/heads/}"
           branch_tag="$(./scripts/container_tag_for_branch.sh "${branch_name}")"

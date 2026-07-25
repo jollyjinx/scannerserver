@@ -29,9 +29,9 @@ gitmaster.jinx.eu/jnxpublic/scannerserver:<branch-tag>
 
 Ordinary branch names are used directly after conversion to lowercase. Characters that Docker
 tags cannot contain are replaced with `-`, so `feature/scanner-ui` is published as
-`gitmaster.jinx.eu/jnxpublic/scannerserver:feature-scanner-ui`. The built-in, job-scoped
-`GITEA_TOKEN` authenticates the push; no long-lived registry credential is stored in the
-repository.
+`gitmaster.jinx.eu/jnxpublic/scannerserver:feature-scanner-ui`. A dedicated Gitea access token
+with only `write:package` scope is stored as the repository Actions secret `REGISTRY_TOKEN` and
+authenticates the push.
 
 For example:
 
