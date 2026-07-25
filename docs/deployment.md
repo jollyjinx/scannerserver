@@ -18,6 +18,11 @@ ghcr.io/jollyjinx/scannerserver:latest
 
 It supports `linux/amd64` and `linux/arm64`, so it works on x86 Linux hosts and Raspberry Pi systems.
 
+The GitHub Actions workflow publishes this multi-architecture image to GHCR. Gitmaster Actions
+runs tests and an ARM64 container smoke build on its Apple Silicon runner, but does not publish
+an image. This keeps registry credentials and publication on GitHub while validating the same
+architecture used by Raspberry Pi and Apple Silicon deployments on Gitmaster.
+
 ## Container Run
 
 Use host networking so ScanSnap UDP discovery reaches the local network. Host networking and restart policies require options unavailable in Apple’s `container` CLI, so this deployment command uses Docker:

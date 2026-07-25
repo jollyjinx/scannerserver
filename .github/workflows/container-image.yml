@@ -17,32 +17,36 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   swift-test:
     name: Swift 6.3.2 Tests
     runs-on: ubuntu-latest
-    container: swift:6.3.2-noble
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install native document tools
-        run: |
-          sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources
-          apt-get update
-          apt-get install -y --no-install-recommends libvips-tools poppler-utils qpdf
-          rm -rf /var/lib/apt/lists/*
-
       - name: Run Swift tests
         env:
           SCANNERSERVER_REQUIRE_NATIVE_TOOL_TESTS: "1"
-        run: swift test
+        run: |
+          docker run --rm \
+            --volume "$PWD:/workspace:ro" \
+            --workdir /workspace \
+            --env SCANNERSERVER_REQUIRE_NATIVE_TOOL_TESTS \
+            swift:6.3.2-noble \
+            sh -c "
+              sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources
+              apt-get update
+              apt-get install -y --no-install-recommends libvips-tools poppler-utils qpdf
+              rm -rf /var/lib/apt/lists/*
+              swift test --scratch-path /tmp/scannerserver-build
+            "
 
   build:
     name: Build
+    if: ${{ github.server_url == 'https://github.com' }}
     needs:
       - swift-test
       - container-smoke
@@ -80,7 +84,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Build Gitmaster ARM64 image
+        if: ${{ github.server_url == 'https://gitmaster.jinx.eu' }}
+        run: docker build --platform linux/arm64 --tag scannerserver:ci .
+
       - name: Build current-platform image
+        if: ${{ github.server_url != 'https://gitmaster.jinx.eu' }}
         run: docker build --tag scannerserver:ci .
 
       - name: Exercise runtime contract
