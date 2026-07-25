@@ -81,7 +81,16 @@ jobs:
         if: ${{ github.server_url != 'https://gitmaster.jinx.eu' }}
         run: docker build --tag scannerserver:ci .
 
-      - name: Exercise runtime contract
+      - name: Exercise Gitmaster runtime contract
+        if: ${{ github.server_url == 'https://gitmaster.jinx.eu' }}
+        env:
+          CONTAINER_COMMAND: docker
+          SCANNERSERVER_SMOKE_HOST: host.docker.internal
+          SCANNERSERVER_SMOKE_USE_DOCKER_VOLUMES: "1"
+        run: ./scripts/smoke_swift_container.sh scannerserver:ci
+
+      - name: Exercise current-platform runtime contract
+        if: ${{ github.server_url != 'https://gitmaster.jinx.eu' }}
         env:
           CONTAINER_COMMAND: docker
           SCANNERSERVER_SMOKE_USE_DOCKER_VOLUMES: "1"

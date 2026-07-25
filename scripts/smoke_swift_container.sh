@@ -11,6 +11,8 @@ fixture_name="2026-07-10.120000.pdf"
 scan_name="2026-07-10.120001.pdf"
 runtime="${CONTAINER_COMMAND:-container}"
 use_docker_volumes="${SCANNERSERVER_SMOKE_USE_DOCKER_VOLUMES:-0}"
+smoke_host="${SCANNERSERVER_SMOKE_HOST:-127.0.0.1}"
+base_url="http://${smoke_host}:${port}"
 scan_volume=""
 fake_bin_volume=""
 scan_mount_source="${scan_dir}"
@@ -93,16 +95,19 @@ fi
   "${image}" >/dev/null
 
 for _ in $(seq 1 30); do
-  if curl --fail --silent "http://127.0.0.1:${port}/health" >/dev/null; then
+  if curl --fail --silent "${base_url}/health" >/dev/null; then
     break
   fi
   sleep 1
 done
 
-curl --fail --silent "http://127.0.0.1:${port}/health" | grep -qx "ok"
-curl --fail --silent "http://127.0.0.1:${port}/" | grep -q '<h1>scannerserver</h1>'
+if ! curl --fail --silent --show-error "${base_url}/health" | grep -qx "ok"; then
+  "${runtime}" logs "${container_name}" >&2 || true
+  exit 1
+fi
+curl --fail --silent "${base_url}/" | grep -q '<h1>scannerserver</h1>'
 curl --fail --silent \
-  "http://127.0.0.1:${port}/files/${fixture_name}/preview" \
+  "${base_url}/files/${fixture_name}/preview" \
   --output "${scan_dir}/preview-response.jpg"
 
 test "$(od -An -tx1 -N2 "${scan_dir}/preview-response.jpg" | tr -d '[:space:]')" = "ffd8"
@@ -117,7 +122,7 @@ curl --fail --silent \
   --request POST \
   --header 'Content-Type: application/x-www-form-urlencoded' \
   --data 'mode_id=duplex-pdf-no-ocr' \
-  "http://127.0.0.1:${port}/scan" \
+  "${base_url}/scan" \
   --output /dev/null
 for _ in $(seq 1 60); do
   if test "${use_docker_volumes}" = "1"; then

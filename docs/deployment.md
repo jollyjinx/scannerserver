@@ -26,7 +26,9 @@ architecture used by Raspberry Pi and Apple Silicon deployments on Gitmaster.
 Gitmaster executes workflow steps inside a Linux job container while Docker Desktop runs the
 Docker daemon on the Mac host. Paths such as `/workspace/...` therefore exist only inside the
 job container and cannot be used as host bind mounts. The workflow copies Swift sources through
-the Docker client and uses Docker-managed volumes for runtime smoke fixtures.
+the Docker client and uses Docker-managed volumes for runtime smoke fixtures. Runtime HTTP checks
+use `host.docker.internal` because Docker publishes the application port on the Mac host rather
+than inside the Linux job container.
 
 ## Container Run
 
