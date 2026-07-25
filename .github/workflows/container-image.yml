@@ -29,20 +29,9 @@ jobs:
 
       - name: Run Swift tests
         env:
+          CONTAINER_COMMAND: docker
           SCANNERSERVER_REQUIRE_NATIVE_TOOL_TESTS: "1"
-        run: |
-          docker run --rm \
-            --volume "$PWD:/workspace:ro" \
-            --workdir /workspace \
-            --env SCANNERSERVER_REQUIRE_NATIVE_TOOL_TESTS \
-            swift:6.3.2-noble \
-            sh -c "
-              sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources
-              apt-get update
-              apt-get install -y --no-install-recommends libvips-tools poppler-utils qpdf
-              rm -rf /var/lib/apt/lists/*
-              swift test --scratch-path /tmp/scannerserver-build
-            "
+        run: ./scripts/run_swift_tests_in_container.sh
 
   build:
     name: Build
@@ -95,4 +84,5 @@ jobs:
       - name: Exercise runtime contract
         env:
           CONTAINER_COMMAND: docker
+          SCANNERSERVER_SMOKE_USE_DOCKER_VOLUMES: "1"
         run: ./scripts/smoke_swift_container.sh scannerserver:ci

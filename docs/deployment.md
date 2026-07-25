@@ -23,6 +23,11 @@ runs tests and an ARM64 container smoke build on its Apple Silicon runner, but d
 an image. This keeps registry credentials and publication on GitHub while validating the same
 architecture used by Raspberry Pi and Apple Silicon deployments on Gitmaster.
 
+Gitmaster executes workflow steps inside a Linux job container while Docker Desktop runs the
+Docker daemon on the Mac host. Paths such as `/workspace/...` therefore exist only inside the
+job container and cannot be used as host bind mounts. The workflow copies Swift sources through
+the Docker client and uses Docker-managed volumes for runtime smoke fixtures.
+
 ## Container Run
 
 Use host networking so ScanSnap UDP discovery reaches the local network. Host networking and restart policies require options unavailable in Apple’s `container` CLI, so this deployment command uses Docker:
