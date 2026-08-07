@@ -133,6 +133,10 @@ docker compose exec scansnap ip neigh show
 
 If discovery still fails but you know the scanner IP, enter the IP address manually on the setup page.
 
+If the web UI reports **Scan directory is not accessible**, verify that the `SCAN_OUTPUT_DIR`
+bind mount exists and that the container user can list it and create, read, and delete files in
+it. Correct the directory or host UID/GID permissions, then restart the container.
+
 ## More Documentation
 
 - [Documentation index](docs/index.md)

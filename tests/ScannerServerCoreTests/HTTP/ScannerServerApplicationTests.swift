@@ -54,6 +54,49 @@ struct ScannerServerApplicationTests {
         }
     }
 
+    @Test("An unusable scan directory shows an actionable configuration error page")
+    func unusableScanDirectory() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.outputDirectory)
+        try Data("not a directory".utf8).write(to: fixture.outputDirectory)
+        let application = try fixture.application()
+        try FileManager.default.removeItem(at: fixture.outputDirectory)
+        try FileManager.default.createDirectory(
+            at: fixture.outputDirectory,
+            withIntermediateDirectories: true
+        )
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .serviceUnavailable)
+                #expect(response.headers[.contentType] == "text/html; charset=utf-8")
+                #expect(body.contains("Scan directory is not accessible"))
+                #expect(body.contains("SCAN_OUTPUT_DIR"))
+                #expect(body.contains(fixture.outputDirectory.path))
+                #expect(!body.contains("action=\"/scan\""))
+            }
+            try await client.execute(uri: "/health", method: .get) { response in
+                #expect(response.status == .ok)
+            }
+        }
+    }
+
+    @Test("The startup access check creates a missing scan directory and removes its probe")
+    func scanDirectoryAccessCheck() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let scanDirectory = root.appendingPathComponent("scans", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let issue = ScanDirectoryAccessIssue.check(directory: scanDirectory)
+        let contents = try FileManager.default.contentsOfDirectory(atPath: scanDirectory.path)
+
+        #expect(issue == nil)
+        #expect(contents.isEmpty)
+    }
+
     @Test("Browser update request completes only after a server state revision")
     func browserUpdates() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])

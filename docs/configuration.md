@@ -77,6 +77,19 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
 | `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `1` | Ignore duplicate button notices shortly after a scan finishes |
 
+## Scan Directory Access Check
+
+At startup, scannerserver verifies that `SCAN_OUTPUT_DIR` exists and that the service user can
+list it and create, read, update, and delete a temporary access-check file. The check does not
+modify any scan or settings file.
+
+If the check fails, the HTTP service remains available but the main page returns a dedicated
+configuration error page instead of a generic HTTP 500 response. The page shows the configured
+path and the filesystem error. Physical-button handling is not started in this state, while
+`/health` remains available so the diagnostic page can be reached. Correct the bind mount,
+directory path, or host UID/GID permissions, then restart scannerserver to run the startup check
+again.
+
 ## Blank Page Removal
 
 Blank-page removal is enabled by default for PDF scans.

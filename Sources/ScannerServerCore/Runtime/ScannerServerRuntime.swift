@@ -35,7 +35,13 @@ public actor ScannerServerRuntime {
             configuration: configuration,
             dependencies: dependencies
         )
-        await startButtonRuntime()
+        if let issue = dependencies.scanDirectoryAccessIssue {
+            JLog.error(
+                "Scan directory is not accessible at \(issue.directoryPath): \(issue.details)"
+            )
+        } else {
+            await startButtonRuntime()
+        }
         do {
             try await application.runService()
         } catch {

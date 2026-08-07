@@ -248,6 +248,7 @@ public struct ScannerServerDependencies: Sendable {
     public let webUpdates: WebUpdateNotifier
     public let environment: [String: String]
     public let buttonConfigurationChanges: ScanSnapButtonConfigurationChangeCoordinator?
+    public let scanDirectoryAccessIssue: ScanDirectoryAccessIssue?
 
     public init(
         settingsStore: ScanSettingsStore,
@@ -271,6 +272,9 @@ public struct ScannerServerDependencies: Sendable {
         self.webUpdates = webUpdates ?? scanJobs.webUpdates
         self.environment = environment
         self.buttonConfigurationChanges = buttonConfigurationChanges
+        self.scanDirectoryAccessIssue = ScanDirectoryAccessIssue.check(
+            directory: outputPathResolver.outputDirectory
+        )
     }
 
     public static func live(
@@ -338,7 +342,24 @@ public enum ScannerServerApplication {
         let router = Router()
 
         router.get("/") { request, _ -> Response in
-            try await indexResponse(request: request, template: indexTemplate, dependencies: dependencies)
+            if let issue = dependencies.scanDirectoryAccessIssue {
+                return scanDirectoryErrorResponse(template: indexTemplate, issue: issue)
+            }
+            do {
+                return try await indexResponse(
+                    request: request,
+                    template: indexTemplate,
+                    dependencies: dependencies
+                )
+            } catch {
+                return scanDirectoryErrorResponse(
+                    template: indexTemplate,
+                    issue: ScanDirectoryAccessIssue(
+                        directoryPath: dependencies.outputPathResolver.outputDirectory.path,
+                        details: error.localizedDescription
+                    )
+                )
+            }
         }
         router.get("/health") { _, _ in "ok\n" }
         router.get("/updates") { request, _ -> Response in
@@ -653,6 +674,33 @@ private func dataResponse(
 
 private func textResponse(_ text: String, status: HTTPResponse.Status) -> Response {
     dataResponse(Data(text.utf8), status: status, contentType: "text/plain; charset=utf-8")
+}
+
+private func scanDirectoryErrorResponse(
+    template: String,
+    issue: ScanDirectoryAccessIssue
+) -> Response {
+    let content = """
+    <div class="page-head"><h1>scannerserver</h1></div>
+    <section>
+      <h2>Scan directory is not accessible</h2>
+      <p class="warning">scannerserver is incorrectly configured and cannot read and write its scan directory.</p>
+      <p>Configured <code>SCAN_OUTPUT_DIR</code>:</p>
+      <pre>\(htmlEscape(issue.directoryPath))</pre>
+      <p>Check that the directory is mounted into the container and that the container user can create, read, update, and delete files in it. Restart scannerserver after correcting the configuration or permissions.</p>
+      <p class="muted">Access check: \(htmlEscape(issue.details))</p>
+    </section>
+    """
+    let html = template
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
+        .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "0")
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
+    return dataResponse(
+        Data(html.utf8),
+        status: .serviceUnavailable,
+        contentType: "text/html; charset=utf-8",
+        additionalHeaders: [.cacheControl: "no-store"]
+    )
 }
 
 private func indexResponse(
