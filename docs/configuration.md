@@ -17,6 +17,9 @@ YYYY-MM-DD.HHMMSS.pdf
 YYYY-MM-DD.HHMMSS.ocr.pdf
 ```
 
+Deleting a source scan while OCR is active cancels that document's OCR process before removing
+the file. Matching queued OCR work is removed as well, while OCR jobs for other scans continue.
+
 Single-page PDF modes use:
 
 ```text

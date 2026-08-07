@@ -59,6 +59,31 @@ public struct ScannerSetupDevice: Equatable, Sendable {
     }
 }
 
+private struct ScannerSetupPollingState: Encodable {
+    let serviceAvailable: Bool
+    let discoveryInProgress: Bool
+    let configured: Bool
+    let needsPassword: Bool
+    let lastError: String
+    let devices: [ScannerSetupPollingDevice]
+}
+
+private struct ScannerSetupPollingDevice: Encodable {
+    let id: String
+    let name: String
+    let ipAddress: String
+    let macAddress: String
+    let serial: String
+
+    init(_ device: ScannerSetupDevice) {
+        id = device.id
+        name = device.name
+        ipAddress = device.ipAddress
+        macAddress = device.macAddress
+        serial = device.serial
+    }
+}
+
 public struct ScannerSetupState: Equatable, Sendable {
     public let serviceAvailable: Bool
     public let configured: Bool
@@ -380,6 +405,23 @@ public enum ScannerServerApplication {
         router.post("/setup/scanners/discover") { _, _ -> Response in
             redirect(setup: await dependencies.scannerSetup.discover())
         }
+        router.get("/setup/scanners/state") { _, _ -> Response in
+            await dependencies.scannerSetup.ensureDiscoveryStarted()
+            let state = await dependencies.scannerSetup.state()
+            let payload = ScannerSetupPollingState(
+                serviceAvailable: state.serviceAvailable,
+                discoveryInProgress: await dependencies.scannerSetup.discoveryInProgress(),
+                configured: state.configured,
+                needsPassword: state.needsPassword,
+                lastError: state.lastError,
+                devices: state.devices.map(ScannerSetupPollingDevice.init)
+            )
+            return dataResponse(
+                try JSONEncoder().encode(payload),
+                contentType: "application/json; charset=utf-8",
+                additionalHeaders: [.cacheControl: "no-store"]
+            )
+        }
         router.post("/setup/scanners/select") { request, context -> Response in
             let form = try await decodeForm(ScannerSelectForm.self, request: request, context: context)
             guard let deviceID = form.deviceID, !deviceID.isEmpty else {
@@ -436,13 +478,13 @@ public enum ScannerServerApplication {
                 context: context
             )
             for name in names {
-                deleteFile(name: name, dependencies: dependencies)
+                await deleteFile(name: name, dependencies: dependencies)
             }
             return .redirect(to: "/")
         }
         router.post("/files/:name/delete") { _, context -> Response in
             if let name = routeName(context: context) {
-                deleteFile(name: name, dependencies: dependencies)
+                await deleteFile(name: name, dependencies: dependencies)
             }
             return .redirect(to: "/")
         }
@@ -578,8 +620,9 @@ private func fileResponse(
     )
 }
 
-private func deleteFile(name: String, dependencies: ScannerServerDependencies) {
+private func deleteFile(name: String, dependencies: ScannerServerDependencies) async {
     guard let fileURL = try? dependencies.outputPathResolver.resolve(name) else { return }
+    await dependencies.ocrQueue.cancelJobs(referencing: fileURL.path)
     let previewURL = dependencies.outputPathResolver.outputDirectory
         .appendingPathComponent(PreviewOutputName.directoryName, isDirectory: true)
         .appendingPathComponent("\(fileURL.lastPathComponent).jpg")
@@ -629,12 +672,6 @@ private func indexResponse(
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
     let setup = await dependencies.scannerSetup.state()
-    let discoveryInProgress: Bool
-    if wifiBackend {
-        discoveryInProgress = await dependencies.scannerSetup.discoveryInProgress()
-    } else {
-        discoveryInProgress = false
-    }
     let query = queryValues(request.uri.query)
     let webRevision = await dependencies.webUpdates.currentRevision
     let groups = scanFileGroups(outputDirectory: dependencies.outputPathResolver.outputDirectory)
@@ -648,11 +685,8 @@ private func indexResponse(
         ocr: ocr,
         groups: groups
     )
-    let refresh = discoveryInProgress
-        ? #"<meta http-equiv="refresh" content="2">"#
-        : ""
     let html = template
-        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: refresh)
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
         .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "\(webRevision)")
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
     return dataResponse(Data(html.utf8), contentType: "text/html; charset=utf-8")
@@ -724,7 +758,7 @@ private func renderIndexContent(
 }
 
 private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
-    "<section>\(renderScannerSetupContent(setup))</section>"
+    "<section data-scanner-setup data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup))</section>"
 }
 
 private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
@@ -741,27 +775,36 @@ private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
     if !setup.serviceAvailable {
         html += "<p class=\"warning\">Live scanner discovery and pairing are not available in this build.</p>"
     }
-    if !setup.lastError.isEmpty { html += "<pre>\(htmlEscape(setup.lastError))</pre>" }
-    html += "<div class=\"setup-controls\"><form method=\"post\" action=\"/setup/scanners/discover\"><button>Discover scanners</button></form>"
-    if !setup.devices.isEmpty {
-        html += "<form method=\"post\" action=\"/setup/scanners/select\"><div class=\"device-list\">"
-        for device in setup.devices {
-            html += "<label><input type=\"radio\" name=\"device_id\" value=\"\(htmlEscape(device.id))\"> \(htmlEscape(device.name)) \(htmlEscape(device.ipAddress))</label>"
-        }
-        html += "</div><button>Use selected scanner</button></form>"
+    let errorHidden = setup.lastError.isEmpty ? " hidden" : ""
+    html += "<pre data-scanner-setup-error\(errorHidden)>\(htmlEscape(setup.lastError))</pre>"
+    if setup.needsPassword {
+        html += "<p class=\"muted\" data-scanner-discovery-status>Automatic discovery is paused while setup waits for the scanner password.</p>"
+    } else if !setup.configured {
+        html += "<p class=\"muted\" data-scanner-discovery-status>Looking for scanners automatically…</p>"
     }
+    html += "<div class=\"setup-controls\"><form method=\"post\" action=\"/setup/scanners/discover\"><button>Discover scanners</button></form>"
+    html += "<div data-scanner-devices>\(renderScannerDevices(setup.devices))</div>"
     html += "<form method=\"post\" action=\"/setup/scanners/manual\">"
     html += "<label>Scanner IP<input name=\"scanner_ip\" value=\"\(htmlEscape(setup.ipAddress))\"></label>"
-    html += "<p class=\"muted\">For a scanner on another network, enter its IP address and either the product serial number or its security key/password.</p>"
+    html += "<p class=\"muted\">For a scanner on another network, enter its IP address and product serial number. If its default password was changed, setup will ask for the password after trying the serial-derived default.</p>"
     html += "<label>Product serial number<input name=\"scanner_serial\"></label>"
-    html += "<label>Security key or scanner password<input type=\"password\" name=\"scanner_security_key\"></label>"
     html += "<label>Ethernet address (same network only)<input name=\"scanner_mac\"></label>"
     html += "<p class=\"muted\">The security key cannot be derived from the Ethernet address. The address only helps discovery on the same local network.</p>"
     html += "<button>Connect scanner</button></form>"
     if setup.needsPassword {
-        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Security key or scanner password<input type=\"password\" name=\"scanner_password\"></label><button>Save security key</button></form>"
+        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Security key or scanner password<input type=\"password\" name=\"scanner_password\" autofocus></label><button>Try password</button></form>"
     }
     html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div>"
+    return html
+}
+
+private func renderScannerDevices(_ devices: [ScannerSetupDevice]) -> String {
+    guard !devices.isEmpty else { return "" }
+    var html = "<form method=\"post\" action=\"/setup/scanners/select\"><div class=\"device-list\">"
+    for device in devices {
+        html += "<label><input type=\"radio\" name=\"device_id\" value=\"\(htmlEscape(device.id))\"> \(htmlEscape(device.name)) \(htmlEscape(device.ipAddress))</label>"
+    }
+    html += "</div><button>Use selected scanner</button></form>"
     return html
 }
 

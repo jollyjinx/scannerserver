@@ -115,6 +115,31 @@ public actor OCRQueueActor {
         await currentWorker?.value
     }
 
+    public func cancelJobs(referencing path: String) async {
+        let queuedCount = queue.count
+        queue.removeAll { jobReferencesPath($0.inputPath, path: path) }
+        let removedQueuedJob = queue.count != queuedCount
+        queueState.queued = queue.count
+
+        guard queueState.status == "running",
+              jobReferencesPath(queueState.input, path: path)
+        else {
+            if removedQueuedJob {
+                await webUpdates.notify()
+            }
+            return
+        }
+
+        let currentWorker = worker
+        currentWorker?.cancel()
+        await currentWorker?.value
+
+        if worker == nil, !queue.isEmpty {
+            queueState.status = "queued"
+            worker = Task { await runWorker() }
+        }
+    }
+
     private func runWorker() async {
         while !Task.isCancelled, !queue.isEmpty {
             let job = queue.removeFirst()
@@ -155,10 +180,9 @@ public actor OCRQueueActor {
                 recordCurrentJob(output: result.succeeded ? outputPath : "")
                 await webUpdates.notify()
             } catch is CancellationError {
-                queue.removeAll()
                 queueState.finished = Date()
                 queueState.status = "cancelled"
-                queueState.queued = 0
+                queueState.queued = queue.count
                 recordCurrentJob()
                 await webUpdates.notify()
                 break
@@ -193,6 +217,21 @@ public actor OCRQueueActor {
         if queueState.recentJobs.count > 20 {
             queueState.recentJobs.removeLast(queueState.recentJobs.count - 20)
         }
+    }
+
+    private func jobReferencesPath(_ inputPath: String, path: String) -> Bool {
+        let candidate = standardizedPath(path)
+        if standardizedPath(inputPath) == candidate {
+            return true
+        }
+        return OCRInputPath.outputPath(for: inputPath).map(standardizedPath) == candidate
+    }
+
+    private func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: false)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
     }
 
     private func execute(job: Job, outputPath: String) async throws -> ProcessResult {

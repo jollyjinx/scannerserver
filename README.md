@@ -28,7 +28,7 @@ Open:
 http://YOUR_LINUX_HOST/
 ```
 
-On first start, the web UI shows scanner setup. It looks for ScanSnap devices on the local network, lists the scanners it finds, and lets you choose one. If your scanner still uses its default password, setup derives the pairing key automatically from the scanner serial number.
+On first start, the web UI shows scanner setup. Discovery keeps running in the background while the manual fields remain usable. When exactly one ScanSnap is found, setup automatically derives and tests its factory-default password from the scanner serial number. Multiple scanners are listed for manual selection.
 
 After setup, scan either way:
 
@@ -60,20 +60,21 @@ http://YOUR_LINUX_HOST/
 
 The setup flow:
 
-1. Discovers scanners on the local network using broadcast and ARP/neighbor entries.
-2. Shows the discovered iX500 devices in the web UI.
-3. Lets you choose the scanner, or enter its IP address manually.
-4. Reads the scanner serial number before pairing.
+1. Continuously discovers scanners on the local network using broadcast and ARP/neighbor entries while setup is open.
+2. Automatically chooses the scanner when exactly one iX500 is found; with multiple scanners, it shows them for manual selection.
+3. Keeps manual IP, serial-number, and Ethernet-address setup available while discovery runs.
+4. Reads the scanner serial number before pairing when the network permits it.
 5. Tries the factory-default password derived from the serial number.
-6. Asks for the scanner security key/password only if the default one was changed.
+6. Stops discovery and asks for the scanner security key/password only when the default password is rejected or the serial number is unavailable.
 7. Saves the working scanner config in `/scans/.scannerserver-scanner.json`.
 
 It does not sweep every IP address in your subnet.
 
-For a scanner on another routed network, enter its IP address manually and provide either its
-product serial number or its security key/password. An Ethernet/MAC address cannot be used to
-calculate the security key and normally does not cross routers; it only helps discovery when the
-scanner is on the same local network.
+For a scanner on another routed network, enter its IP address manually and provide its product
+serial number when available. Setup tries the derived default first, then asks for the scanner
+security key/password if necessary. An Ethernet/MAC address cannot be used to calculate the
+security key and normally does not cross routers; it only helps discovery when the scanner is on
+the same local network.
 
 ## Features
 

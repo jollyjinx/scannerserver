@@ -50,6 +50,67 @@
         fileCheckboxes.forEach((checkbox) => checkbox.addEventListener("change", updateSelectAll));
         updateSelectAll();
 
+        const scannerSetup = document.querySelector("[data-scanner-setup]");
+        const scannerDevices = scannerSetup?.querySelector("[data-scanner-devices]");
+        const scannerError = scannerSetup?.querySelector("[data-scanner-setup-error]");
+        const scannerStatus = scannerSetup?.querySelector("[data-scanner-discovery-status]");
+        const renderScannerDevices = (devices) => {
+          if (!scannerDevices) return;
+          const currentIDs = Array.from(scannerDevices.querySelectorAll('input[name="device_id"]'))
+            .map((input) => input.value).sort().join("\n");
+          const nextIDs = devices.map((device) => device.id).sort().join("\n");
+          if (currentIDs === nextIDs) return;
+          scannerDevices.replaceChildren();
+          if (devices.length === 0) return;
+
+          const form = document.createElement("form");
+          form.method = "post";
+          form.action = "/setup/scanners/select";
+          const list = document.createElement("div");
+          list.className = "device-list";
+          devices.forEach((device) => {
+            const label = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = "radio";
+            input.name = "device_id";
+            input.value = device.id;
+            label.append(input, ` ${device.name} ${device.ipAddress}`);
+            list.append(label);
+          });
+          const button = document.createElement("button");
+          button.textContent = "Use selected scanner";
+          form.append(list, button);
+          scannerDevices.append(form);
+        };
+        const pollScannerSetup = async () => {
+          try {
+            const response = await fetch("/setup/scanners/state", { cache: "no-store" });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const state = await response.json();
+            if (state.configured || (state.needsPassword && scannerSetup.dataset.needsPassword !== "true")) {
+              window.location.reload();
+              return;
+            }
+            renderScannerDevices(state.devices);
+            if (scannerError) {
+              scannerError.textContent = state.lastError;
+              scannerError.hidden = state.lastError.length === 0;
+            }
+            if (scannerStatus) {
+              scannerStatus.textContent = state.discoveryInProgress
+                ? "Looking for scanners automatically… You can use manual setup at the same time."
+                : "Automatic discovery is paused.";
+            }
+            if (!state.serviceAvailable) return;
+          } catch (error) {
+            if (scannerStatus) scannerStatus.textContent = "Automatic discovery will retry shortly.";
+          }
+          window.setTimeout(pollScannerSetup, 2000);
+        };
+        if (scannerSetup && scannerSetup.dataset.needsPassword !== "true") {
+          pollScannerSetup();
+        }
+
         const revision = SCANNER_SERVER_REVISION;
         const reconnect = () => window.setTimeout(waitForUpdate, 5000);
         async function waitForUpdate() {

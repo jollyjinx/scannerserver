@@ -33,25 +33,28 @@ offset 104..119  display name
 
 The web setup flow:
 
-1. Sends VENS discovery/registration packets to LAN broadcast addresses and ARP neighbors with known ScanSnap/Silex MAC prefixes.
-2. Lists discovered ScanSnap devices.
-3. Lets the user choose one, or enter an IP address with an optional serial number or security key/password.
-4. Derives the default pairing identity from the discovered serial number.
+1. Repeatedly sends VENS discovery/registration packets to LAN broadcast addresses and ARP neighbors with known ScanSnap/Silex MAC prefixes while setup remains unresolved.
+2. Automatically selects a sole discovered ScanSnap, or lists multiple devices for user selection, without interrupting manual form input.
+3. Lets the user enter an IP address with an optional serial number when discovery cannot find the scanner.
+4. Derives the default pairing identity from the discovered or supplied serial number.
 5. Tests the pairing identity against TCP `53219`.
-6. Saves the working scanner IP and pairing identity in `/scans/.scannerserver-scanner.json`.
+6. Stops automatic discovery and asks for the security key/password only when the default is rejected or no serial is available. Transient pairing failures remain retryable.
+7. Saves the working scanner IP and pairing identity in `/scans/.scannerserver-scanner.json`.
 
 Discovery intentionally does not sweep every IP address in the subnet.
 
 ## Scanner On Another Network
 
 Layer-2 broadcast discovery and ARP Ethernet addresses do not normally cross a router. To configure
-a scanner on another routed network, enter its routable IPv4 address and either:
+a scanner on another routed network, enter its routable IPv4 address and:
 
-- the product serial number, when the scanner still uses its factory-default password; or
-- the scanner security key/password (or an already-derived pairing identity).
+- the product serial number, when it is available, so setup can try the factory-default password.
 
 When targeted UDP discovery reaches the scanner, the app can read the serial number automatically.
-If that UDP lookup is blocked, the supplied serial or security key lets setup continue without it.
+If that UDP lookup is blocked and no serial was supplied, setup asks for the scanner security
+key/password after saving the target IP. The legacy manual POST field still accepts an upfront
+security key for compatibility, but the browser flow deliberately waits until the automatic
+credential attempt has failed.
 The Ethernet/MAC address is not sufficient to calculate the password or pairing identity.
 
 The routed path and its firewall must still permit UDP `52217` for discovery/registration and TCP

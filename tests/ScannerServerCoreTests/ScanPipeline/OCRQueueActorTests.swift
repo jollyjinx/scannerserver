@@ -145,6 +145,46 @@ struct OCRQueueActorTests {
         #expect(await queue.state.recentJobs.first?.input == "/scans/one.pdf")
         #expect(await queue.state.recentJobs.first?.status == "cancelled")
     }
+
+    @Test("Cancelling the active job preserves unrelated queued jobs")
+    func targetedActiveCancellation() async {
+        let executor = FakeProcessExecutor(stubs: [
+            .suspended(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
+        ])
+        let queue = OCRQueueActor(executor: executor)
+
+        await queue.enqueue("/scans/one.pdf")
+        await queue.enqueue("/scans/two.pdf")
+        await executor.waitForRequestCount(1)
+        await queue.cancelJobs(referencing: "/scans/one.pdf")
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().count == 2)
+        #expect(await queue.state.status == "done")
+        #expect(await queue.state.input == "/scans/two.pdf")
+        #expect(await queue.state.recentJobs.map(\.status) == ["done", "cancelled"])
+    }
+
+    @Test("Cancelling a queued job by its output path leaves the active job running")
+    func targetedQueuedCancellation() async {
+        let executor = FakeProcessExecutor(stubs: [
+            .suspended(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
+        ])
+        let queue = OCRQueueActor(executor: executor)
+
+        await queue.enqueue("/scans/one.pdf")
+        await executor.waitForRequestCount(1)
+        await queue.enqueue("/scans/two.pdf")
+        await queue.cancelJobs(referencing: "/scans/two.ocr.pdf")
+        await executor.resumeNextSuspendedExecution()
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().count == 1)
+        #expect(await queue.state.status == "done")
+        #expect(await queue.state.input == "/scans/one.pdf")
+        #expect(await queue.state.queued == 0)
+    }
 }
 
 private func ocrArguments(

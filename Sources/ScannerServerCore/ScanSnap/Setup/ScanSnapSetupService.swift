@@ -35,14 +35,20 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     private let environmentConfiguration: ScanSnapSetupEnvironmentConfiguration?
     private let environmentError: String
     private let now: @Sendable () -> Date
+    private let discoveryRetryDelay: Duration
+    private let sleep: @Sendable (Duration) async throws -> Void
 
     private var status: ScanSnapSetupDiscoveryStatus = .idle
     private var discoveredDevices: [ScanSnapDevice] = []
     private var operationError = ""
     private var discoveryTask: Task<Void, Never>?
     private var discoveryGeneration = 0
+    private var completedDiscoveryCycles = 0
+    private var discoveryTaskInitialCycle = 0
+    private var discoveryCycleWaiters: [CheckedContinuation<Void, Never>] = []
     private let setupRevisionOwner = UUID()
     private var setupGeneration: UInt64 = 0
+    private var interactiveSetupOperations = 0
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -51,7 +57,11 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         discovery: any ScanSnapSetupDiscovering = ScanSnapDiscoveryActor(),
         pairing: any ScanSnapSetupPairing = ScanSnapPairingActor(),
         configurationChangeNotifier: (any ScanSnapSetupConfigurationChangeNotifying)? = nil,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        discoveryRetryDelay: Duration = .seconds(2),
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { duration in
+            try await Task.sleep(for: duration)
+        }
     ) {
         self.store = store
         self.network = network
@@ -59,6 +69,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         self.pairing = pairing
         self.configurationChangeNotifier = configurationChangeNotifier
         self.now = now
+        self.discoveryRetryDelay = discoveryRetryDelay
+        self.sleep = sleep
         do {
             environmentConfiguration = try ScanSnapSetupEnvironmentConfiguration(environment: environment)
             environmentError = ""
@@ -100,30 +112,41 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     }
 
     public func ensureDiscoveryStarted() async {
-        guard status == .idle, discoveryTask == nil,
-              await store.activeConfiguration() == nil
-        else {
-            return
-        }
-        _ = await discover()
+        guard discoveryTask == nil, await store.activeConfiguration() == nil else { return }
+        let stored = await store.loadStored()
+        guard stored?.status != .needsPassword else { return }
+        startDiscovery(resetDevices: false)
     }
 
     public func discover() async -> ScannerSetupOutcome {
         guard discoveryTask == nil else { return .discoveryStarted }
-        status = .running
-        operationError = ""
-        discoveredDevices = []
-        discoveryGeneration += 1
-        let generation = discoveryGeneration
-        discoveryTask = Task { [weak self] in
-            await self?.runDiscovery(generation: generation)
-        }
+        startDiscovery(resetDevices: true)
         return .discoveryStarted
     }
 
+    private func startDiscovery(resetDevices: Bool) {
+        status = .running
+        if resetDevices {
+            operationError = ""
+            discoveredDevices = []
+        }
+        discoveryGeneration += 1
+        let generation = discoveryGeneration
+        discoveryTaskInitialCycle = completedDiscoveryCycles
+        discoveryTask = Task { [weak self] in
+            await self?.runDiscovery(generation: generation)
+        }
+    }
+
     public func waitForDiscovery() async {
-        let task = discoveryTask
-        await task?.value
+        guard discoveryTask != nil,
+              completedDiscoveryCycles == discoveryTaskInitialCycle
+        else {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            discoveryCycleWaiters.append(continuation)
+        }
     }
 
     public func cancelDiscovery() async {
@@ -132,6 +155,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         discoveryTask = nil
         status = .idle
         operationError = ""
+        resumeDiscoveryCycleWaiters()
         task?.cancel()
         await task?.value
     }
@@ -141,7 +165,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     }
 
     public func select(deviceID: String) async -> ScannerSetupOutcome {
-        let revision = beginSetupOperation()
+        let revision = beginInteractiveSetupOperation()
+        defer { endInteractiveSetupOperation() }
         guard let device = discoveredDevices.first(where: { $0.id == deviceID }) else {
             return .noDevice
         }
@@ -153,7 +178,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         macAddress: String,
         serial: String
     ) async -> ScannerSetupOutcome {
-        let revision = beginSetupOperation()
+        let revision = beginInteractiveSetupOperation()
+        defer { endInteractiveSetupOperation() }
         let normalizedIP: String
         let normalizedMAC: String
         do {
@@ -217,7 +243,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     }
 
     public func savePassword(_ password: String) async -> ScannerSetupOutcome {
-        let revision = beginSetupOperation()
+        let revision = beginInteractiveSetupOperation()
+        defer { endInteractiveSetupOperation() }
         let storedConfig = await store.loadStored()
         guard isCurrent(revision) else { return .unavailable }
         guard var config = storedConfig, !config.scannerIP.isEmpty else {
@@ -264,7 +291,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     }
 
     public func clear() async -> ScannerSetupOutcome {
-        let revision = beginSetupOperation()
+        let revision = beginInteractiveSetupOperation()
+        defer { endInteractiveSetupOperation() }
         do {
             guard try await store.clear(setupRevision: revision) else { return .unavailable }
             guard isCurrent(revision) else { return .unavailable }
@@ -280,40 +308,101 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     }
 
     private func runDiscovery(generation: Int) async {
-        do {
-            let configuration = try await makeDiscoveryConfiguration()
-            let devices = try await discovery.discover(configuration: configuration)
-            try Task.checkCancellation()
-            finishDiscovery(devices, generation: generation)
-        } catch is CancellationError {
-            finishCancellation(generation: generation)
-        } catch {
-            finishDiscoveryFailure(error, generation: generation)
+        while await discoveryShouldContinue(generation: generation) {
+            let setupGenerationAtStart = setupGeneration
+            do {
+                let configuration = try await makeDiscoveryConfiguration()
+                let discovered = try await discovery.discover(configuration: configuration)
+                try Task.checkCancellation()
+                let devices = recordDiscovery(discovered, generation: generation)
+                if devices.count == 1,
+                   let revision = await beginAutomaticSetupOperation(
+                       discoveryGeneration: generation,
+                       setupGenerationAtStart: setupGenerationAtStart
+                   ) {
+                    _ = await configure(
+                        SetupDeviceRecord(devices[0]),
+                        revision: revision,
+                        automatic: true
+                    )
+                }
+            } catch is CancellationError {
+                finishCancellation(generation: generation)
+                return
+            } catch {
+                recordDiscoveryFailure(error, generation: generation)
+            }
+
+            guard await discoveryShouldContinue(generation: generation) else {
+                finishDiscovery(generation: generation)
+                finishDiscoveryCycle(generation: generation)
+                return
+            }
+            finishDiscoveryCycle(generation: generation)
+            do {
+                try await sleep(discoveryRetryDelay)
+                try Task.checkCancellation()
+            } catch {
+                finishCancellation(generation: generation)
+                return
+            }
         }
+        finishDiscovery(generation: generation)
     }
 
-    private func finishDiscovery(_ devices: [ScanSnapDevice], generation: Int) {
-        guard generation == discoveryGeneration else { return }
-        discoveredDevices = Self.deduplicatedAndSorted(devices, prefixes: environmentConfiguration?.macPrefixes ?? [])
-        status = .done
-        operationError = discoveredDevices.isEmpty
-            ? "No ScanSnap scanner was found. Use host networking or enter the scanner IP address manually."
+    private func recordDiscovery(_ devices: [ScanSnapDevice], generation: Int) -> [ScanSnapDevice] {
+        guard generation == discoveryGeneration else { return [] }
+        let devices = Self.deduplicatedAndSorted(
+            discoveredDevices + devices,
+            prefixes: environmentConfiguration?.macPrefixes ?? []
+        )
+        discoveredDevices = devices
+        operationError = devices.isEmpty
+            ? "No ScanSnap scanner was found. Discovery will keep trying while setup remains unresolved; you can also enter the scanner IP address manually."
             : ""
-        discoveryTask = nil
+        return devices
     }
 
-    private func finishDiscoveryFailure(_ error: any Error, generation: Int) {
+    private func finishDiscovery(generation: Int) {
         guard generation == discoveryGeneration else { return }
-        discoveredDevices = []
-        status = .failed
-        operationError = Self.message(for: error)
+        status = .done
         discoveryTask = nil
+        resumeDiscoveryCycleWaiters()
+    }
+
+    private func recordDiscoveryFailure(_ error: any Error, generation: Int) {
+        guard generation == discoveryGeneration else { return }
+        operationError = Self.message(for: error)
+    }
+
+    private func finishDiscoveryCycle(generation: Int) {
+        guard generation == discoveryGeneration else { return }
+        completedDiscoveryCycles += 1
+        resumeDiscoveryCycleWaiters()
     }
 
     private func finishCancellation(generation: Int) {
         guard generation == discoveryGeneration else { return }
         status = .idle
         discoveryTask = nil
+        resumeDiscoveryCycleWaiters()
+    }
+
+    private func resumeDiscoveryCycleWaiters() {
+        let waiters = discoveryCycleWaiters
+        discoveryCycleWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    private func discoveryShouldContinue(generation: Int) async -> Bool {
+        guard generation == discoveryGeneration, !Task.isCancelled,
+              await store.activeConfiguration() == nil
+        else {
+            return false
+        }
+        return await store.loadStored()?.status != .needsPassword
     }
 
     private func makeDiscoveryConfiguration() async throws -> ScanSnapDiscoveryConfiguration {
@@ -399,7 +488,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
 
     private func configure(
         _ device: SetupDeviceRecord,
-        revision: ScannerConfigSetupRevision
+        revision: ScannerConfigSetupRevision,
+        automatic: Bool = false
     ) async -> ScannerSetupOutcome {
         guard isCurrent(revision) else { return .unavailable }
         let password = ScannerConfig.password(fromSerial: device.serial)
@@ -422,6 +512,10 @@ public actor ScanSnapSetupService: ScannerSetupServing {
             let result = try await testPairing(scannerIPAddress: device.ipAddress, identity: identity)
             guard isCurrent(revision) else { return .unavailable }
             guard result.accepted else {
+                if automatic, result.status != .passwordRejected {
+                    operationError = "Automatic setup could not pair yet: \(Self.pairingMessage(result.status)). Discovery will retry."
+                    return .unavailable
+                }
                 var config = device.config(status: .needsPassword)
                 config.lastError = "Default password \(password.debugDescription) was rejected: \(Self.pairingMessage(result.status))."
                 return await save(config, success: .passwordNeeded, revision: revision)
@@ -437,6 +531,10 @@ public actor ScanSnapSetupService: ScannerSetupServing {
             return .unavailable
         } catch {
             guard isCurrent(revision) else { return .unavailable }
+            if automatic {
+                operationError = "Automatic setup could not pair yet: \(Self.message(for: error)). Discovery will retry."
+                return .unavailable
+            }
             var config = device.config(status: .needsPassword)
             config.lastError = "Default password \(password.debugDescription) was rejected: \(Self.message(for: error))."
             return await save(config, success: .passwordNeeded, revision: revision)
@@ -495,6 +593,37 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     private func beginSetupOperation() -> ScannerConfigSetupRevision {
         setupGeneration &+= 1
         return ScannerConfigSetupRevision(owner: setupRevisionOwner, generation: setupGeneration)
+    }
+
+    private func beginInteractiveSetupOperation() -> ScannerConfigSetupRevision {
+        interactiveSetupOperations += 1
+        return beginSetupOperation()
+    }
+
+    private func endInteractiveSetupOperation() {
+        interactiveSetupOperations -= 1
+    }
+
+    private func beginAutomaticSetupOperation(
+        discoveryGeneration: Int,
+        setupGenerationAtStart: UInt64
+    ) async -> ScannerConfigSetupRevision? {
+        guard discoveryGeneration == self.discoveryGeneration,
+              interactiveSetupOperations == 0,
+              setupGeneration == setupGenerationAtStart,
+              await store.activeConfiguration() == nil
+        else {
+            return nil
+        }
+        let stored = await store.loadStored()
+        guard discoveryGeneration == self.discoveryGeneration,
+              interactiveSetupOperations == 0,
+              setupGeneration == setupGenerationAtStart,
+              stored?.status != .needsPassword
+        else {
+            return nil
+        }
+        return beginSetupOperation()
     }
 
     private func isCurrent(_ revision: ScannerConfigSetupRevision) -> Bool {

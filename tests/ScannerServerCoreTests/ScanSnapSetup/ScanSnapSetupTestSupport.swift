@@ -39,12 +39,15 @@ actor FakeScanSnapSetupDiscovery: ScanSnapSetupDiscovering {
     enum Behavior: Sendable {
         case devices([ScanSnapDevice])
         case failure(FakeScanSnapSetupError)
+        case suspendedDevices([ScanSnapDevice])
         case waitForCancellation
     }
 
     private var behaviors: [Behavior]
     private(set) var configurations: [ScanSnapDiscoveryConfiguration] = []
     private(set) var observedCancellation = false
+    private var suspendedContinuation: CheckedContinuation<Void, Never>?
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(_ behaviors: [Behavior]) {
         self.behaviors = behaviors
@@ -58,6 +61,14 @@ actor FakeScanSnapSetupDiscovery: ScanSnapSetupDiscovering {
             return devices
         case let .failure(error):
             throw error
+        case let .suspendedDevices(devices):
+            await withCheckedContinuation { continuation in
+                suspendedContinuation = continuation
+                let waiters = suspensionWaiters
+                suspensionWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+            }
+            return devices
         case .waitForCancellation:
             do {
                 try await Task.sleep(for: .seconds(60))
@@ -67,6 +78,18 @@ actor FakeScanSnapSetupDiscovery: ScanSnapSetupDiscovering {
                 throw CancellationError()
             }
         }
+    }
+
+    func waitUntilSuspended() async {
+        guard suspendedContinuation == nil else { return }
+        await withCheckedContinuation { continuation in
+            suspensionWaiters.append(continuation)
+        }
+    }
+
+    func resumeSuspendedDiscovery() {
+        suspendedContinuation?.resume()
+        suspendedContinuation = nil
     }
 }
 

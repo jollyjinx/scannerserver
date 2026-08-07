@@ -74,7 +74,7 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("First-run page refreshes only while scanner discovery is running")
+    @Test("First-run discovery polling preserves manual form input")
     func discoveryRefresh() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
         defer { fixture.remove() }
@@ -84,7 +84,37 @@ struct ScannerServerApplicationTests {
         try await application.test(.router) { client in
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains(#"<meta http-equiv="refresh" content="2">"#))
+                #expect(!body.contains(#"<meta http-equiv="refresh""#))
+                #expect(body.contains(#"fetch("/setup/scanners/state""#))
+                #expect(body.contains("data-scanner-devices"))
+                #expect(body.contains("You can use manual setup at the same time."))
+                #expect(!body.contains(#"name="scanner_security_key""#))
+            }
+            try await client.execute(uri: "/setup/scanners/state", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "application/json; charset=utf-8")
+                #expect(response.headers[.cacheControl] == "no-store")
+                #expect(body.contains(#""discoveryInProgress":true"#))
+                #expect(body.contains(#""ipAddress":"192.0.2.44""#))
+                #expect(body.contains(#""needsPassword":false"#))
+            }
+        }
+    }
+
+    @Test("Scanner password input appears only after the default password fails")
+    func changedPasswordPrompt() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
+        defer { fixture.remove() }
+        let application = try fixture.application(scannerSetup: PasswordNeededSetupService())
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("action=\"/setup/scanners/password\""))
+                #expect(body.contains("name=\"scanner_password\" autofocus"))
+                #expect(body.contains(">Try password</button>"))
+                #expect(!body.contains("name=\"scanner_security_key\""))
             }
         }
     }
@@ -226,7 +256,7 @@ struct ScannerServerApplicationTests {
                 #expect(!body.contains("action=\"/scan\""))
                 #expect(body.contains("action=\"/setup/scanners/discover\""))
                 #expect(body.contains("action=\"/setup/scanners/manual\""))
-                #expect(body.contains("name=\"scanner_security_key\""))
+                #expect(!body.contains("name=\"scanner_security_key\""))
                 #expect(body.contains("security key cannot be derived from the Ethernet address"))
                 #expect(body.contains("action=\"/setup/scanners/clear\""))
             }
@@ -266,6 +296,33 @@ struct ScannerServerApplicationTests {
         #expect(await fixture.ocrQueue.state.queued == 0)
     }
 
+    @Test("Deleting a source scan cancels its active OCR job")
+    func deleteCancelsActiveOCR() async throws {
+        let executor = SlowCapturingExecutor(delay: .seconds(30))
+        let fixture = try HTTPFixture(
+            environment: ["SCAN_BACKEND": "sane"],
+            executor: executor
+        )
+        defer { fixture.remove() }
+        let fileName = "2026-07-10.120000.pdf"
+        let fileURL = fixture.outputDirectory.appendingPathComponent(fileName)
+        try Data("pdf bytes".utf8).write(to: fileURL)
+        let application = try fixture.application()
+
+        await fixture.ocrQueue.enqueue(fileURL.path)
+        while await executor.requests.isEmpty { await Task.yield() }
+
+        try await application.test(.router) { client in
+            try await postForm(client, uri: "/files/\(fileName)/delete", body: "") { response in
+                expectRedirect(response, to: "/")
+            }
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        #expect(await fixture.ocrQueue.state.status == "cancelled")
+        #expect(await fixture.ocrQueue.state.recentJobs.first?.input == fileURL.path)
+    }
+
     @Test("Setup routes preserve fields and report unavailable services without fake success")
     func setupRoutes() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
@@ -294,7 +351,7 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("Manual setup accepts a security key in the initial form")
+    @Test("Legacy manual setup POST accepts an upfront security key")
     func manualSetupSecurityKey() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
         defer { fixture.remove() }
@@ -457,7 +514,16 @@ private struct HTTPFixture: Sendable {
 
 private actor RunningDiscoverySetupService: ScannerSetupServing {
     func state() -> ScannerSetupState {
-        ScannerSetupState(serviceAvailable: true)
+        ScannerSetupState(
+            serviceAvailable: true,
+            devices: [ScannerSetupDevice(
+                id: "84:25:3f:aa:bb:cc",
+                name: "Office ScanSnap",
+                ipAddress: "192.0.2.44",
+                macAddress: "84:25:3f:aa:bb:cc",
+                serial: "AWRHC08122"
+            )]
+        )
     }
 
     func discoveryInProgress() -> Bool { true }
@@ -473,6 +539,29 @@ private actor RunningDiscoverySetupService: ScannerSetupServing {
     ) -> ScannerSetupOutcome { .unavailable }
 
     func savePassword(_ password: String) -> ScannerSetupOutcome { .unavailable }
+    func clear() -> ScannerSetupOutcome { .cleared }
+}
+
+private actor PasswordNeededSetupService: ScannerSetupServing {
+    func state() -> ScannerSetupState {
+        ScannerSetupState(
+            serviceAvailable: true,
+            needsPassword: true,
+            name: "Office ScanSnap",
+            ipAddress: "192.0.2.44",
+            serial: "AWRHC08122",
+            lastError: "Default password was rejected."
+        )
+    }
+
+    func discover() -> ScannerSetupOutcome { .discoveryStarted }
+    func select(deviceID: String) -> ScannerSetupOutcome { .unavailable }
+    func configureManually(
+        ipAddress: String,
+        macAddress: String,
+        serial: String
+    ) -> ScannerSetupOutcome { .unavailable }
+    func savePassword(_ password: String) -> ScannerSetupOutcome { .passwordFailed }
     func clear() -> ScannerSetupOutcome { .cleared }
 }
 

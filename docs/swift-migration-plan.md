@@ -110,6 +110,13 @@ Fresh scanner setup synchronously hands the saved configuration to the physical-
 The setup response waits for the first button arming attempt, so a configured page is not exposed
 during the former polling gap between the released setup probe and the persistent button session.
 
+While first-run setup remains unresolved, an actor-owned discovery loop continues with a bounded
+retry delay alongside manual input. A single discovered scanner is paired automatically with its
+serial-derived default identity; an explicit password prompt appears only after that identity is
+rejected or the serial is unavailable. The browser polls a setup-only JSON state endpoint and
+updates just the discovery results, preserving any manual form input. Setup revisions give
+explicit user operations priority over suspended automatic discovery or pairing work.
+
 ## Dependency Strategy
 
 Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The implemented boundary is:
