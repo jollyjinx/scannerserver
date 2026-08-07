@@ -106,6 +106,10 @@ Hummingbird provides the lightweight SwiftNIO-based HTTP layer, `swift-argument-
 
 The browser keeps one cancellable long-poll request open to `/updates`. Scan and OCR actors increment a shared revision and resume suspended requests only when visible state changes. This avoids interval polling and idle busy-waiting; the client uses a five-second reconnect backoff only after connection failure.
 
+Fresh scanner setup synchronously hands the saved configuration to the physical-button lifecycle.
+The setup response waits for the first button arming attempt, so a configured page is not exposed
+during the former polling gap between the released setup probe and the persistent button session.
+
 ## Dependency Strategy
 
 Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The implemented boundary is:
@@ -177,6 +181,7 @@ Acceptance:
 - Port VENS packet parsing, discovery, registration, pairing-key derivation, manual lookup, release, button arming, and UDP button listener to Swift.
 - Keep retry and session-busy behavior from the current implementation.
 - Keep `SCANSNAP_CLIENT_IP`, `SCANSNAP_CLIENT_MAC`, `SCANSNAP_CLIENT_INTERFACE`, source port, registration port, and button timing variables.
+- Hand successful first-run setup directly to the button lifecycle and await initial arming instead of relying on periodic store polling.
 
 Acceptance:
 

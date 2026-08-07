@@ -86,4 +86,49 @@ struct ScanSnapButtonRuntimeControllerTests {
         #expect(!state.isRunning)
         #expect(state.boundPort == nil)
     }
+
+    @Test("Setup configuration changes arm the attached button lifecycle before returning")
+    func setupConfigurationChangeArmsButtonLifecycle() async throws {
+        let directory = try runtimeButtonTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = [
+            "SCAN_BACKEND": "wifi",
+            "SCANSNAP_BUTTON_SCAN_ENABLED": "true",
+            "SCANSNAP_CLIENT_IP": "192.168.50.10",
+            "SCANSNAP_CLIENT_MAC": "02:11:22:33:44:55",
+        ]
+        let scannerStore = ScannerConfigStore(
+            fileURL: directory.appendingPathComponent("scanner.json"),
+            environment: environment
+        )
+        let coordinator = ScanSnapButtonConfigurationChangeCoordinator()
+        let controller = ScanSnapButtonRuntimeFactory.live(
+            environment: environment,
+            scannerStore: scannerStore,
+            settingsStore: ScanSettingsStore(
+                fileURL: directory.appendingPathComponent("settings.json"),
+                environment: environment
+            ),
+            scanJobs: ScanJobActor(
+                nativeScanner: ProcessBackedTestScanner(RuntimeButtonProcessExecutor())
+            ),
+            network: RuntimeButtonFakeNetwork(),
+            udpTransportFactory: RuntimeButtonFakeUDPFactory(),
+            reachability: ButtonFakeReachability([true]),
+            armer: RuntimeButtonNoopArmer(),
+            configurationChangeCoordinator: coordinator
+        )
+
+        #expect(try await controller.start())
+        _ = try await scannerStore.save(ScannerConfig(
+            status: .configured,
+            scannerIP: "192.168.50.44",
+            pairingKey: "pairing-key"
+        ))
+
+        await coordinator.scannerConfigurationDidChange()
+
+        #expect(await controller.state().isArmed)
+        await controller.stop()
+    }
 }

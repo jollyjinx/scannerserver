@@ -145,10 +145,32 @@ func configurationChangeRearmHook() async {
     #expect(await eventually { await lifecycle.state.isArmed })
 
     await lifecycle.scannerConfigurationDidChange()
-    #expect(!(await lifecycle.state.isArmed))
-    #expect(await lifecycle.state.nextReachabilityAtMilliseconds == 2_000)
-    await lifecycle.runMaintenance(atMilliseconds: 2_000)
-    #expect(await eventually { await armer.calls.count == 2 })
+    #expect(await lifecycle.state.isArmed)
+    #expect(await armer.calls.count == 2)
+}
+
+@Test("Fresh setup waits for the first button session to become armed")
+func freshSetupWaitsForInitialButtonArming() async {
+    let scannerProvider = ButtonFakeScannerProvider(nil)
+    let reachability = ButtonFakeReachability([true])
+    let armer = ButtonFakeArmer()
+    let clock = ButtonFakeClock(1_000)
+    let lifecycle = makeLifecycle(
+        scannerProvider: scannerProvider,
+        reachability: reachability,
+        armer: armer,
+        clock: clock
+    )
+
+    await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    #expect(await lifecycle.state.nextReachabilityAtMilliseconds == 4_000)
+
+    await scannerProvider.set(buttonScannerConfiguration())
+    await lifecycle.scannerConfigurationDidChange()
+
+    #expect(await lifecycle.state.isArmed)
+    #expect(await reachability.calls.count == 1)
+    #expect(await armer.calls.count == 1)
 }
 
 @Test("Stop cancels listener and in-progress arming and closes UDP transport")

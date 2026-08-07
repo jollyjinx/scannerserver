@@ -41,7 +41,7 @@ func legacyButtonRegistrationInterval() {
         "SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS": "17",
     ])
 
-    #expect(defaults.cooldownMilliseconds == 10_000)
+    #expect(defaults.cooldownMilliseconds == 1_000)
     #expect(legacy.armIntervalMilliseconds == 17_000)
     #expect(currentWins.armIntervalMilliseconds == 11_000)
 }

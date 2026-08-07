@@ -11,15 +11,18 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
 
     private let lifecycle: ScanSnapButtonLifecycleActor
     private let dispatcher: ScanJobButtonScanDispatcher
+    private let configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator?
 
     public init(
         isEligible: Bool,
         lifecycle: ScanSnapButtonLifecycleActor,
-        dispatcher: ScanJobButtonScanDispatcher
+        dispatcher: ScanJobButtonScanDispatcher,
+        configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) {
         self.isEligible = isEligible
         self.lifecycle = lifecycle
         self.dispatcher = dispatcher
+        self.configurationChangeCoordinator = configurationChangeCoordinator
     }
 
     @discardableResult
@@ -27,7 +30,11 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
         guard isEligible else { return false }
         await dispatcher.attach(lifecycle: lifecycle)
         do {
-            return try await lifecycle.start()
+            let started = try await lifecycle.start()
+            if started {
+                await configurationChangeCoordinator?.attach(lifecycle: lifecycle)
+            }
+            return started
         } catch {
             await dispatcher.detachLifecycle()
             throw error
@@ -35,6 +42,7 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
     }
 
     public func stop() async {
+        await configurationChangeCoordinator?.detach()
         await dispatcher.detachLifecycle()
         await lifecycle.stop()
     }
@@ -54,7 +62,8 @@ public enum ScanSnapButtonRuntimeFactory {
         udpTransportFactory: any ScanSnapUDPTransportFactory = POSIXScanSnapUDPTransportFactory(),
         reachability: any ScanSnapButtonReachabilityChecking = ScanSnapButtonTCPReachabilityChecker(),
         armer: any ScanSnapButtonArming = ScanSnapButtonSessionArmer(),
-        clock: any ScanSnapButtonClock = SystemScanSnapButtonClock()
+        clock: any ScanSnapButtonClock = SystemScanSnapButtonClock(),
+        configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) -> ScanSnapButtonRuntimeController {
         let scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
         let settingsStore = settingsStore ?? ScanSettingsStore(environment: environment)
@@ -84,7 +93,8 @@ public enum ScanSnapButtonRuntimeFactory {
         return ScanSnapButtonRuntimeController(
             isEligible: isWiFiBackend && buttonConfiguration.isEnabled,
             lifecycle: lifecycle,
-            dispatcher: dispatcher
+            dispatcher: dispatcher,
+            configurationChangeCoordinator: configurationChangeCoordinator
         )
     }
 }

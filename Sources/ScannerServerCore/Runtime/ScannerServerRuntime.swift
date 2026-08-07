@@ -21,7 +21,8 @@ public actor ScannerServerRuntime {
             environment: environment,
             scannerStore: dependencies.scannerStore,
             settingsStore: dependencies.settingsStore,
-            scanJobs: dependencies.scanJobs
+            scanJobs: dependencies.scanJobs,
+            configurationChangeCoordinator: dependencies.buttonConfigurationChanges
         )
         return ScannerServerRuntime(
             dependencies: dependencies,

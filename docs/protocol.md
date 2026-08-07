@@ -122,6 +122,11 @@ The app periodically arms itself with the scanner by:
 
 If scanner setup has not been completed yet, the listener waits and starts arming after setup saves a scanner. When a notice arrives from the configured scanner IP, the app starts a scan with the saved button-default mode.
 
+Successful first-run setup does not return control to the browser until the button lifecycle has
+received the new scanner configuration and completed its first arming attempt. This closes the
+otherwise unarmed interval between the setup pairing test—which releases its temporary scanner
+session—and the persistent physical-button session.
+
 Useful log lines:
 
 ```text

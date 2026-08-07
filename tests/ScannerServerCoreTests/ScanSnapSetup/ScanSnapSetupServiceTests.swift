@@ -171,6 +171,36 @@ struct ScanSnapSetupServiceTests {
         #expect(call.configuration.scannerIPAddress == device.ipAddress)
     }
 
+    @Test("Successful setup notifies and awaits the physical-button handoff")
+    func successfulSetupNotifiesButtonRuntime() async throws {
+        let device = setupDevice()
+        let discovery = FakeScanSnapSetupDiscovery([.devices([device])])
+        let notifier = FakeScanSnapSetupConfigurationChangeNotifier()
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(
+                interfaces: [try ScanSnapSetupIPv4Interface(
+                    name: "eth0", ipAddress: "192.168.1.10", prefixLength: 24
+                )]
+            ),
+            discovery: discovery,
+            pairing: FakeScanSnapSetupPairing([acceptedPairing(device: device)]),
+            configurationChangeNotifier: notifier,
+            now: { fixedSetupDate }
+        )
+
+        #expect(await service.discover() == .discoveryStarted)
+        await service.waitForDiscovery()
+        #expect(await service.select(deviceID: device.id) == .configured)
+        #expect(await notifier.callCount == 1)
+
+        #expect(await service.clear() == .cleared)
+        #expect(await notifier.callCount == 2)
+    }
+
     @Test("Manual MAC and IP lookup preserve legacy outcomes")
     func manualLookupOutcomes() async throws {
         let found = setupDevice(serial: "")

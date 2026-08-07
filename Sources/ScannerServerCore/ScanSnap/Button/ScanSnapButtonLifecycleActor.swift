@@ -277,6 +277,7 @@ public actor ScanSnapButtonLifecycleActor {
         isArmed = false
         nextArmAtMilliseconds = nil
         cancelArming()
+        JLog.notice("Started scan from scanner button notice from \(datagram.remoteAddress.host)")
         return .scanStarted(modeID: mode.id)
     }
 
@@ -364,6 +365,10 @@ public actor ScanSnapButtonLifecycleActor {
         let now = await clock.nowMilliseconds()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
         resetForScannerChange(atMilliseconds: now)
+        await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        let arming = armingTask
+        await arming?.value
     }
 
     public func requestRearm() {
@@ -588,6 +593,7 @@ public actor ScanSnapButtonLifecycleActor {
         if succeeded {
             recoveryArmRequested = false
             nextArmAtMilliseconds = adding(configuration.armIntervalMilliseconds, to: now)
+            JLog.notice("ScanSnap button client armed")
         } else {
             nextArmAtMilliseconds = nil
             nextReachabilityAtMilliseconds = adding(configuration.reachabilityIntervalMilliseconds, to: now)

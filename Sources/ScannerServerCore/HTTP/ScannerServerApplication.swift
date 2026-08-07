@@ -222,6 +222,7 @@ public struct ScannerServerDependencies: Sendable {
     public let previewProvider: any ScanPreviewProviding
     public let webUpdates: WebUpdateNotifier
     public let environment: [String: String]
+    public let buttonConfigurationChanges: ScanSnapButtonConfigurationChangeCoordinator?
 
     public init(
         settingsStore: ScanSettingsStore,
@@ -232,7 +233,8 @@ public struct ScannerServerDependencies: Sendable {
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
         webUpdates: WebUpdateNotifier? = nil,
-        environment: [String: String]
+        environment: [String: String],
+        buttonConfigurationChanges: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) {
         self.settingsStore = settingsStore
         self.scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
@@ -243,6 +245,7 @@ public struct ScannerServerDependencies: Sendable {
         self.previewProvider = previewProvider
         self.webUpdates = webUpdates ?? scanJobs.webUpdates
         self.environment = environment
+        self.buttonConfigurationChanges = buttonConfigurationChanges
     }
 
     public static func live(
@@ -255,6 +258,7 @@ public struct ScannerServerDependencies: Sendable {
         let ocrQueue = OCRQueueActor(executor: processExecutor, webUpdates: webUpdates)
         let settingsStore = ScanSettingsStore(environment: environment)
         let scannerStore = ScannerConfigStore(environment: environment)
+        let buttonConfigurationChanges = ScanSnapButtonConfigurationChangeCoordinator()
         return ScannerServerDependencies(
             settingsStore: settingsStore,
             scannerStore: scannerStore,
@@ -267,11 +271,13 @@ public struct ScannerServerDependencies: Sendable {
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: ScanSnapSetupService(
                 environment: environment,
-                store: scannerStore
+                store: scannerStore,
+                configurationChangeNotifier: buttonConfigurationChanges
             ),
             previewProvider: NativeScanPreviewProvider(executor: processExecutor),
             webUpdates: webUpdates,
-            environment: environment
+            environment: environment,
+            buttonConfigurationChanges: buttonConfigurationChanges
         )
     }
 }

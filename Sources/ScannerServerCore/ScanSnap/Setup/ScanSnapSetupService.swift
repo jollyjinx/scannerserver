@@ -15,6 +15,10 @@ public protocol ScanSnapSetupPairing: Sendable {
 
 extension ScanSnapPairingActor: ScanSnapSetupPairing {}
 
+public protocol ScanSnapSetupConfigurationChangeNotifying: Sendable {
+    func scannerConfigurationDidChange() async
+}
+
 public enum ScanSnapSetupDiscoveryStatus: Equatable, Sendable {
     case idle
     case running
@@ -27,6 +31,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     private let network: any ScanSnapSetupNetworkProviding
     private let discovery: any ScanSnapSetupDiscovering
     private let pairing: any ScanSnapSetupPairing
+    private let configurationChangeNotifier: (any ScanSnapSetupConfigurationChangeNotifying)?
     private let environmentConfiguration: ScanSnapSetupEnvironmentConfiguration?
     private let environmentError: String
     private let now: @Sendable () -> Date
@@ -45,12 +50,14 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         network: any ScanSnapSetupNetworkProviding = SystemScanSnapSetupNetworkProvider(),
         discovery: any ScanSnapSetupDiscovering = ScanSnapDiscoveryActor(),
         pairing: any ScanSnapSetupPairing = ScanSnapPairingActor(),
+        configurationChangeNotifier: (any ScanSnapSetupConfigurationChangeNotifying)? = nil,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.store = store
         self.network = network
         self.discovery = discovery
         self.pairing = pairing
+        self.configurationChangeNotifier = configurationChangeNotifier
         self.now = now
         do {
             environmentConfiguration = try ScanSnapSetupEnvironmentConfiguration(environment: environment)
@@ -260,6 +267,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         let revision = beginSetupOperation()
         do {
             guard try await store.clear(setupRevision: revision) else { return .unavailable }
+            guard isCurrent(revision) else { return .unavailable }
+            await configurationChangeNotifier?.scannerConfigurationDidChange()
             guard isCurrent(revision) else { return .unavailable }
             operationError = ""
             return .cleared
@@ -502,6 +511,8 @@ public actor ScanSnapSetupService: ScannerSetupServing {
             guard try await store.save(config, now: now(), setupRevision: revision) != nil else {
                 return .unavailable
             }
+            guard isCurrent(revision) else { return .unavailable }
+            await configurationChangeNotifier?.scannerConfigurationDidChange()
             guard isCurrent(revision) else { return .unavailable }
             operationError = ""
             return success

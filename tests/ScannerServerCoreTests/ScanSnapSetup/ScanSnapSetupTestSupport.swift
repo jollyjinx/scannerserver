@@ -93,6 +93,14 @@ actor FakeScanSnapSetupPairing: ScanSnapSetupPairing {
     }
 }
 
+actor FakeScanSnapSetupConfigurationChangeNotifier: ScanSnapSetupConfigurationChangeNotifying {
+    private(set) var callCount = 0
+
+    func scannerConfigurationDidChange() {
+        callCount += 1
+    }
+}
+
 actor SuspendedFirstScanSnapSetupPairing: ScanSnapSetupPairing {
     typealias Call = FakeScanSnapSetupPairing.Call
 
