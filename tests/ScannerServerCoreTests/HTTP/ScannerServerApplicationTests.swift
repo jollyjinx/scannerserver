@@ -54,18 +54,13 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("An unusable scan directory shows an actionable configuration error page")
+    @Test("Refreshing retries an unusable scan directory and recovers after it is repaired")
     func unusableScanDirectory() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
         defer { fixture.remove() }
         try FileManager.default.removeItem(at: fixture.outputDirectory)
         try Data("not a directory".utf8).write(to: fixture.outputDirectory)
         let application = try fixture.application()
-        try FileManager.default.removeItem(at: fixture.outputDirectory)
-        try FileManager.default.createDirectory(
-            at: fixture.outputDirectory,
-            withIntermediateDirectories: true
-        )
 
         try await application.test(.router) { client in
             try await client.execute(uri: "/", method: .get) { response in
@@ -76,6 +71,19 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("SCAN_OUTPUT_DIR"))
                 #expect(body.contains(fixture.outputDirectory.path))
                 #expect(!body.contains("action=\"/scan\""))
+            }
+
+            try FileManager.default.removeItem(at: fixture.outputDirectory)
+            try FileManager.default.createDirectory(
+                at: fixture.outputDirectory,
+                withIntermediateDirectories: true
+            )
+
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("action=\"/scan\""))
+                #expect(!body.contains("Scan directory is not accessible"))
             }
             try await client.execute(uri: "/health", method: .get) { response in
                 #expect(response.status == .ok)

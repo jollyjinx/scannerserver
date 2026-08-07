@@ -85,10 +85,10 @@ modify any scan or settings file.
 
 If the check fails, the HTTP service remains available but the main page returns a dedicated
 configuration error page instead of a generic HTTP 500 response. The page shows the configured
-path and the filesystem error. Physical-button handling is not started in this state, while
-`/health` remains available so the diagnostic page can be reached. Correct the bind mount,
-directory path, or host UID/GID permissions, then restart scannerserver to run the startup check
-again.
+path and the filesystem error. Every main-page request repeats the access check, so correct the
+bind mount, directory path, or host UID/GID permissions and refresh the page; restarting the
+service is not required. Physical-button handling keeps retrying its configuration independently,
+and `/health` remains available while the scan directory is inaccessible.
 
 ## Blank Page Removal
 

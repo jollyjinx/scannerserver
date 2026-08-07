@@ -342,7 +342,9 @@ public enum ScannerServerApplication {
         let router = Router()
 
         router.get("/") { request, _ -> Response in
-            if let issue = dependencies.scanDirectoryAccessIssue {
+            if let issue = ScanDirectoryAccessIssue.check(
+                directory: dependencies.outputPathResolver.outputDirectory
+            ) {
                 return scanDirectoryErrorResponse(template: indexTemplate, issue: issue)
             }
             do {
@@ -687,7 +689,7 @@ private func scanDirectoryErrorResponse(
       <p class="warning">scannerserver is incorrectly configured and cannot read and write its scan directory.</p>
       <p>Configured <code>SCAN_OUTPUT_DIR</code>:</p>
       <pre>\(htmlEscape(issue.directoryPath))</pre>
-      <p>Check that the directory is mounted into the container and that the container user can create, read, update, and delete files in it. Restart scannerserver after correcting the configuration or permissions.</p>
+      <p>Check that the directory is mounted into the container and that the container user can create, read, update, and delete files in it. Refresh this page after correcting the configuration or permissions.</p>
       <p class="muted">Access check: \(htmlEscape(issue.details))</p>
     </section>
     """
