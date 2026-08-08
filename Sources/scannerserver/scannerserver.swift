@@ -9,7 +9,8 @@ extension JLog.Level: @retroactive ExpressibleByArgument {}
 struct ScannerServerCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: ScannerServerCore.productName,
-        abstract: "Run the ScanSnap scanner service."
+        abstract: "Run the ScanSnap scanner service.",
+        version: ScannerServerBuildInformation().version
     )
 
     @Option(help: "Override the HTTP bind hostname.")
@@ -28,8 +29,11 @@ struct ScannerServerCommand: AsyncParsableCommand {
         )
         let configuration = try environmentConfiguration.overriding(hostname: host, port: port)
         let runtime = ScannerServerRuntime.live()
+        let buildInformation = ScannerServerBuildInformation()
 
-        JLog.notice("Starting scannerserver on \(configuration.hostname):\(configuration.port)")
+        JLog.notice(
+            "Starting scannerserver \(buildInformation.version) on \(configuration.hostname):\(configuration.port)"
+        )
         try await runtime.run(configuration: configuration)
     }
 }

@@ -28,6 +28,10 @@ Open:
 http://YOUR_LINUX_HOST/
 ```
 
+The web page header shows the running release version. Published images derive it from the Git
+commit date in `YYYY.MM.DD.HHMMSS` format; `/version` returns the same value for scripts and
+deployment checks.
+
 On first start, the web UI shows scanner setup. Discovery keeps running in the background while the manual fields remain usable. When exactly one ScanSnap is found, setup automatically derives and tests its factory-default password from the scanner serial number. Multiple scanners are listed for manual selection.
 
 After setup, scan either way:

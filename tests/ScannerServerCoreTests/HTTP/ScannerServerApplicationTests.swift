@@ -28,7 +28,10 @@ struct ScannerServerApplicationTests {
 
     @Test("Health and functional index routes are available")
     func baselineRoutes() async throws {
-        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        let fixture = try HTTPFixture(environment: [
+            "SCAN_BACKEND": "sane",
+            "SCANNERSERVER_VERSION": "2026.08.08.231742",
+        ])
         defer { fixture.remove() }
         let application = try fixture.application()
 
@@ -42,16 +45,31 @@ struct ScannerServerApplicationTests {
                 #expect(response.status == .ok)
                 #expect(response.headers[.contentType] == "text/html; charset=utf-8")
                 #expect(body.contains("<h1>scannerserver</h1>"))
+                #expect(body.contains("Version 2026.08.08.231742"))
                 #expect(body.contains("action=\"/scan\""))
                 #expect(body.contains("name=\"mode_id\""))
                 #expect(body.contains("No scans yet."))
                 #expect(body.contains("fetch(`/updates?since=${revision}`"))
                 #expect(!body.contains("SCANNER_SERVER_REVISION"))
+                #expect(!body.contains("SCANNER_SERVER_VERSION"))
+            }
+            try await client.execute(uri: "/version", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body) == "2026.08.08.231742\n")
             }
             try await client.execute(uri: "/health", method: .post) { response in
                 #expect(response.status == .notFound || response.status == .methodNotAllowed)
             }
         }
+    }
+
+    @Test("Development builds and blank version overrides use a truthful fallback")
+    func developmentVersionFallback() {
+        #expect(ScannerServerBuildInformation(environment: [:]).version == "development")
+        #expect(
+            ScannerServerBuildInformation(environment: ["SCANNERSERVER_VERSION": "  "]).version
+                == "development"
+        )
     }
 
     @Test("Refreshing retries an unusable scan directory and recovers after it is repaired")

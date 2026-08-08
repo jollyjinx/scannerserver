@@ -18,6 +18,22 @@ permissions:
   contents: read
 
 jobs:
+  build-metadata:
+    name: Build Metadata
+    if: ${{ github.server_url == 'https://github.com' }}
+    runs-on: ubuntu-latest
+    outputs:
+      release-version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Derive release version
+        id: version
+        run: |
+          echo "value=$(./scripts/git_commit_version.sh "${GITHUB_SHA}")" >> "${GITHUB_OUTPUT}"
+
   swift-test:
     name: Swift 6.3.2 Tests
     if: ${{ github.server_url == 'https://gitmaster.jinx.eu' || github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development' }}
@@ -37,6 +53,7 @@ jobs:
     name: Build
     if: ${{ github.server_url == 'https://github.com' }}
     needs:
+      - build-metadata
       - swift-test
       - container-smoke
     uses: docker/github-builder/.github/workflows/build.yml@v1
@@ -58,6 +75,7 @@ jobs:
         type=raw,value=latest,enable={{is_default_branch}}
       build-args: |
         VCS_REF=${{ github.sha }}
+        SCANNERSERVER_VERSION=${{ needs.build-metadata.outputs.release-version }}
     secrets:
       registry-auths: |
         - registry: ghcr.io
@@ -76,13 +94,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Derive release version
+        id: version
+        run: |
+          echo "value=$(./scripts/git_commit_version.sh "${GITHUB_SHA}")" >> "${GITHUB_OUTPUT}"
+
       - name: Build Gitmaster ARM64 image
         if: ${{ github.server_url == 'https://gitmaster.jinx.eu' }}
-        run: docker build --platform linux/arm64 --build-arg "VCS_REF=${{ github.sha }}" --tag scannerserver:ci .
+        run: docker build --platform linux/arm64 --build-arg "VCS_REF=${{ github.sha }}" --build-arg "SCANNERSERVER_VERSION=${{ steps.version.outputs.value }}" --tag scannerserver:ci .
 
       - name: Build current-platform image
         if: ${{ github.server_url != 'https://gitmaster.jinx.eu' }}
-        run: docker build --tag scannerserver:ci .
+        run: docker build --build-arg "VCS_REF=${{ github.sha }}" --build-arg "SCANNERSERVER_VERSION=${{ steps.version.outputs.value }}" --tag scannerserver:ci .
 
       - name: Exercise Gitmaster runtime contract
         if: ${{ github.server_url == 'https://gitmaster.jinx.eu' }}
@@ -90,6 +113,7 @@ jobs:
           CONTAINER_COMMAND: docker
           SCANNERSERVER_SMOKE_HOST: host.docker.internal
           SCANNERSERVER_SMOKE_USE_DOCKER_VOLUMES: "1"
+          SCANNERSERVER_EXPECTED_VERSION: ${{ steps.version.outputs.value }}
         run: ./scripts/smoke_swift_container.sh scannerserver:ci
 
       - name: Exercise current-platform runtime contract
@@ -97,6 +121,7 @@ jobs:
         env:
           CONTAINER_COMMAND: docker
           SCANNERSERVER_SMOKE_USE_DOCKER_VOLUMES: "1"
+          SCANNERSERVER_EXPECTED_VERSION: ${{ steps.version.outputs.value }}
         run: ./scripts/smoke_swift_container.sh scannerserver:ci
 
       - name: Publish Gitmaster branch image

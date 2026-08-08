@@ -40,16 +40,20 @@ RUN resource_path="$(find /swift/.build -type d -name '*_ScannerServerCore.resou
 
 FROM swift:6.3.2-noble-slim
 
-LABEL org.opencontainers.image.title="scannerserver"
-
 ARG APP_UID=1000
 ARG APP_GID=1000
 ARG VCS_REF=unknown
+ARG SCANNERSERVER_VERSION=development
+
+LABEL org.opencontainers.image.title="scannerserver" \
+    org.opencontainers.image.version="${SCANNERSERVER_VERSION}" \
+    org.opencontainers.image.revision="${VCS_REF}"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/scansnap \
     SANE_CONFIG_DIR=/app/sane.d \
-    SCANNERSERVER_VERSION=${VCS_REF}
+    SCANNERSERVER_VERSION=${SCANNERSERVER_VERSION} \
+    SCANNERSERVER_REVISION=${VCS_REF}
 
 RUN sed -i \
         -e 's/ noble-backports//g' \

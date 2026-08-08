@@ -9,6 +9,7 @@
       :root { color-scheme: light dark; font-family: system-ui, sans-serif; --page: #f4f6f5; --panel: #fff; --text: #202124; --muted: #5f6368; --border: #d8ddd8; --primary: #0b57d0; --danger: #b3261e; }
       body { margin: 0; background: var(--page); color: var(--text); }
       main { max-width: 1040px; margin: 0 auto; padding: 28px 20px; }
+      .page-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
       h1 { font-size: 28px; margin: 0; } h2 { font-size: 18px; margin-top: 0; } h3 { font-size: 15px; }
       section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 18px; margin: 16px 0; }
       form, .settings-grid, .setup-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
@@ -28,11 +29,17 @@
       .file-variant { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
       pre { white-space: pre-wrap; overflow-wrap: anywhere; } a { color: var(--primary); }
       @media (prefers-color-scheme: dark) { :root { --page: #171918; --panel: #232624; --text: #f1f3f4; --muted: #b5b9b6; --border: #464b47; } .secondary-button { background: #3b413d; color: #fff; } }
-      @media (max-width: 560px) { main { padding: 20px 12px; } .file-row { grid-template-columns: 1fr; } }
+      @media (max-width: 560px) { main { padding: 20px 12px; } .page-head { display: block; } .file-row { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
-    <main><!-- SCANNER_SERVER_CONTENT --></main>
+    <main>
+      <div class="page-head">
+        <h1>scannerserver</h1>
+        <span class="muted">Version <!-- SCANNER_SERVER_VERSION --></span>
+      </div>
+      <!-- SCANNER_SERVER_CONTENT -->
+    </main>
     <script>
       (() => {
         const selectAll = document.querySelector("[data-select-all]");

@@ -56,23 +56,27 @@ if ! "${DOCKER}" buildx version >/dev/null 2>&1; then
 fi
 
 COMMIT="${VCS_REF:-$(git rev-parse HEAD)}"
+VERSION_REVISION="${VCS_REF:-HEAD}"
+RELEASE_VERSION="${SCANNERSERVER_VERSION:-$("${SCRIPT_DIR}/git_commit_version.sh" "${VERSION_REVISION}")}"
 IMAGE_REF="${IMAGE}:${TAG}"
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
   if [ -z "${VCS_REF:-}" ]; then
     COMMIT="${COMMIT}-dirty"
   fi
-  echo "warning: building from a dirty working tree; image version will be ${COMMIT}" >&2
+  echo "warning: building from a dirty working tree; image revision will be ${COMMIT}" >&2
 fi
 
 echo "Building and pushing ${IMAGE_REF}"
 echo "Platforms: ${PLATFORMS}"
+echo "Version: ${RELEASE_VERSION}"
 echo "VCS_REF: ${COMMIT}"
 
 build_image() {
   "${DOCKER}" buildx build \
     --platform "${PLATFORMS}" \
     --build-arg "VCS_REF=${COMMIT}" \
+    --build-arg "SCANNERSERVER_VERSION=${RELEASE_VERSION}" \
     --tag "${IMAGE_REF}" \
     --push \
     .

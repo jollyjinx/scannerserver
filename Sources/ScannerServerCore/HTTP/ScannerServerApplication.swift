@@ -336,22 +336,29 @@ public enum ScannerServerApplication {
         dependencies: ScannerServerDependencies
     ) throws -> Router<BasicRequestContext> {
         let indexTemplate = try loadIndexHTML()
-        guard indexTemplate.contains("<!-- SCANNER_SERVER_CONTENT -->") else {
+        guard indexTemplate.contains("<!-- SCANNER_SERVER_CONTENT -->"),
+              indexTemplate.contains("<!-- SCANNER_SERVER_VERSION -->") else {
             throw ScannerServerConfigurationError.invalidIndexResource
         }
+        let buildInformation = ScannerServerBuildInformation(environment: dependencies.environment)
         let router = Router()
 
         router.get("/") { request, _ -> Response in
             if let issue = ScanDirectoryAccessIssue.check(
                 directory: dependencies.outputPathResolver.outputDirectory
             ) {
-                return scanDirectoryErrorResponse(template: indexTemplate, issue: issue)
+                return scanDirectoryErrorResponse(
+                    template: indexTemplate,
+                    issue: issue,
+                    buildInformation: buildInformation
+                )
             }
             do {
                 return try await indexResponse(
                     request: request,
                     template: indexTemplate,
-                    dependencies: dependencies
+                    dependencies: dependencies,
+                    buildInformation: buildInformation
                 )
             } catch {
                 return scanDirectoryErrorResponse(
@@ -359,11 +366,13 @@ public enum ScannerServerApplication {
                     issue: ScanDirectoryAccessIssue(
                         directoryPath: dependencies.outputPathResolver.outputDirectory.path,
                         details: error.localizedDescription
-                    )
+                    ),
+                    buildInformation: buildInformation
                 )
             }
         }
         router.get("/health") { _, _ in "ok\n" }
+        router.get("/version") { _, _ in "\(buildInformation.version)\n" }
         router.get("/updates") { request, _ -> Response in
             let value = queryValues(request.uri.query)["since"] ?? ""
             guard let since = UInt64(value) else {
@@ -680,10 +689,10 @@ private func textResponse(_ text: String, status: HTTPResponse.Status) -> Respon
 
 private func scanDirectoryErrorResponse(
     template: String,
-    issue: ScanDirectoryAccessIssue
+    issue: ScanDirectoryAccessIssue,
+    buildInformation: ScannerServerBuildInformation
 ) -> Response {
     let content = """
-    <div class="page-head"><h1>scannerserver</h1></div>
     <section>
       <h2>Scan directory is not accessible</h2>
       <p class="warning">scannerserver is incorrectly configured and cannot read and write its scan directory.</p>
@@ -696,6 +705,10 @@ private func scanDirectoryErrorResponse(
     let html = template
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
         .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "0")
+        .replacingOccurrences(
+            of: "<!-- SCANNER_SERVER_VERSION -->",
+            with: htmlEscape(buildInformation.version)
+        )
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
     return dataResponse(
         Data(html.utf8),
@@ -708,7 +721,8 @@ private func scanDirectoryErrorResponse(
 private func indexResponse(
     request: Request,
     template: String,
-    dependencies: ScannerServerDependencies
+    dependencies: ScannerServerDependencies,
+    buildInformation: ScannerServerBuildInformation
 ) async throws -> Response {
     try FileManager.default.createDirectory(
         at: dependencies.outputPathResolver.outputDirectory,
@@ -738,6 +752,10 @@ private func indexResponse(
     let html = template
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
         .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "\(webRevision)")
+        .replacingOccurrences(
+            of: "<!-- SCANNER_SERVER_VERSION -->",
+            with: htmlEscape(buildInformation.version)
+        )
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
     return dataResponse(Data(html.utf8), contentType: "text/html; charset=utf-8")
 }
@@ -775,7 +793,7 @@ private func renderIndexContent(
         selectedMode = editModeID.flatMap(settings.mode(id:)) ?? settings.defaultMode
     }
 
-    var html = "<div class=\"page-head\"><h1>scannerserver</h1></div>"
+    var html = ""
     if let message = setupMessage(setupMessageCode) {
         html += "<p class=\"notice\">\(htmlEscape(message))</p>"
     }

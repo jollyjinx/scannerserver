@@ -127,8 +127,19 @@ docker compose up -d
 Local builds are only needed when changing the Swift package or testing Dockerfile changes. The checked-in Compose service already has `build: .`, so a clean checkout can be built directly:
 
 ```bash
-docker compose up -d --build
+export SCANNERSERVER_VERSION="$(./scripts/git_commit_version.sh)"
+export VCS_REF="$(git rev-parse HEAD)"
+docker compose build \
+  --build-arg "SCANNERSERVER_VERSION=${SCANNERSERVER_VERSION}" \
+  --build-arg "VCS_REF=${VCS_REF}"
+docker compose up -d
 ```
+
+`git_commit_version.sh` formats the commit timestamp recorded by Git as `YYYY.MM.DD.HHMMSS`.
+The image exposes that value in the web page header, at `/version`, through
+`SCANNERSERVER_VERSION`, and in the OCI image version label. The full commit SHA remains available
+as `SCANNERSERVER_REVISION` and in the OCI revision label. Automated GitHub, Gitmaster, and
+`build_push_development.sh` builds set both values.
 
 ## Build And Push Development
 
