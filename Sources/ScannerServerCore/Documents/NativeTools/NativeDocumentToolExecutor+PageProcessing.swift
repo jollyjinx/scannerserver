@@ -222,6 +222,7 @@ extension NativeDocumentToolExecutor {
                     image: image.dimensions,
                     boundingBox: boundingBox,
                     density: content.density,
+                    boundingBoxKind: content.boundingBoxKind,
                     options: options
                 )
                 var detail = "bbox=(\(boundingBox.left), \(boundingBox.top), "
@@ -229,7 +230,11 @@ extension NativeDocumentToolExecutor {
                 detail += formatted("width_ratio=%.3f ", decision.widthRatio)
                 detail += formatted("height_ratio=%.3f ", decision.heightRatio)
                 detail += formatted("density=%.3f ", content.density)
-                detail += "background=\(content.background)"
+                detail += "background=\(content.background) "
+                let detection = content.boundingBoxKind == .pageEdges
+                    ? "page-edges"
+                    : "content"
+                detail += "detection=\(detection)"
                 guard decision.shouldCrop else {
                     details.append(("kept", detail))
                     continue
@@ -240,7 +245,9 @@ extension NativeDocumentToolExecutor {
                     mediaBox: mediaBox,
                     image: image.dimensions,
                     boundingBox: boundingBox,
-                    marginPoints: options.marginPoints
+                    marginPoints: content.boundingBoxKind == .pageEdges
+                        ? 0
+                        : options.marginPoints
                 )
                 cropBoxes[index] = cropBox
                 detail += " crop_box=\(formatPDFBox(cropBox))"
@@ -426,6 +433,7 @@ extension NativeDocumentToolExecutor {
         boundingBox: NativeImageBoundingBox?,
         background: Int,
         density: Double,
+        boundingBoxKind: NativeCropBoundingBoxKind,
         diagnostics: String
     ) {
         guard options.borderPixels >= 0 else {
@@ -462,17 +470,18 @@ extension NativeDocumentToolExecutor {
             analysis.boundingBox,
             analysis.background,
             analysis.density,
+            analysis.boundingBoxKind,
             diagnostics
         )
     }
 
-    private func cropPixelAnalysis(
+    func cropPixelAnalysis(
         rgb: Data,
         width: Int,
         height: Int,
         border: Int,
         backgroundDelta: Int
-    ) throws -> (boundingBox: NativeImageBoundingBox?, background: Int, density: Double) {
+    ) throws -> NativeCropPixelAnalysis {
         let pixelCount = width.multipliedReportingOverflow(by: height)
         guard !pixelCount.overflow, pixelCount.partialValue <= 100_000_000 else {
             throw NativePageProcessingFailure.diagnostic(
@@ -534,10 +543,15 @@ extension NativeDocumentToolExecutor {
                 }
             }
             guard maximumX >= minimumX, maximumY >= minimumY else {
-                return (nil, background, 0)
+                return NativeCropPixelAnalysis(
+                    boundingBox: nil,
+                    background: background,
+                    density: 0,
+                    boundingBoxKind: .content
+                )
             }
 
-            let boundingBox = NativeImageBoundingBox(
+            var boundingBox = NativeImageBoundingBox(
                 left: minimumX,
                 top: minimumY,
                 width: maximumX - minimumX + 1,
@@ -545,8 +559,125 @@ extension NativeDocumentToolExecutor {
             )
             let density = Double(contentPixels)
                 / Double(boundingBox.width * boundingBox.height)
-            return (boundingBox, background, density)
+            var boundingBoxKind = NativeCropBoundingBoxKind.content
+            let reachesEveryEdge = boundingBox.left <= 1
+                && boundingBox.top <= 1
+                && boundingBox.right >= width - 1
+                && boundingBox.bottom >= height - 1
+            // Paper texture can pollute the content mask through the scanner border.
+            // In that case, recover the physical sheet edges from whole-row/column medians.
+            if reachesEveryEdge,
+               let pageBoundingBox = try detectedPageBoundingBox(
+                   grayscale: grayscale,
+                   width: width,
+                   height: height,
+                   border: border
+               )
+            {
+                boundingBox = pageBoundingBox
+                boundingBoxKind = .pageEdges
+            }
+            return NativeCropPixelAnalysis(
+                boundingBox: boundingBox,
+                background: background,
+                density: density,
+                boundingBoxKind: boundingBoxKind
+            )
         }
+    }
+
+    private func detectedPageBoundingBox(
+        grayscale: (_ x: Int, _ y: Int) -> Int,
+        width: Int,
+        height: Int,
+        border: Int
+    ) throws -> NativeImageBoundingBox? {
+        guard width >= 16, height >= 16 else { return nil }
+        // A bounded sample keeps full-resolution scans inexpensive while medians reject text.
+        let rowStride = max(1, height / 512)
+        let columnStride = max(1, width / 512)
+        let columnMedians = try medianGrayscaleProfile(count: width) { column, histogram in
+            for row in stride(from: 0, to: height, by: rowStride) {
+                histogram[grayscale(column, row)] += 1
+            }
+        }
+        let rowMedians = try medianGrayscaleProfile(count: height) { row, histogram in
+            for column in stride(from: 0, to: width, by: columnStride) {
+                histogram[grayscale(column, row)] += 1
+            }
+        }
+
+        guard let left = pageEdge(
+            in: columnMedians,
+            searchRange: edgeSearchRange(count: width, border: border, leading: true),
+            direction: 1
+        ), let right = pageEdge(
+            in: columnMedians,
+            searchRange: edgeSearchRange(count: width, border: border, leading: false),
+            direction: -1
+        ), let top = pageEdge(
+            in: rowMedians,
+            searchRange: edgeSearchRange(count: height, border: border, leading: true),
+            direction: 1
+        ), let bottom = pageEdge(
+            in: rowMedians,
+            searchRange: edgeSearchRange(count: height, border: border, leading: false),
+            direction: -1
+        ), right > left, bottom > top,
+              right - left >= width / 2,
+              bottom - top >= height / 2
+        else {
+            return nil
+        }
+        return NativeImageBoundingBox(
+            left: left,
+            top: top,
+            width: right - left,
+            height: bottom - top
+        )
+    }
+
+    private func medianGrayscaleProfile(
+        count: Int,
+        record: (_ index: Int, _ histogram: inout [Int]) -> Void
+    ) throws -> [Int] {
+        var profile = [Int](repeating: 0, count: count)
+        var histogram = [Int](repeating: 0, count: 256)
+        for index in 0..<count {
+            if index.isMultiple(of: 128) { try Task.checkCancellation() }
+            histogram.withUnsafeMutableBufferPointer { buffer in
+                buffer.initialize(repeating: 0)
+            }
+            record(index, &histogram)
+            profile[index] = medianValue(in: histogram)
+        }
+        return profile
+    }
+
+    private func edgeSearchRange(count: Int, border: Int, leading: Bool) -> Range<Int> {
+        let outerExclusion = min(8, max(2, count / 1000))
+        let depth = min(count / 4, max(border * 2, outerExclusion + 2))
+        if leading {
+            return outerExclusion..<depth
+        }
+        return (count - depth)..<(count - outerExclusion)
+    }
+
+    private func pageEdge(
+        in profile: [Int],
+        searchRange: Range<Int>,
+        direction: Int
+    ) -> Int? {
+        var bestCoordinate: Int?
+        var bestStrength = 1
+        for coordinate in searchRange where coordinate > 0 && coordinate < profile.count {
+            let strength = direction * (profile[coordinate] - profile[coordinate - 1])
+            if strength > bestStrength {
+                bestStrength = strength
+                bestCoordinate = coordinate
+            }
+        }
+        return bestCoordinate
     }
 
     private func medianValue(in histogram: [Int]) -> Int {

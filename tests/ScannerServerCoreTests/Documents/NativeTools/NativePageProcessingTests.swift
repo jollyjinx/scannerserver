@@ -32,6 +32,49 @@ struct NativePageProcessingTests {
             density: 0.08,
             options: cropOptions
         ).shouldCrop)
+        #expect(NativeCropPageDecision.evaluate(
+            image: image,
+            boundingBox: .init(left: 2, top: 2, width: 95, height: 96),
+            density: 0.08,
+            boundingBoxKind: .pageEdges,
+            options: cropOptions
+        ).shouldCrop)
+    }
+
+    @Test("Crop analysis detects a full sheet inside a noisy scanner border")
+    func fullSheetBorderDetection() throws {
+        let width = 200
+        let height = 300
+        let inset = 16
+        var rgb = Data()
+        rgb.reserveCapacity(width * height * 3)
+        for y in 0..<height {
+            for x in 0..<width {
+                let isPaper = (inset..<(width - inset)).contains(x)
+                    && (inset..<(height - inset)).contains(y)
+                let value: UInt8 = isPaper ? 245 : ((x + y).isMultiple(of: 3) ? 230 : 210)
+                rgb.append(contentsOf: [value, value, value])
+            }
+        }
+
+        let executor = NativeDocumentToolExecutor(
+            executor: FakeNativeDocumentProcessExecutor(stubs: [])
+        )
+        let analysis = try executor.cropPixelAnalysis(
+            rgb: rgb,
+            width: width,
+            height: height,
+            border: 32,
+            backgroundDelta: 8
+        )
+
+        #expect(analysis.boundingBoxKind == .pageEdges)
+        #expect(analysis.boundingBox == NativeImageBoundingBox(
+            left: inset,
+            top: inset,
+            width: width - 2 * inset,
+            height: height - 2 * inset
+        ))
     }
 
     @Test("Inherited MediaBox and direct image resources are resolved structurally")

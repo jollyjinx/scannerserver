@@ -170,6 +170,18 @@ struct NativeImageBoundingBox: Equatable, Sendable {
     var bottom: Int { top + height }
 }
 
+enum NativeCropBoundingBoxKind: Equatable, Sendable {
+    case content
+    case pageEdges
+}
+
+struct NativeCropPixelAnalysis: Equatable, Sendable {
+    let boundingBox: NativeImageBoundingBox?
+    let background: Int
+    let density: Double
+    let boundingBoxKind: NativeCropBoundingBoxKind
+}
+
 struct NativePDFBox: Equatable, Sendable {
     let left: Double
     let bottom: Double
@@ -188,14 +200,16 @@ struct NativeCropPageDecision: Equatable, Sendable {
         image: NativeDocumentImageDimensions,
         boundingBox: NativeImageBoundingBox,
         density: Double,
+        boundingBoxKind: NativeCropBoundingBoxKind = .content,
         options: NativeCropPDFPagesOptions
     ) -> Self {
         let widthRatio = Double(boundingBox.width) / Double(image.width)
         let heightRatio = Double(boundingBox.height) / Double(image.height)
-        let isSmallObject = widthRatio <= options.maximumWidthRatio
+        let isCropCandidate = boundingBoxKind == .pageEdges
+            || widthRatio <= options.maximumWidthRatio
             || heightRatio <= options.maximumHeightRatio
         return Self(
-            shouldCrop: isSmallObject && density >= options.minimumDensity,
+            shouldCrop: isCropCandidate && density >= options.minimumDensity,
             widthRatio: widthRatio,
             heightRatio: heightRatio
         )

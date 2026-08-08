@@ -204,7 +204,8 @@ Acceptance:
 
 Acceptance:
 
-- Fixture tests preserve the current crop result for `tests/fixtures/receipt-small-page.pdf`.
+- Fixture tests preserve the current crop result for `tests/fixtures/receipt-small-page.pdf`, and
+  a synthetic regression test covers full sheets inside noisy scanner borders.
 - Tests cover blank-page removal thresholds, split names, PNG naming, metadata, and preview fallback.
 
 ### 7. Container Cutover

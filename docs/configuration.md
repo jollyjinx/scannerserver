@@ -118,9 +118,13 @@ environment:
   SCAN_REMOVE_BLANK_PAGES: "false"
 ```
 
-## Receipt / Small Page Cropping
+## Automatic Page Cropping
 
-Automatic page cropping is enabled by default for PDF scans. It detects smaller documents, such as receipts, on a larger scanner page and crops the PDF page boxes around the detected document before OCR runs.
+Automatic page cropping is enabled by default for PDF scans. It detects smaller documents, such
+as receipts, on a larger scanner page and crops the PDF page boxes around the detected document
+before OCR runs. For a full sheet whose shadows or paper texture reach every image edge, a
+physical-page fallback uses median row and column transitions to remove the scanner border
+without trimming the paper itself.
 
 Useful settings:
 
