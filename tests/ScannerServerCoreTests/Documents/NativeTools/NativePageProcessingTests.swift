@@ -77,6 +77,92 @@ struct NativePageProcessingTests {
         ))
     }
 
+    @Test("Crop analysis detects a near-full sheet without requiring mask pixels at image zero")
+    func nearFullSheetBorderDetection() throws {
+        let width = 200
+        let height = 300
+        let inset = 40
+        var rgb = Data()
+        rgb.reserveCapacity(width * height * 3)
+        for y in 0..<height {
+            for x in 0..<width {
+                let isPaper = (inset..<(width - inset)).contains(x)
+                    && (inset..<(height - inset)).contains(y)
+                let isEdgeNoise = (x == 10 || x == width - 11) && y == height / 2
+                    || (y == 10 || y == height - 11) && x == width / 2
+                let value: UInt8 = isEdgeNoise ? 220 : (isPaper ? 248 : 237)
+                rgb.append(contentsOf: [value, value, value])
+            }
+        }
+
+        let executor = NativeDocumentToolExecutor(
+            executor: FakeNativeDocumentProcessExecutor(stubs: [])
+        )
+        let analysis = try executor.cropPixelAnalysis(
+            rgb: rgb,
+            width: width,
+            height: height,
+            border: 64,
+            backgroundDelta: 8
+        )
+
+        #expect(analysis.boundingBoxKind == .pageEdges)
+        #expect(analysis.boundingBox == NativeImageBoundingBox(
+            left: inset,
+            top: inset,
+            width: width - 2 * inset,
+            height: height - 2 * inset
+        ))
+    }
+
+    @Test("Blank analysis ignores a dark scanner border but retains real page content")
+    func blankScannerBorderDetection() throws {
+        let width = 200
+        let height = 300
+        let border = 6
+        var grayscale = Data(repeating: 250, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width where x < border || x >= width - border
+                || y < border || y >= height - border
+            {
+                grayscale[y * width + x] = 210
+            }
+        }
+
+        let executor = NativeDocumentToolExecutor(
+            executor: FakeNativeDocumentProcessExecutor(stubs: [])
+        )
+        let blank = try executor.blankPixelAnalysis(
+            grayscale: grayscale,
+            width: width,
+            height: height,
+            whiteThreshold: 230
+        )
+        let options = try NativeRemoveBlankPagesOptions(arguments: ["scan.pdf"])
+        #expect(NativeBlankPageDecision.evaluate(
+            nonwhiteRatio: blank.nonwhiteRatio,
+            mean: blank.mean,
+            options: options
+        ).isBlank)
+
+        for y in 120..<180 {
+            for x in 95..<105 {
+                grayscale[y * width + x] = 80
+            }
+        }
+        let content = try executor.blankPixelAnalysis(
+            grayscale: grayscale,
+            width: width,
+            height: height,
+            whiteThreshold: 230
+        )
+        #expect(!NativeBlankPageDecision.evaluate(
+            nonwhiteRatio: content.nonwhiteRatio,
+            mean: content.mean,
+            options: options
+        ).isBlank)
+    }
+
     @Test("Inherited MediaBox and direct image resources are resolved structurally")
     func inheritedPDFObjects() throws {
         let document = try NativePDFJSONDocument(data: pdfJSON())

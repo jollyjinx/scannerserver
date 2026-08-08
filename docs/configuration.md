@@ -92,14 +92,15 @@ and `/health` remains available while the scan directory is inaccessible.
 
 ## Blank Page Removal
 
-Blank-page removal is enabled by default for PDF scans.
+Blank-page removal is enabled by default for PDF scans. Analysis ignores the outer three percent
+of the embedded page image so the scanner border and edge shadows are not mistaken for content.
 
 Useful settings:
 
 ```yaml
 environment:
   SCAN_REMOVE_BLANK_PAGES: "true"
-  SCAN_BLANK_WHITE_THRESHOLD: "245"
+  SCAN_BLANK_WHITE_THRESHOLD: "230"
   SCAN_BLANK_CONTENT_RATIO_THRESHOLD: "0.003"
   SCAN_BLANK_MEAN_THRESHOLD: "248.0"
 ```

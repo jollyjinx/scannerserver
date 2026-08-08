@@ -457,7 +457,7 @@ struct DocumentProcessingOptions {
 
     init(environment: [String: String]) throws {
         creator = Self.nonEmpty(environment["SCAN_RAW_PDF_CREATOR"]) ?? "ScanSnap"
-        whiteThreshold = try Self.integer(environment, key: "SCAN_BLANK_WHITE_THRESHOLD", default: 245)
+        whiteThreshold = try Self.integer(environment, key: "SCAN_BLANK_WHITE_THRESHOLD", default: 230)
         contentRatioThreshold = try Self.double(
             environment,
             key: "SCAN_BLANK_CONTENT_RATIO_THRESHOLD",

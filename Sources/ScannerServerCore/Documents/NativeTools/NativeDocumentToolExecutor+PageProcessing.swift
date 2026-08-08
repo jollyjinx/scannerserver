@@ -377,50 +377,81 @@ extension NativeDocumentToolExecutor {
         request: ProcessRequest
     ) async throws -> (nonwhiteRatio: Double, mean: Double, diagnostics: String) {
         let name = "blank-analysis-\(paddedPageNumber(page))"
-        let thumbnail = stagingDirectory.appendingPathComponent("\(name)-thumbnail.v")
         let grayscale = stagingDirectory.appendingPathComponent("\(name)-gray.v")
-        let mask = stagingDirectory.appendingPathComponent("\(name)-mask.v")
-        var diagnostics = ""
-
+        let rawGrayscale = stagingDirectory.appendingPathComponent("\(name)-gray.raw")
+        var diagnostics = try await successfulProcess(
+            executable: "vips",
+            arguments: ["colourspace", image.url.path, grayscale.path, "b-w"],
+            request: request
+        ).standardError
         diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
             executable: "vips",
-            arguments: [
-                "thumbnail", image.url.path, thumbnail.path, "512",
-                "--height", "512", "--size", "down",
-            ],
+            arguments: ["rawsave", grayscale.path, rawGrayscale.path],
             request: request
         ).standardError)
-        diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-            executable: "vips",
-            arguments: ["colourspace", thumbnail.path, grayscale.path, "b-w"],
-            request: request
-        ).standardError)
-        diagnostics = joinedDiagnostics(diagnostics, try await successfulProcess(
-            executable: "vips",
-            arguments: [
-                "relational_const", grayscale.path, mask.path,
-                "less", String(whiteThreshold),
-            ],
-            request: request
-        ).standardError)
-        let ratioResult = try await successfulProcess(
-            executable: "vips",
-            arguments: ["avg", mask.path],
-            request: request
+        let analysis = try blankPixelAnalysis(
+            grayscale: fileSystem.readMappedData(at: rawGrayscale),
+            width: Int(image.dimensions.width),
+            height: Int(image.dimensions.height),
+            whiteThreshold: whiteThreshold
         )
-        diagnostics = joinedDiagnostics(diagnostics, ratioResult.standardError)
-        let meanResult = try await successfulProcess(
-            executable: "vips",
-            arguments: ["avg", grayscale.path],
-            request: request
-        )
-        diagnostics = joinedDiagnostics(diagnostics, meanResult.standardError)
 
         return (
-            try numericOutput(ratioResult, operation: "vips avg") / 255.0,
-            try numericOutput(meanResult, operation: "vips avg"),
+            analysis.nonwhiteRatio,
+            analysis.mean,
             diagnostics
         )
+    }
+
+    func blankPixelAnalysis(
+        grayscale: Data,
+        width: Int,
+        height: Int,
+        whiteThreshold: Int
+    ) throws -> NativeBlankPixelAnalysis {
+        let pixelCount = width.multipliedReportingOverflow(by: height)
+        guard width > 0, height > 0,
+              !pixelCount.overflow,
+              pixelCount.partialValue <= 100_000_000,
+              grayscale.count == pixelCount.partialValue
+        else {
+            throw NativePageProcessingFailure.diagnostic(
+                "vips rawsave did not return valid single-channel 8-bit grayscale data."
+            )
+        }
+
+        // ScanSnap images include a dark scanner border and edge shadows. Ignore the outer
+        // three percent so those artifacts cannot turn an otherwise blank sheet into content.
+        let insetX = width >= 16 ? max(1, width * 3 / 100) : 0
+        let insetY = height >= 16 ? max(1, height * 3 / 100) : 0
+        let xRange = insetX..<(width - insetX)
+        let yRange = insetY..<(height - insetY)
+        guard !xRange.isEmpty, !yRange.isEmpty else {
+            throw NativePageProcessingFailure.diagnostic(
+                "page image is too small for blank-page analysis."
+            )
+        }
+
+        let xStride = max(1, xRange.count / 512)
+        let yStride = max(1, yRange.count / 512)
+        return grayscale.withUnsafeBytes { rawBytes in
+            let bytes = rawBytes.bindMemory(to: UInt8.self)
+            var samples = 0
+            var nonwhite = 0
+            var sum: Int64 = 0
+            for y in stride(from: yRange.lowerBound, to: yRange.upperBound, by: yStride) {
+                for x in stride(from: xRange.lowerBound, to: xRange.upperBound, by: xStride) {
+                    let value = Int(bytes[y * width + x])
+                    samples += 1
+                    sum += Int64(value)
+                    if value < whiteThreshold { nonwhite += 1 }
+                }
+            }
+            return NativeBlankPixelAnalysis(
+                nonwhiteRatio: Double(nonwhite) / Double(samples),
+                mean: Double(sum) / Double(samples)
+            )
+        }
     }
 
     private func cropContentAnalysis(
@@ -564,9 +595,11 @@ extension NativeDocumentToolExecutor {
                 && boundingBox.top <= 1
                 && boundingBox.right >= width - 1
                 && boundingBox.bottom >= height - 1
+            let coversAlmostEntireImage = boundingBox.width >= width * 9 / 10
+                && boundingBox.height >= height * 9 / 10
             // Paper texture can pollute the content mask through the scanner border.
             // In that case, recover the physical sheet edges from whole-row/column medians.
-            if reachesEveryEdge,
+            if (reachesEveryEdge || coversAlmostEntireImage),
                let pageBoundingBox = try detectedPageBoundingBox(
                    grayscale: grayscale,
                    width: width,
@@ -713,16 +746,6 @@ extension NativeDocumentToolExecutor {
         }
         try Task.checkCancellation()
         return result
-    }
-
-    private func numericOutput(_ result: ProcessResult, operation: String) throws -> Double {
-        let value = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let number = Double(value), number.isFinite else {
-            throw NativePageProcessingFailure.diagnostic(
-                "\(operation) did not return a valid number."
-            )
-        }
-        return number
     }
 
     private func pageSelection(_ pages: [Int]) -> String {

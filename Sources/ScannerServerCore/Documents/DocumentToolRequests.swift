@@ -24,7 +24,7 @@ public struct RemoveBlankPagesRequest: ExternalDocumentToolRequest, Equatable, S
 
     public init(
         pdfPath: String,
-        whiteThreshold: Int = 245,
+        whiteThreshold: Int = 230,
         contentRatioThreshold: Double = 0.003,
         meanThreshold: Double = 248.0,
         keepOne: Bool = true,

@@ -11,7 +11,7 @@ struct DocumentToolRequestTests {
         #expect(command.executable == "remove-blank-pages")
         #expect(command.arguments == [
             "/work/raw.pdf",
-            "--white-threshold", "245",
+            "--white-threshold", "230",
             "--content-ratio-threshold", "0.003",
             "--mean-threshold", "248.0",
         ])

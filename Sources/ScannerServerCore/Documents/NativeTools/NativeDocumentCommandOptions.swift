@@ -6,7 +6,7 @@ enum NativeDocumentCommandOptionsError: Error, Equatable {
 
 struct NativeRemoveBlankPagesOptions: Equatable, Sendable {
     let pdfPath: String
-    var whiteThreshold = 245
+    var whiteThreshold = 230
     var contentRatioThreshold = 0.003
     var meanThreshold = 248.0
     var keepOne = true
@@ -158,6 +158,11 @@ struct NativeBlankPageDecision: Equatable, Sendable {
             )
         )
     }
+}
+
+struct NativeBlankPixelAnalysis: Equatable, Sendable {
+    let nonwhiteRatio: Double
+    let mean: Double
 }
 
 struct NativeImageBoundingBox: Equatable, Sendable {
