@@ -884,7 +884,7 @@ private func renderScannerSetupContent(
     html += "<p class=\"muted\">The security key cannot be derived from the Ethernet address. The address only helps discovery on the same local network.</p>"
     html += "<button>Connect scanner</button></form>"
     if setup.needsPassword {
-        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Security key or scanner password<input type=\"password\" name=\"scanner_password\" autofocus></label><button>Try password</button></form>"
+        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Security key or scanner password<input type=\"text\" name=\"scanner_password\" autofocus></label><button>Try password</button></form>"
     }
     html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div>"
     return html

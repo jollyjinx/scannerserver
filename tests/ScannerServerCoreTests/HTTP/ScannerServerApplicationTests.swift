@@ -183,7 +183,8 @@ struct ScannerServerApplicationTests {
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(body.contains("action=\"/setup/scanners/password\""))
-                #expect(body.contains("name=\"scanner_password\" autofocus"))
+                #expect(body.contains("type=\"text\" name=\"scanner_password\" autofocus"))
+                #expect(!body.contains("type=\"password\""))
                 #expect(body.contains(">Try password</button>"))
                 #expect(!body.contains("name=\"scanner_security_key\""))
             }
