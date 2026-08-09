@@ -213,7 +213,7 @@ public actor ScanSnapPairingActor {
 
     private func bestEffortRelease(configuration: ScanSnapPairingConfiguration) async throws {
         do {
-            try await release(configuration: configuration)
+            try await releaseSession(configuration: configuration)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -221,7 +221,7 @@ public actor ScanSnapPairingActor {
         }
     }
 
-    private func release(configuration: ScanSnapPairingConfiguration) async throws {
+    public func releaseSession(configuration: ScanSnapPairingConfiguration) async throws {
         let connection = try await tcpConnectionFactory.connect(
             to: ScanSnapSocketAddress(host: configuration.scannerIPAddress, port: configuration.dataPort),
             binding: ScanSnapSocketAddress(host: configuration.clientIPAddress, port: 0),

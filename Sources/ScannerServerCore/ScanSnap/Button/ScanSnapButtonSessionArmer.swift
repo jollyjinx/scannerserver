@@ -45,18 +45,23 @@ public struct ScanSnapButtonSessionArmer: ScanSnapButtonArming {
         configuration: ScanSnapButtonConfiguration
     ) async throws {
         try await runWithTimeout(configuration.armTimeoutMilliseconds) {
-            let recoveryResult = try await pairing.pair(
+            try await bestEffortReleaseSession(scanner: scanner, configuration: configuration)
+            try await armWithoutTimeout(scanner: scanner, configuration: configuration)
+        }
+    }
+
+    public func releaseSession(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        try await runWithTimeout(configuration.armTimeoutMilliseconds) {
+            try await pairing.releaseSession(
                 configuration: pairingConfiguration(
                     scanner: scanner,
                     configuration: configuration,
                     retryPolicy: .pairingTest
-                ),
-                timestamp: timestampProvider()
+                )
             )
-            guard recoveryResult.accepted else {
-                throw ScanSnapButtonArmingError.pairingRejected(recoveryResult.status)
-            }
-            try await armWithoutTimeout(scanner: scanner, configuration: configuration)
         }
     }
 
@@ -95,6 +100,26 @@ public struct ScanSnapButtonSessionArmer: ScanSnapButtonArming {
         }
 
         try await initializeDataSession(scanner: scanner)
+    }
+
+    private func bestEffortReleaseSession(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        do {
+            try await pairing.releaseSession(
+                configuration: pairingConfiguration(
+                    scanner: scanner,
+                    configuration: configuration,
+                    retryPolicy: .pairingTest
+                )
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // A failed scan may already have released its session. Continue with
+            // the fresh button registration when explicit cleanup is unavailable.
+        }
     }
 
     private func pairingConfiguration(

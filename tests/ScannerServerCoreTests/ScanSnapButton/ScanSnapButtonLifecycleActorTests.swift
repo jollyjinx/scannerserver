@@ -226,6 +226,7 @@ func scanCompletionImmediatelyRearms() async {
     #expect(await eventually { await lifecycle.state.isArmed })
     await lifecycle.scanDidStart()
     #expect(!(await lifecycle.state.isArmed))
+    #expect(await armer.releaseCalls.count == 1)
 
     await clock.set(2_000)
     await lifecycle.scanDidFinish()
@@ -233,6 +234,30 @@ func scanCompletionImmediatelyRearms() async {
     #expect(await eventually { await armer.calls.count == 2 })
     #expect(await eventually { await heartbeat.startCalls.count == 2 })
     #expect(await lifecycle.state.isArmed)
+}
+
+@Test("Full safety re-arm releases the retained button session first")
+func fullSafetyRearmReleasesRetainedSession() async {
+    let armer = ButtonFakeArmer()
+    let clock = ButtonFakeClock(1_000)
+    let lifecycle = makeLifecycle(
+        configuration: ScanSnapButtonConfiguration(
+            armIntervalMilliseconds: 1_000,
+            healthCheckIntervalMilliseconds: 10_000
+        ),
+        reachability: ButtonFakeReachability([true]),
+        armer: armer,
+        clock: clock
+    )
+
+    await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    #expect(await eventually { await lifecycle.state.isArmed })
+
+    await clock.set(2_000)
+    await lifecycle.runMaintenance(atMilliseconds: 2_000)
+
+    #expect(await eventually { await armer.calls.count == 2 })
+    #expect(await armer.releaseCalls.count == 1)
 }
 
 @Test("Stop cancels listener and in-progress arming and closes UDP transport")

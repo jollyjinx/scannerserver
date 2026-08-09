@@ -75,11 +75,13 @@ credentials to the repository or ordinary test fixtures.
 - If the startup log is absent, capture `udp port 53220` on the host and confirm the advertisement reaches the service host with VENS command `0x21`.
 - Leave the service idle for at least ten minutes and confirm the 500 ms heartbeat keeps the scanner button ready.
 - During the idle test, optionally capture UDP `52217` and confirm heartbeats originate about every 500 ms from the configured client address/source port `55264`.
-- Press the physical scan button once and confirm one scan starts with the configured default mode and `SCAN_TRIGGER=button`.
+- Press the physical scan button once and confirm one scan starts with the configured default mode and `SCAN_TRIGGER=button`; the native client must not report registration error `-7`.
+- Confirm the handoff stops the UDP heartbeat and sends the D6 session release on TCP `53218` before native acquisition registers.
 - Press repeatedly during debounce, cooldown, and an active scan; confirm no duplicate scan starts.
 - Wait for scan completion and confirm the session re-arms without restarting the container.
 - Start a scan from the web UI, wait for completion, then press the physical button and confirm it starts another scan immediately.
 - Press the button with an empty feeder, wait for the brief orange error indication to clear, then load paper and confirm the next button press scans without restarting the scanner or container.
+- Set `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` to a short test interval, wait through one full safety re-arm, and confirm the service releases the retained session before re-arming instead of entering an `-7` retry loop.
 - Change the default mode and scanner configuration, then confirm the next button scan uses the new values.
 - Temporarily disconnect the scanner and confirm the web page changes to a grey **Not reachable**
   indicator after the health check. Reconnect it and confirm reachability retry changes the

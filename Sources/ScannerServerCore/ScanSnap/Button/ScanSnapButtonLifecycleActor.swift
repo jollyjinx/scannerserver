@@ -392,10 +392,14 @@ public actor ScanSnapButtonLifecycleActor {
 
     public func scanDidStart() async {
         guard acceptsLifecycleOperations else { return }
+        let retainedScanner = isArmed ? lastScannerConfiguration : nil
         isArmed = false
         nextArmAtMilliseconds = nil
         cancelArming()
         await heartbeat.stop()
+        if let retainedScanner {
+            await releaseRetainedSession(scanner: retainedScanner)
+        }
     }
 
     public func scannerDidAdvertiseStartup(_ advertisement: ScanSnapStartupAdvertisement) async {
@@ -661,9 +665,25 @@ public actor ScanSnapButtonLifecycleActor {
         scanner: ScanSnapButtonScannerConfiguration,
         lifecycleGeneration: UInt64
     ) async {
+        let hasRetainedSession = isArmed
         await heartbeat.stop()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        if hasRetainedSession {
+            isArmed = false
+            await releaseRetainedSession(scanner: scanner)
+            guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        }
         beginArming(scanner: scanner, lifecycleGeneration: lifecycleGeneration)
+    }
+
+    private func releaseRetainedSession(scanner: ScanSnapButtonScannerConfiguration) async {
+        do {
+            try await armer.releaseSession(scanner: scanner, configuration: configuration)
+        } catch is CancellationError {
+            return
+        } catch {
+            JLog.warning("ScanSnap button session release failed: \(error)")
+        }
     }
 
     private func beginArming(

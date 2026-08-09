@@ -26,6 +26,8 @@ public protocol ScanSnapButtonPairing: Sendable {
         configuration: ScanSnapPairingConfiguration,
         timestamp: ScanSnapTimestamp
     ) async throws -> ScanSnapPairingResult
+
+    func releaseSession(configuration: ScanSnapPairingConfiguration) async throws
 }
 
 extension ScanSnapPairingActor: ScanSnapButtonPairing {}
@@ -40,9 +42,19 @@ public protocol ScanSnapButtonArming: Sendable {
         scanner: ScanSnapButtonScannerConfiguration,
         configuration: ScanSnapButtonConfiguration
     ) async throws
+
+    func releaseSession(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws
 }
 
 public extension ScanSnapButtonArming {
+    func releaseSession(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {}
+
     func recoverAndArm(
         scanner: ScanSnapButtonScannerConfiguration,
         configuration: ScanSnapButtonConfiguration

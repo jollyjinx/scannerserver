@@ -216,7 +216,7 @@ scanner  -> service UDP 53220   startup advertisement
 service  -> scanner UDP 52217   registration and 500 ms heartbeat
 scanner  -> service UDP 55265   physical-button notice
 service  -> scanner TCP 53219   reachability and pairing/control
-service  -> scanner TCP 53218   scan acquisition
+service  -> scanner TCP 53218   D6 session release and scan acquisition
 ```
 
 On the Linux host, an optional packet capture can distinguish missing advertisements, heartbeats,
@@ -229,8 +229,14 @@ sudo tcpdump -ni any 'udp port 52217 or udp port 53220 or udp port 55265'
 Expected recovery behavior:
 
 1. Power-on advertisement: re-arm immediately after the first valid packet in the boot burst.
-2. Any web or physical-button scan: stop the heartbeat before acquisition and re-arm immediately
-   after completion.
+2. Any web or physical-button scan: stop the heartbeat, send D6 on TCP `53218` to release the
+   retained button session, then begin acquisition and re-arm immediately after completion.
 3. Failed or cancelled scan: release potentially stale state, then perform a recovery arm.
 4. Failed health check: mark the scanner offline and retry every three seconds.
-5. Missed event: perform a full safety re-arm after five idle minutes.
+5. Missed event: release the retained session and perform a full safety re-arm after five idle
+   minutes.
+
+`scanner rejected registration (error -7)` immediately after a button notice means the scanner
+still considers another session owner active. If `ScanSnap button client armed` appeared just
+before it, capture TCP `53218` as well as UDP `52217`: the service must stop the heartbeat and send
+the release before `scansnap-wifi` registers for acquisition.

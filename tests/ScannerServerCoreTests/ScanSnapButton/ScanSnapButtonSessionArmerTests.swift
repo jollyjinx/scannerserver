@@ -147,5 +147,6 @@ func recoveryReleasesBeforeButtonArming() async throws {
         configuration: ScanSnapButtonConfiguration(armTimeoutMilliseconds: 10_000)
     )
 
-    #expect(await pairing.configurations.map(\.retryPolicy) == [.pairingTest, .buttonArming])
+    #expect(await pairing.releaseConfigurations.count == 1)
+    #expect(await pairing.configurations.map(\.retryPolicy) == [.buttonArming])
 }

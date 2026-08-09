@@ -125,6 +125,7 @@ actor ButtonFakeArmer: ScanSnapButtonArming {
     let behavior: Behavior
     private(set) var calls: [Call] = []
     private(set) var recoveryCalls: [Call] = []
+    private(set) var releaseCalls: [Call] = []
     private(set) var wasCancelled = false
 
     init(behavior: Behavior = .succeed) {
@@ -169,6 +170,13 @@ actor ButtonFakeArmer: ScanSnapButtonArming {
                 throw CancellationError()
             }
         }
+    }
+
+    func releaseSession(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) {
+        releaseCalls.append(Call(scanner: scanner, configuration: configuration))
     }
 }
 
@@ -417,6 +425,7 @@ actor ButtonFakeUDPFactory: ScanSnapUDPTransportFactory {
 actor ButtonFakePairing: ScanSnapButtonPairing {
     let result: ScanSnapPairingResult
     private(set) var configurations: [ScanSnapPairingConfiguration] = []
+    private(set) var releaseConfigurations: [ScanSnapPairingConfiguration] = []
     private(set) var timestamps: [ScanSnapTimestamp] = []
 
     init(status: ScanSnapPairingStatus = .accepted) {
@@ -430,6 +439,10 @@ actor ButtonFakePairing: ScanSnapButtonPairing {
         configurations.append(configuration)
         timestamps.append(timestamp)
         return result
+    }
+
+    func releaseSession(configuration: ScanSnapPairingConfiguration) {
+        releaseConfigurations.append(configuration)
     }
 }
 

@@ -122,8 +122,11 @@ during the former polling gap between the released setup probe and the persisten
 The button lifecycle also owns scanner online/session state. It listens for the iX500 UDP `53220`
 startup advertisement, retains an armed session with a 500 ms UDP heartbeat, performs low-rate TCP
 health checks, and keeps a five-minute full re-arm only as a fallback. `ScanJobActor` publishes
-start/finish events for every scan origin, so web and physical-button scans both stop the heartbeat
-for acquisition and immediately restore the notification session afterward.
+start/finish events for every scan origin, so web and physical-button scans both stop the heartbeat,
+send the D6 release on TCP `53218`, and only then hand ownership to acquisition. They immediately
+restore the notification session afterward. The five-minute safety refresh also releases the
+retained session before replacing it; closing its UDP heartbeat socket does not release scanner
+ownership and otherwise causes registration status `-7`.
 
 The web UI renders that shared lifecycle reachability state in a summary at the top of the page,
 beside the configured scanner name rather than inside Advanced settings. Reachability transitions

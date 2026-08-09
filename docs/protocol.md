@@ -19,7 +19,7 @@ Important ports and packet directions:
 | UDP `52217` | service → scanner | ScanSnap discovery, registration, and armed-session heartbeat |
 | UDP `53220` | scanner → service | Scanner startup/power-on advertisement |
 | TCP `53219` | service → scanner | Pairing/control handshake and reachability check |
-| TCP `53218` | service → scanner | Scan control/data |
+| TCP `53218` | service → scanner | Scan control/data and D6 session release |
 | UDP `55264` | service-side source port | Registration and heartbeat socket; may fall back to an ephemeral port when explicitly allowed |
 | UDP `55265` | scanner → service | Physical-button notice |
 
@@ -180,11 +180,16 @@ offset 24..29   scanner MAC address
 
 Packets with the wrong length, signature, command, or configured scanner IP are ignored.
 
-Every scan start stops the heartbeat because acquisition owns the scanner session. Every scan
-completion immediately re-arms, whether the scan came from the physical button or the web UI.
-Failed and cancelled scans use the recovery arm path, which releases stale state first. This is
-why re-arming is necessary: the scanner-side notification registration does not reliably survive
-an acquisition session.
+Every scan start stops the heartbeat and sends the D6 release frame on TCP `53218` before launching
+acquisition. Closing the heartbeat socket alone is not a handoff: the scanner continues to reserve
+the button session for the old client and rejects the acquisition registration with status `-7`
+(`pairedToDifferentClientIP`). The five-minute full safety re-arm uses the same release-before-arm
+ordering when replacing an otherwise healthy retained session.
+
+Every scan completion immediately re-arms, whether the scan came from the physical button or the
+web UI. Failed and cancelled scans make a best-effort D6 release before their recovery arm. This is
+why re-arming is necessary: the scanner-side notification registration is separate from the
+acquisition session and does not reliably survive a scan.
 
 If scanner setup has not been completed yet, the listener waits and starts arming after setup saves a scanner. When a notice arrives from the configured scanner IP, the app starts a scan with the saved button-default mode.
 
