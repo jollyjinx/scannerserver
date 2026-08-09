@@ -489,6 +489,10 @@ actor ButtonFakeTCPConnection: ScanSnapTCPConnection {
         return bytes.count
     }
 
+    func shutdownWriting() async {
+        await timeline?.record("\(label).shutdownWriting")
+    }
+
     func close() async {
         await timeline?.record("\(label).close")
         isClosed = true

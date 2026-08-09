@@ -237,6 +237,29 @@ struct NativeScanPipelineTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
+    @Test("Wi-Fi acquisition failure preserves diagnostics written to stdout")
+    func wifiFailurePreservesStandardOutputDiagnostics() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .result(ProcessResult(
+                exitStatus: 1,
+                standardOutput: "Error: scanner rejected registration (error -7)\n"
+            )),
+        ])
+        let pipeline = fixture.pipeline(executor: executor)
+
+        let result = try await pipeline.scan(configuration: fixture.configuration([
+            "SCAN_BACKEND": "wifi",
+            "SCAN_TIMESTAMP": "2026-07-10.142309",
+            "SCANNER_IP": "192.0.2.20",
+            "SCANSNAP_PAIRING_KEY": "pairing-key",
+        ]))
+
+        #expect(result.exitStatus == 1)
+        #expect(result.standardError.contains("scanner rejected registration (error -7)"))
+    }
+
     @Test("Missing merged Wi-Fi configuration returns status 64")
     func wifiConfigurationError() async throws {
         let fixture = try Fixture()

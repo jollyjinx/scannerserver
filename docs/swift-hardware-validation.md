@@ -76,7 +76,11 @@ credentials to the repository or ordinary test fixtures.
 - Leave the service idle for at least ten minutes and confirm the 500 ms heartbeat keeps the scanner button ready.
 - During the idle test, optionally capture UDP `52217` and confirm heartbeats originate about every 500 ms from the configured client address/source port `55264`.
 - Press the physical scan button once and confirm one scan starts with the configured default mode and `SCAN_TRIGGER=button`; the native client must not report registration error `-7`.
-- Confirm the handoff stops the UDP heartbeat and sends the D6 session release on TCP `53218` before native acquisition registers.
+- Confirm the handoff stops the UDP heartbeat, sends the D6 session release on TCP `53218`, consumes
+  the iX500's complete 40-byte VENS acknowledgement, half-closes the client write side, and observes
+  the scanner close before native acquisition registers.
+- If acquisition fails, confirm the native diagnostic (including a registration status such as
+  `-7`) appears both in the web status and the container log.
 - Press repeatedly during debounce, cooldown, and an active scan; confirm no duplicate scan starts.
 - Wait for scan completion and confirm the session re-arms without restarting the container.
 - Start a scan from the web UI, wait for completion, then press the physical button and confirm it starts another scan immediately.

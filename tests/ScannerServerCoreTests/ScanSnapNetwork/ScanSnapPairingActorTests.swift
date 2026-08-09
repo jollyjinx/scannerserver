@@ -76,6 +76,25 @@ func pairingCanRetainAcceptedSession() async throws {
     #expect(await tcpFactory.connectCalls.map(\.remoteAddress.port) == [53_219])
 }
 
+@Test("Session release consumes the complete VENS response and waits for the iX500 close")
+func releaseConsumesCompleteVENSResponseAndWaitsForClose() async throws {
+    let hello = [UInt8](repeating: 0, count: 16)
+    let hardwareResponse = [0x00, 0x00, 0x00, 0x28] + Array("VENS".utf8)
+        + [UInt8](repeating: 0, count: 32)
+    let release = FakeTCPConnection(readChunks: [hello, hardwareResponse])
+    let actor = ScanSnapPairingActor(
+        udpTransportFactory: FakeUDPTransportFactory([]),
+        tcpConnectionFactory: FakeTCPConnectionFactory([release]),
+        sleeper: RecordingSleeper()
+    )
+
+    try await actor.releaseSession(configuration: pairingConfiguration())
+
+    #expect(await release.remainingReadByteCount == 0)
+    #expect(await release.didShutdownWriting)
+    #expect(await release.isClosed)
+}
+
 private func pairingConfiguration(
     retryPolicy: ScanSnapSessionRetryPolicy = .pairingTest
 ) -> ScanSnapPairingConfiguration {

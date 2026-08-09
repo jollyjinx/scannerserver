@@ -169,6 +169,15 @@ public actor POSIXScanSnapTCPConnection: ScanSnapTCPConnection {
         return written
     }
 
+    public func shutdownWriting() throws {
+        guard descriptor >= 0 else {
+            throw ScanSnapSocketError.systemCall(operation: "shutdown(SHUT_WR)", code: EBADF)
+        }
+        guard systemShutdownWriting(descriptor) == 0 else {
+            throw currentSocketError(operation: "shutdown(SHUT_WR)")
+        }
+    }
+
     public func close() {
         closeDescriptor(descriptor)
         descriptor = -1
@@ -435,5 +444,13 @@ private func systemSend(_ descriptor: Int32, _ buffer: UnsafeRawPointer?, _ coun
     Glibc.send(descriptor, buffer, count, Int32(MSG_NOSIGNAL))
 #else
     Darwin.send(descriptor, buffer, count, 0)
+#endif
+}
+
+private func systemShutdownWriting(_ descriptor: Int32) -> Int32 {
+#if os(Linux)
+    Glibc.shutdown(descriptor, Int32(SHUT_WR))
+#else
+    Darwin.shutdown(descriptor, SHUT_WR)
 #endif
 }

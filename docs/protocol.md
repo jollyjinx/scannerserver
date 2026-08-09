@@ -183,8 +183,16 @@ Packets with the wrong length, signature, command, or configured scanner IP are 
 Every scan start stops the heartbeat and sends the D6 release frame on TCP `53218` before launching
 acquisition. Closing the heartbeat socket alone is not a handoff: the scanner continues to reserve
 the button session for the old client and rejects the acquisition registration with status `-7`
-(`pairedToDifferentClientIP`). The five-minute full safety re-arm uses the same release-before-arm
-ordering when replacing an otherwise healthy retained session.
+(`pairedToDifferentClientIP`). The iX500 answers D6 with a 40-byte VENS frame. After reading the
+complete declared response, the client must half-close its write side and wait for the scanner to
+close its side before acquisition registers. Reading only the 16-byte header, or closing without
+completing that shutdown handshake, can race the release and produce the same `-7` symptom. The
+five-minute full safety re-arm uses the same complete release-before-arm ordering when replacing an
+otherwise healthy retained session.
+
+The native Wi-Fi client may write a failed-registration diagnostic to stdout instead of stderr.
+Acquisition failures therefore retain both streams as job diagnostics; the current failure appears
+in the web status and the service log rather than only as a generic exit status.
 
 Every scan completion immediately re-arms, whether the scan came from the physical button or the
 web UI. Failed and cancelled scans make a best-effort D6 release before their recovery arm. This is

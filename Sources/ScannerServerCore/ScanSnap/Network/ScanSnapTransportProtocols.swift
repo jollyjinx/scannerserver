@@ -12,6 +12,7 @@ public protocol ScanSnapUDPTransportFactory: Sendable {
 public protocol ScanSnapTCPConnection: Sendable {
     func read(maximumBytes: Int, timeoutMilliseconds: UInt64) async throws -> [UInt8]
     func write(_ bytes: [UInt8], timeoutMilliseconds: UInt64) async throws -> Int
+    func shutdownWriting() async throws
     func close() async
 }
 

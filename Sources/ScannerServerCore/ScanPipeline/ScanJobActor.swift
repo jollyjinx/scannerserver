@@ -1,4 +1,5 @@
 import Foundation
+import JLog
 
 public enum ScanJobEvent: Sendable, Hashable {
     case started
@@ -112,6 +113,10 @@ public actor ScanJobActor {
             ? result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             : paths.joined(separator: "\n")
         jobState.error = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !result.succeeded {
+            let diagnostic = jobState.error.isEmpty ? "No diagnostic output." : jobState.error
+            JLog.warning("Scan failed with status \(result.exitStatus): \(diagnostic)")
+        }
 
         if result.succeeded, let ocrQueue {
             let preprocessMultipagePDF = configuration.format == "pdf"

@@ -66,7 +66,12 @@ actor FakeTCPConnection: ScanSnapTCPConnection {
     private var writeLimits: [Int]
     private(set) var writeArguments: [[UInt8]] = []
     private(set) var writtenBytes: [UInt8] = []
+    private(set) var didShutdownWriting = false
     private(set) var isClosed = false
+
+    var remainingReadByteCount: Int {
+        readChunks.reduce(0) { $0 + $1.count }
+    }
 
     init(readChunks: [[UInt8]], writeLimits: [Int] = []) {
         self.readChunks = readChunks
@@ -87,6 +92,10 @@ actor FakeTCPConnection: ScanSnapTCPConnection {
         let count = min(limit, bytes.count)
         writtenBytes.append(contentsOf: bytes.prefix(count))
         return count
+    }
+
+    func shutdownWriting() {
+        didShutdownWriting = true
     }
 
     func close() {

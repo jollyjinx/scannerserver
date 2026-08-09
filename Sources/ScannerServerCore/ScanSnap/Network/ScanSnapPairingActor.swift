@@ -236,14 +236,64 @@ public actor ScanSnapPairingActor {
                 ScanSnapPacketBuilder.releaseFrame(clientMACAddress: configuration.clientMACAddress),
                 timeoutMilliseconds: configuration.connectionTimeoutMilliseconds
             )
-            _ = try await connection.readExactly(
-                16,
+            try await receiveVENSResponse(
+                from: connection,
+                timeoutMilliseconds: configuration.connectionTimeoutMilliseconds
+            )
+            try await connection.shutdownWriting()
+            try await waitForPeerClose(
+                from: connection,
                 timeoutMilliseconds: configuration.connectionTimeoutMilliseconds
             )
             await connection.close()
         } catch {
             await connection.close()
             throw error
+        }
+    }
+
+    private func receiveVENSResponse(
+        from connection: any ScanSnapTCPConnection,
+        timeoutMilliseconds: UInt64
+    ) async throws {
+        let header = try await connection.readExactly(16, timeoutMilliseconds: timeoutMilliseconds)
+        let packetLength = Int(try ScanSnapByteCodec.readUInt32(from: header, at: 0))
+        guard (16...(1024 * 1024)).contains(packetLength) else {
+            throw ScanSnapSocketError.invalidBufferLength(packetLength)
+        }
+        let signature = Array("VENS".utf8)
+        let actualSignature = Array(header[4..<8])
+        guard actualSignature == signature else {
+            throw ScanSnapProtocolError.invalidSignature(
+                expected: signature,
+                actual: actualSignature
+            )
+        }
+        if packetLength > header.count {
+            _ = try await connection.readExactly(
+                packetLength - header.count,
+                timeoutMilliseconds: timeoutMilliseconds
+            )
+        }
+    }
+
+    private func waitForPeerClose(
+        from connection: any ScanSnapTCPConnection,
+        timeoutMilliseconds: UInt64
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(Int64(clamping: timeoutMilliseconds)))
+        while true {
+            try Task.checkCancellation()
+            let remaining = scanSnapRemainingMilliseconds(until: deadline, clock: clock)
+            guard remaining > 0 else {
+                throw ScanSnapSocketError.timedOut(operation: "D6 peer close")
+            }
+            let bytes = try await connection.read(
+                maximumBytes: 1_024,
+                timeoutMilliseconds: remaining
+            )
+            if bytes.isEmpty { return }
         }
     }
 }

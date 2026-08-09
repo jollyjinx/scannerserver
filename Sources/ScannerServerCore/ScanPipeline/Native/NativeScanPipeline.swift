@@ -375,14 +375,17 @@ public actor NativeScanPipeline: NativeScanExecuting {
         _ result: ProcessResult,
         diagnosticsFrom executor: NativeScanCapturingExecutor
     ) async -> ProcessResult {
-        let captured = await executor.standardError
-        if !captured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return ProcessResult(exitStatus: result.exitStatus, standardError: captured)
+        var diagnostics: [String] = []
+        for candidate in [await executor.standardError, result.standardError, result.standardOutput] {
+            let detail = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !detail.isEmpty else { continue }
+            guard !diagnostics.contains(where: { $0.contains(detail) }) else { continue }
+            diagnostics.append(detail)
         }
-        let fallback = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Scanner command exited with status \(result.exitStatus)."
-            : result.standardError
-        return failure(status: result.exitStatus, message: fallback)
+        if diagnostics.isEmpty {
+            diagnostics.append("Scanner command exited with status \(result.exitStatus).")
+        }
+        return failure(status: result.exitStatus, message: diagnostics.joined(separator: "\n"))
     }
 
     private func failure(status: Int32, message: String) -> ProcessResult {
