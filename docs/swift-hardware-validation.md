@@ -71,7 +71,9 @@ credentials to the repository or ordinary test fixtures.
 
 - Confirm startup logs show the UDP `53220` listener and `ScanSnap button client armed`.
 - Power the scanner off, wait at least ten seconds, then power it on. Confirm a startup-advertisement log appears and the button session re-arms without waiting for the five-minute safety interval.
+- If the startup log is absent, capture `udp port 53220` on the host and confirm the advertisement reaches the service host with VENS command `0x21`.
 - Leave the service idle for at least ten minutes and confirm the 500 ms heartbeat keeps the scanner button ready.
+- During the idle test, optionally capture UDP `52217` and confirm heartbeats originate about every 500 ms from the configured client address/source port `55264`.
 - Press the physical scan button once and confirm one scan starts with the configured default mode and `SCAN_TRIGGER=button`.
 - Press repeatedly during debounce, cooldown, and an active scan; confirm no duplicate scan starts.
 - Wait for scan completion and confirm the session re-arms without restarting the container.
@@ -79,6 +81,7 @@ credentials to the repository or ordinary test fixtures.
 - Press the button with an empty feeder, wait for the brief orange error indication to clear, then load paper and confirm the next button press scans without restarting the scanner or container.
 - Change the default mode and scanner configuration, then confirm the next button scan uses the new values.
 - Temporarily disconnect the scanner, confirm it is marked offline by the health check, reconnect it, and confirm reachability retry recovers.
+- Confirm only the configured scanner's startup advertisement or UDP `55265` button notice can trigger lifecycle work.
 
 ## Restart Compatibility
 

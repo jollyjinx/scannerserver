@@ -12,15 +12,19 @@ status: current
 
 The iX500 does not behave like a normal eSCL/AirScan scanner in this setup. This project uses the reverse-engineered ScanSnap Wi-Fi protocol implemented by [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap), built into the image as `scansnap-wifi`.
 
-Important ports:
+Important ports and packet directions:
 
-| Port | Purpose |
-| --- | --- |
-| UDP `52217` | ScanSnap discovery/registration |
-| UDP `53220` | Scanner startup/power-on advertisement listener in this app |
-| TCP `53219` | Pairing/control handshake |
-| TCP `53218` | Scan control/data |
-| UDP `55265` | Button notice listener in this app |
+| Port | Direction | Purpose |
+| --- | --- | --- |
+| UDP `52217` | service → scanner | ScanSnap discovery, registration, and armed-session heartbeat |
+| UDP `53220` | scanner → service | Scanner startup/power-on advertisement |
+| TCP `53219` | service → scanner | Pairing/control handshake and reachability check |
+| TCP `53218` | service → scanner | Scan control/data |
+| UDP `55264` | service-side source port | Registration and heartbeat socket; may fall back to an ephemeral port when explicitly allowed |
+| UDP `55265` | scanner → service | Physical-button notice |
+
+`53220` is the startup-advertisement destination port. `52217` is the scanner's registration and
+heartbeat destination; the similar numbers represent different directions and responsibilities.
 
 ## First-Run Discovery
 
@@ -163,6 +167,18 @@ validates the advertised scanner IP, folds repeated packets into one boot burst,
 online, and immediately establishes a fresh button session. A 10-second TCP health check tracks
 offline state. A full five-minute re-arm remains only as a safety net.
 
+The startup packet fields currently used are:
+
+```text
+offset 0..3     declared packet length: 48
+offset 4..7     signature: VENS
+offset 8..11    command: 0x21
+offset 20..23   scanner IPv4 address
+offset 24..29   scanner MAC address
+```
+
+Packets with the wrong length, signature, command, or configured scanner IP are ignored.
+
 Every scan start stops the heartbeat because acquisition owns the scanner session. Every scan
 completion immediately re-arms, whether the scan came from the physical button or the web UI.
 Failed and cancelled scans use the recovery arm path, which releases stale state first. This is
@@ -183,6 +199,9 @@ ScanSnap button client armed
 ScanSnap startup advertisement received from <scanner-ip>
 Started scan from scanner button notice from <scanner-ip>
 ```
+
+The expected idle traffic after `ScanSnap button client armed` is one heartbeat approximately
+every 500 ms from the configured client address/UDP `55264` to the scanner on UDP `52217`.
 
 ## Security Notes
 

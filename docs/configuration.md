@@ -80,8 +80,15 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCANSNAP_BUTTON_HEALTH_INTERVAL_SECONDS` | `10` | TCP reachability check interval while the button session is armed |
 | `SCANSNAP_BUTTON_STARTUP_REARM_DEBOUNCE_SECONDS` | `3` | Quiet gap that separates repeated startup packets into distinct power-on advertisement bursts |
 | `SCANSNAP_BUTTON_REACHABILITY_PORT` | `53219` | TCP port used to check whether the scanner is awake before arming |
+| `SCANSNAP_BUTTON_REACHABILITY_TIMEOUT_SECONDS` | `1` | Timeout for one scanner reachability check |
+| `SCANSNAP_BUTTON_REACHABILITY_INTERVAL_SECONDS` | `3` | Retry interval while the scanner is offline or the session is unarmed |
 | `SCANSNAP_BUTTON_DEBOUNCE_SECONDS` | `3` | Collapse repeated button packets into one scan |
 | `SCANSNAP_BUTTON_COOLDOWN_SECONDS` | `1` | Ignore duplicate button notices shortly after a scan finishes |
+| `SCANSNAP_REGISTRATION_SOURCE_PORT` | `55264` | Preferred local UDP source port for registration and heartbeat traffic |
+| `SCANSNAP_REGISTRATION_PORT` | `52217` | Scanner UDP destination port for registration and heartbeat traffic |
+
+`SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS` remains accepted as a compatibility alias for
+`SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` when the current variable is absent.
 
 ## Scan Directory Access Check
 
@@ -188,7 +195,9 @@ docker compose exec scansnap ip addr
 docker compose exec scansnap ip neigh show
 ```
 
-If button presses do nothing, look for:
+## Physical Button Troubleshooting
+
+If button presses do nothing, first look for:
 
 ```text
 ScanSnap button client armed
@@ -199,3 +208,29 @@ also produce `ScanSnap startup advertisement received from <scanner-ip>` followe
 If you see arming timeouts, the scanner is usually offline, asleep, on the wrong Wi-Fi/VLAN, or
 not reachable from the container IP. The host-network firewall must allow inbound UDP `53220` and
 `55265`, and traffic to the scanner on UDP `52217` and TCP `53218`/`53219`.
+
+Packet direction summary:
+
+```text
+scanner  -> service UDP 53220   startup advertisement
+service  -> scanner UDP 52217   registration and 500 ms heartbeat
+scanner  -> service UDP 55265   physical-button notice
+service  -> scanner TCP 53219   reachability and pairing/control
+service  -> scanner TCP 53218   scan acquisition
+```
+
+On the Linux host, an optional packet capture can distinguish missing advertisements, heartbeats,
+and button notices:
+
+```bash
+sudo tcpdump -ni any 'udp port 52217 or udp port 53220 or udp port 55265'
+```
+
+Expected recovery behavior:
+
+1. Power-on advertisement: re-arm immediately after the first valid packet in the boot burst.
+2. Any web or physical-button scan: stop the heartbeat before acquisition and re-arm immediately
+   after completion.
+3. Failed or cancelled scan: release potentially stale state, then perform a recovery arm.
+4. Failed health check: mark the scanner offline and retry every three seconds.
+5. Missed event: perform a full safety re-arm after five idle minutes.

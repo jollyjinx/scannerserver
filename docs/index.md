@@ -17,7 +17,7 @@ Use this page as the entry point for repository documentation. The root [`README
 | [`../AI/README.md`](../AI/README.md) | Agent routing, package shape, compatibility boundaries, and validation baseline | Agents |
 | [`configuration.md`](configuration.md) | Environment variables, scan modes, output names, OCR, blank-page removal, and cropping | Operators |
 | [`deployment.md`](deployment.md) | Published images, host networking, Compose, local builds, and image publishing | Operators |
-| [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, ports, and physical-button protocol | Maintainers |
+| [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, directed port map, startup advertisements, heartbeat, and physical-button session lifecycle | Maintainers |
 | [`swift-hardware-validation.md`](swift-hardware-validation.md) | Manual acceptance testing with a real scanner | Maintainers |
 | [`swift-migration-plan.md`](swift-migration-plan.md) | Architecture, compatibility constraints, migration history, and test strategy | Maintainers |
 | [`../AGENTS.md`](../AGENTS.md) | Repository-wide instructions that coding agents must follow | Agents |

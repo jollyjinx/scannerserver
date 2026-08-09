@@ -39,6 +39,15 @@ After setup, scan either way:
 - Press **Start scan** in the web UI.
 - Press the physical scan button on the iX500.
 
+The physical button uses a volatile notification session stored in the scanner. While that session
+is armed, scannerserver retains it with a 500 ms heartbeat. A web or button scan temporarily owns
+the scanner and invalidates the notification session, so scannerserver stops the heartbeat before
+acquisition and immediately re-arms after every successful, failed, or cancelled scan. It also
+listens for the scanner's UDP `53220` power-on advertisement and re-arms after a restart without
+waiting for the five-minute safety refresh. See [ScanSnap protocol notes](docs/protocol.md#physical-button-support)
+for packet directions and [configuration](docs/configuration.md#physical-button-troubleshooting)
+for firewall and log checks.
+
 Raw PDFs appear immediately in `./scans` after acquisition. For OCR-enabled multipage scans,
 blank-page removal and autocrop run on an isolated copy before the searchable `.ocr.pdf` is
 published; the original PDF remains unchanged and available throughout processing.
