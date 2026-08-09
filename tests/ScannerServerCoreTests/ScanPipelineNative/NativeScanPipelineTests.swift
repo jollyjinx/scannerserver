@@ -94,6 +94,7 @@ struct NativeScanPipelineTests {
             "SCAN_PAIRING_KEY": "primary-key",
             "SCANSNAP_PAIRING_KEY": "fallback-key",
             "SCANSNAP_CLIENT_IP": "192.0.2.30",
+            "SCANSNAP_CLIENT_MAC": "02:11:22:33:44:55",
             "SCAN_SOURCE": "ADF Simplex",
             "SCAN_WIFI_DEBUG": "true",
             "SCAN_FORMAT": "pdf",
@@ -130,6 +131,7 @@ struct NativeScanPipelineTests {
             "-k", "primary-key",
             "-o", fixture.rawPDF.path,
             "--client-ip", "192.0.2.30",
+            "--client-mac", "02:11:22:33:44:55",
             "-1",
             "-d",
         ])
@@ -154,6 +156,33 @@ struct NativeScanPipelineTests {
         #expect(requests[3].arguments == [fixture.rawPDF.path, "--creator", "ScannerServer"])
         #expect(requests[4].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp])
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
+    }
+
+    @Test("Wi-Fi acquisition reuses a button session handed off by the lifecycle")
+    func wifiReusesHandedOffButtonSession() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let sessions = ScanSnapAcquisitionSessionCoordinator()
+        await sessions.prepareForAcquisition(reusingArmedSession: true)
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 1, standardError: "expected test stop")),
+        ])
+        let pipeline = fixture.pipeline(
+            executor: executor,
+            acquisitionSessions: sessions
+        )
+
+        _ = try await pipeline.scan(configuration: fixture.configuration([
+            "SCAN_BACKEND": "wifi",
+            "SCAN_TIMESTAMP": "2026-07-10.142306",
+            "SCANNER_IP": "192.0.2.20",
+            "SCAN_PAIRING_KEY": "pairing-key",
+        ]))
+
+        let request = try #require(await executor.requests().first)
+        #expect(request.executable == "scansnap-wifi")
+        #expect(request.arguments.contains("--reuse-session"))
+        #expect(await sessions.consumeForAcquisition() == .registerFresh)
     }
 
     @Test("PNG aliases use export-scan-images and the injected timestamp")
@@ -386,10 +415,12 @@ private struct Fixture {
 
     func pipeline(
         executor: any ProcessExecutor,
-        timestamp: ScanTimestamp? = nil
+        timestamp: ScanTimestamp? = nil,
+        acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator()
     ) -> NativeScanPipeline {
         NativeScanPipeline(
             executor: executor,
+            acquisitionSessions: acquisitionSessions,
             fileSystem: FoundationNativeScanFileSystem(),
             timestampProvider: { timestamp ?? ScanTimestamp(date: Date(timeIntervalSince1970: 0)) },
             workDirectorySuffixProvider: { "deterministic" }

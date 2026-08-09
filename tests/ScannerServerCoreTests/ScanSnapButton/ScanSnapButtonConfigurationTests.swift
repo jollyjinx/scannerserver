@@ -50,7 +50,7 @@ func legacyButtonRegistrationInterval() {
     ])
 
     #expect(defaults.cooldownMilliseconds == 1_000)
-    #expect(defaults.armIntervalMilliseconds == 300_000)
+    #expect(defaults.armIntervalMilliseconds == 0)
     #expect(defaults.heartbeatIntervalMilliseconds == 500)
     #expect(legacy.armIntervalMilliseconds == 17_000)
     #expect(currentWins.armIntervalMilliseconds == 11_000)

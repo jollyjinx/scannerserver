@@ -19,7 +19,7 @@ Important ports and packet directions:
 | UDP `52217` | service → scanner | ScanSnap discovery, registration, and armed-session heartbeat |
 | UDP `53220` | scanner → service | Scanner startup/power-on advertisement |
 | TCP `53219` | service → scanner | Pairing/control handshake and reachability check |
-| TCP `53218` | service → scanner | Scan control/data and D6 session release |
+| TCP `53218` | service → scanner | Scan control/data and D6 command-sequence finalization |
 | UDP `55264` | service-side source port | Registration and heartbeat socket; may fall back to an ephemeral port when explicitly allowed |
 | UDP `55265` | scanner → service | Physical-button notice |
 
@@ -148,14 +148,15 @@ swift test --filter ScanSnapLongPasswordHardwareTests
 
 The test first verifies that the legacy 16-byte truncation is rejected, then tries the complete
 identity in the 128-byte frame. It tries the 384-byte official-password reservation frame only if
-the full-width 128-byte frame is rejected. Successful probes release their temporary scanner
-session before returning. Never commit the hardware password or a generated pairing identity.
+the full-width 128-byte frame is rejected. Successful probes finish their temporary command
+sequence with D6 before returning; the scanner may retain that client's ownership claim briefly.
+Never commit the hardware password or a generated pairing identity.
 
 ## Physical Button Support
 
-Button "arming" is a volatile session registration inside the scanner; it is not a local boolean
-or a permanent configuration setting. Power loss, another client claiming the scanner, and the
-ScanSnap scan/release sequence can discard that registration. The app establishes it by:
+Button "arming" is a volatile client registration inside the scanner; it is not a local boolean
+or a permanent configuration setting. Power loss or another client claiming the scanner can
+discard that registration. The app establishes it by:
 
 1. Registering over UDP `52217`.
 2. Completing the TCP `53219` pairing handshake.
@@ -166,7 +167,8 @@ ScanSnap scan/release sequence can discard that registration. The app establishe
 The scanner sends a 48-byte VENS command `0x21` startup advertisement to UDP `53220`. The app
 validates the advertised scanner IP, folds repeated packets into one boot burst, marks the scanner
 online, and immediately establishes a fresh button session. A 10-second TCP health check tracks
-offline state. A full five-minute re-arm remains only as a safety net.
+offline state. Healthy sessions are not periodically replaced by default; the heartbeat retains
+them until a real lifecycle event requires a fresh arm.
 
 The startup packet fields currently used are:
 
@@ -180,36 +182,58 @@ offset 24..29   scanner MAC address
 
 Packets with the wrong length, signature, command, or configured scanner IP are ignored.
 
-Every scan start stops the heartbeat and sends the D6 release frame on TCP `53218` before launching
-acquisition. Closing the heartbeat socket alone is not a handoff: the scanner continues to reserve
-the button session for the old client and rejects the acquisition registration with status `-7`
-(`pairedToDifferentClientIP`). The iX500 answers D6 with a 40-byte VENS frame. After reading the
-complete declared response, the client must half-close its write side and wait for the scanner to
-close its side before acquisition registers. Reading only the 16-byte header, or closing without
-completing that shutdown handshake, can race the release and produce the same `-7` symptom. The
-five-minute full safety re-arm uses the same complete release-before-arm ordering when replacing an
-otherwise healthy retained session.
+The final command in the normal button initialization sequence is D6. Hardware captures initially
+made it look like a logout, but the scanner continues to reserve the registered client after D6.
+Trying to start acquisition with another full UDP registration and TCP pairing sequence therefore
+duplicates the existing ownership claim and the iX500 rejects it with status `-7`
+(`pairedToDifferentClientIP`)—even when both attempts use the same IP and MAC address.
+
+Every scan start now performs an explicit one-shot session handoff:
+
+1. Stop the 500 ms heartbeat while acquisition owns the scanner.
+2. Send D6 on TCP `53218`, consume the complete 40-byte VENS acknowledgement, half-close the client
+   write side, and wait for the scanner to close its side.
+3. Launch `scansnap-wifi --reuse-session`. This skips its UDP registration, first pairing handshake,
+   and initialization sequence, then continues with the acquisition re-registration and scan
+   commands using the same client IP and MAC.
+4. After successful acquisition and document publication, resume the heartbeat for the retained
+   session without registering again.
+
+The native client's scan cleanup also finishes its TCP command sequence with D6. D6 should
+therefore be understood as command-sequence finalization, not proof that scanner-side ownership has
+been cleared. An opt-in periodic safety refresh still finalizes the retained command sequence before
+attempting a genuinely fresh arm, but `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` defaults to `0` because
+hardware testing showed that replacing a healthy session can itself create a temporary `-7` loop.
 
 The native Wi-Fi client may write a failed-registration diagnostic to stdout instead of stderr.
 Acquisition failures therefore retain both streams as job diagnostics; the current failure appears
 in the web status and the service log rather than only as a generic exit status.
 
-Every scan completion immediately re-arms, whether the scan came from the physical button or the
-web UI. Failed and cancelled scans make a best-effort D6 release before their recovery arm. This is
-why re-arming is necessary: the scanner-side notification registration is separate from the
-acquisition session and does not reliably survive a scan.
+Successful scans from either the physical button or web UI resume the handed-off notification
+session. They do not immediately perform a fresh arm. Failed and cancelled scans cannot safely
+assume that the borrowed session remains usable, so they finalize stale protocol state and use the
+recovery-arm path. Startup advertisements, scanner changes, failed health checks, and an explicitly
+configured safety refresh also remain valid reasons to establish a fresh session.
+
+A valid physical-button notice is itself positive evidence that the scanner still routes the
+session to this client. If one arrives while failed-scan recovery registration is in progress, the
+lifecycle cancels and drains that recovery attempt, reclaims the scanner-confirmed session, and
+hands it to acquisition. Without this rule, the notice could race recovery, run as a fresh session,
+and leave the button unavailable during another 40–60 second registration cycle.
 
 If scanner setup has not been completed yet, the listener waits and starts arming after setup saves a scanner. When a notice arrives from the configured scanner IP, the app starts a scan with the saved button-default mode.
 
 Successful first-run setup does not return control to the browser until the button lifecycle has
 received the new scanner configuration and completed its first arming attempt. This closes the
-otherwise unarmed interval between the setup pairing test—which releases its temporary scanner
-session—and the persistent physical-button session.
+otherwise unarmed interval between the setup pairing test—which finalizes its temporary command
+sequence—and the persistent physical-button session.
 
 Useful log lines:
 
 ```text
 ScanSnap button client armed
+ScanSnap button client resumed after scan
+Scanner button notice reclaimed the session during recovery
 ScanSnap startup advertisement received from <scanner-ip>
 Started scan from scanner button notice from <scanner-ip>
 ```

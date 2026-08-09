@@ -144,8 +144,8 @@ struct ScanSnapButtonRuntimeControllerTests {
         #expect(await webUpdates.currentRevision > reachableWebRevision)
     }
 
-    @Test("A web scan invalidates and immediately restores the button session")
-    func webScanRearmsButtonSession() async throws {
+    @Test("A web scan hands off and resumes the armed button session")
+    func webScanReusesButtonSession() async throws {
         let directory = try runtimeButtonTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let environment = [
@@ -191,8 +191,116 @@ struct ScanSnapButtonRuntimeControllerTests {
         await executor.complete()
         await scanJobs.waitUntilIdle()
 
-        #expect(await runtimeButtonEventually { await armer.calls.count == 2 })
+        #expect(await armer.calls.count == 1)
         #expect(await controller.state().isArmed)
         await controller.stop()
+    }
+
+    @Test("A button notice during failed-scan recovery reuses the scanner-owned session")
+    func buttonNoticeCancelsRecoveryAndReusesSession() async throws {
+        let directory = try runtimeButtonTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = [
+            "SCAN_BACKEND": "wifi",
+            "SCAN_OUTPUT_DIR": directory.path,
+            "SCANSNAP_CLIENT_IP": "192.168.50.10",
+            "SCANSNAP_CLIENT_MAC": "02:11:22:33:44:55",
+        ]
+        let scannerStore = ScannerConfigStore(
+            fileURL: directory.appendingPathComponent("scanner.json"),
+            environment: environment
+        )
+        _ = try await scannerStore.save(ScannerConfig(
+            status: .configured,
+            scannerIP: "192.168.50.44",
+            pairingKey: "pairing-key"
+        ))
+        let acquisitionSessions = ScanSnapAcquisitionSessionCoordinator()
+        let nativeScanner = RuntimeButtonSessionRecordingScanner(
+            acquisitionSessions: acquisitionSessions,
+            results: [
+                ProcessResult(exitStatus: 1, standardError: "first scan failed"),
+                ProcessResult(exitStatus: 0),
+            ]
+        )
+        let scanJobs = ScanJobActor(nativeScanner: nativeScanner)
+        let armer = RuntimeButtonRecoveryBlockingArmer()
+        let controller = ScanSnapButtonRuntimeFactory.live(
+            environment: environment,
+            scannerStore: scannerStore,
+            settingsStore: ScanSettingsStore(
+                fileURL: directory.appendingPathComponent("settings.json"),
+                environment: environment
+            ),
+            scanJobs: scanJobs,
+            acquisitionSessions: acquisitionSessions,
+            network: RuntimeButtonFakeNetwork(),
+            udpTransportFactory: RuntimeButtonFakeUDPFactory(),
+            reachability: ButtonFakeReachability([true, true]),
+            armer: armer,
+            clock: ButtonFakeClock(12_000)
+        )
+
+        #expect(try await controller.start())
+        #expect(await runtimeButtonEventually { await controller.state().isArmed })
+
+        var buttonEnvironment = environment
+        buttonEnvironment["SCAN_TRIGGER"] = "button"
+        #expect(await scanJobs.start(configuration: ScanPipelineConfiguration(environment: buttonEnvironment)))
+        await scanJobs.waitUntilIdle()
+        #expect(await runtimeButtonEventually { await armer.recoveryCallCount == 1 })
+
+        #expect(await scanJobs.start(configuration: ScanPipelineConfiguration(environment: buttonEnvironment)))
+        await scanJobs.waitUntilIdle()
+
+        #expect(await nativeScanner.modes == [.reuseArmed, .reuseArmed])
+        #expect(await armer.recoveryWasCancelled)
+        #expect(await controller.state().isArmed)
+        await controller.stop()
+    }
+}
+
+private actor RuntimeButtonSessionRecordingScanner: NativeScanExecuting {
+    private let acquisitionSessions: ScanSnapAcquisitionSessionCoordinator
+    private var results: [ProcessResult]
+    private(set) var modes: [ScanSnapAcquisitionSessionMode] = []
+
+    init(
+        acquisitionSessions: ScanSnapAcquisitionSessionCoordinator,
+        results: [ProcessResult]
+    ) {
+        self.acquisitionSessions = acquisitionSessions
+        self.results = results
+    }
+
+    func scan(configuration: ScanPipelineConfiguration) async -> ProcessResult {
+        modes.append(await acquisitionSessions.consumeForAcquisition())
+        return results.isEmpty ? ProcessResult(exitStatus: 0) : results.removeFirst()
+    }
+}
+
+private actor RuntimeButtonRecoveryBlockingArmer: ScanSnapButtonArming {
+    private(set) var armCallCount = 0
+    private(set) var recoveryCallCount = 0
+    private(set) var recoveryWasCancelled = false
+
+    func arm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) {
+        armCallCount += 1
+    }
+
+    func recoverAndArm(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) async throws {
+        recoveryCallCount += 1
+        do {
+            try await Task.sleep(for: .seconds(60))
+        } catch is CancellationError {
+            recoveryWasCancelled = true
+            throw CancellationError()
+        }
     }
 }

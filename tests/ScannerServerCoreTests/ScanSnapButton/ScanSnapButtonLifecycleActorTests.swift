@@ -209,8 +209,8 @@ func startupAdvertisementRearmsAfterPowerOn() async {
     #expect(await eventually { await armer.calls.count == 3 })
 }
 
-@Test("Scan completion immediately re-arms and restarts the heartbeat")
-func scanCompletionImmediatelyRearms() async {
+@Test("A successful scan resumes the handed-off button session without registering again")
+func successfulScanResumesHandedOffSession() async {
     let reachability = ButtonFakeReachability([true, true])
     let armer = ButtonFakeArmer()
     let heartbeat = ButtonFakeHeartbeat()
@@ -224,20 +224,20 @@ func scanCompletionImmediatelyRearms() async {
 
     await lifecycle.runMaintenance(atMilliseconds: 1_000)
     #expect(await eventually { await lifecycle.state.isArmed })
-    await lifecycle.scanDidStart()
+    #expect(await lifecycle.scanDidStart())
     #expect(!(await lifecycle.state.isArmed))
     #expect(await armer.releaseCalls.count == 1)
 
     await clock.set(2_000)
     await lifecycle.scanDidFinish()
 
-    #expect(await eventually { await armer.calls.count == 2 })
+    #expect(await armer.calls.count == 1)
     #expect(await eventually { await heartbeat.startCalls.count == 2 })
     #expect(await lifecycle.state.isArmed)
 }
 
-@Test("Full safety re-arm releases the retained button session first")
-func fullSafetyRearmReleasesRetainedSession() async {
+@Test("Full safety re-arm finalizes the retained button session first")
+func fullSafetyRearmFinalizesRetainedSession() async {
     let armer = ButtonFakeArmer()
     let clock = ButtonFakeClock(1_000)
     let lifecycle = makeLifecycle(
@@ -258,6 +258,25 @@ func fullSafetyRearmReleasesRetainedSession() async {
 
     #expect(await eventually { await armer.calls.count == 2 })
     #expect(await armer.releaseCalls.count == 1)
+}
+
+@Test("Healthy sessions are not periodically replaced by default")
+func healthySessionHasNoDefaultSafetyRearm() async {
+    let armer = ButtonFakeArmer()
+    let lifecycle = makeLifecycle(
+        reachability: ButtonFakeReachability([true, true]),
+        armer: armer
+    )
+
+    await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    #expect(await eventually { await lifecycle.state.isArmed })
+    #expect(await lifecycle.state.nextArmAtMilliseconds == nil)
+
+    await lifecycle.runMaintenance(atMilliseconds: 3_600_000)
+
+    #expect(await armer.calls.count == 1)
+    #expect(await armer.releaseCalls.isEmpty)
+    #expect(await lifecycle.state.isArmed)
 }
 
 @Test("Stop cancels listener and in-progress arming and closes UDP transport")

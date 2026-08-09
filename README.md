@@ -43,12 +43,13 @@ The top of the page shows the configured scanner name with a live reachability i
 when the scanner's control port is reachable and grey when it is not reachable.
 
 The physical button uses a volatile notification session stored in the scanner. While that session
-is armed, scannerserver retains it with a 500 ms heartbeat. A web or button scan needs a separate
-acquisition session, so scannerserver stops the heartbeat, explicitly releases the retained button
-session, and only then starts acquisition. It immediately re-arms after every successful, failed,
-or cancelled scan. It also
+is armed, scannerserver retains it with a 500 ms heartbeat. Web and button scans borrow that same
+scanner-side session: scannerserver pauses the heartbeat, completes the button control sequence,
+and tells the native acquisition client to skip duplicate registration. After a successful scan it
+resumes the heartbeat without re-registering. Failed or cancelled scans use the slower recovery-arm
+path. The service also
 listens for the scanner's UDP `53220` power-on advertisement and re-arms after a restart without
-waiting for the five-minute safety refresh. See [ScanSnap protocol notes](docs/protocol.md#physical-button-support)
+waiting for a periodic refresh. See [ScanSnap protocol notes](docs/protocol.md#physical-button-support)
 for packet directions and [configuration](docs/configuration.md#physical-button-troubleshooting)
 for firewall and log checks.
 

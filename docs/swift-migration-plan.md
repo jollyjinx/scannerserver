@@ -117,16 +117,19 @@ The browser keeps one cancellable long-poll request open to `/updates`. Scan and
 
 Fresh scanner setup synchronously hands the saved configuration to the physical-button lifecycle.
 The setup response waits for the first button arming attempt, so a configured page is not exposed
-during the former polling gap between the released setup probe and the persistent button session.
+during the former polling gap between the finalized setup probe and the persistent button session.
 
 The button lifecycle also owns scanner online/session state. It listens for the iX500 UDP `53220`
 startup advertisement, retains an armed session with a 500 ms UDP heartbeat, performs low-rate TCP
-health checks, and keeps a five-minute full re-arm only as a fallback. `ScanJobActor` publishes
+health checks, and leaves periodic full re-arm disabled unless explicitly configured. `ScanJobActor` publishes
 start/finish events for every scan origin, so web and physical-button scans both stop the heartbeat,
-send the D6 release on TCP `53218`, and only then hand ownership to acquisition. They immediately
-restore the notification session afterward. The five-minute safety refresh also releases the
-retained session before replacing it; closing its UDP heartbeat socket does not release scanner
-ownership and otherwise causes registration status `-7`.
+finish the button command sequence with D6 on TCP `53218`, and hand the already registered session
+to acquisition. The native client skips duplicate registration, pairing, and initialization; a
+successful scan resumes the retained session heartbeat instead of immediately registering again.
+Failures use the recovery-arm path. Power-on advertisements, offline-to-online transitions, and
+configuration changes establish genuinely fresh sessions. Hardware traces established that D6 does
+not itself clear scanner ownership, and a duplicate registration causes status `-7`; for that
+reason periodic replacement of healthy sessions now defaults to disabled.
 
 The web UI renders that shared lifecycle reachability state in a summary at the top of the page,
 beside the configured scanner name rather than inside Advanced settings. Reachability transitions

@@ -28,3 +28,47 @@ index c269b63..b7d3a9b 100644
  
                      printf("%s\n", key);
                      if (save_key(key) == 0)
+@@ -1443,6 +1443,8 @@ static void usage(void) {
+         "           override local client IP for scanner communication\n"
+         "  --client-mac MAC\n"
+         "           override client MAC for scanner communication\n"
++        "  --reuse-session\n"
++        "           reuse a session already registered by the button listener\n"
+         "  --dump-handshake FILE\n"
+         "           append TCP 0x11 request/response hex to FILE\n"
+         "  --handshake-patch OFFSET:HEX\n"
+@@ -1464,6 +1466,7 @@ int main(int argc, char *argv[]) {
+     const char *getkey_tail = NULL;
+     const char *client_ip = NULL;
+     const char *client_mac = NULL;
++    bool reuse_session = false;
+     for (int i = 1; i < argc; i++) {
+         if (strcmp(argv[i], "--getkey") == 0) {
+             want_getkey = true;
+@@ -1525,6 +1528,8 @@ int main(int argc, char *argv[]) {
+             client_mac = argv[++i];
+         } else if (strncmp(argv[i], "--client-mac=", 13) == 0) {
+             client_mac = argv[i] + 13;
++        } else if (strcmp(argv[i], "--reuse-session") == 0) {
++            reuse_session = true;
+         } else if (strcmp(argv[i], "--dump-handshake") == 0) {
+             if (i + 1 >= argc) {
+                 fprintf(stderr, "Error: --dump-handshake requires a path\n");
+@@ -1560,6 +1565,8 @@ int main(int argc, char *argv[]) {
+         bool skip_next = false;
+         if (strcmp(argv[i], "--getkey") == 0) {
+             skip_current = true;
++        } else if (strcmp(argv[i], "--reuse-session") == 0) {
++            skip_current = true;
+         } else if (strcmp(argv[i], "--getkey-ip") == 0
+                    || strcmp(argv[i], "--getkey-name") == 0
+                    || strcmp(argv[i], "--getkey-model") == 0
+@@ -1646,4 +1653,5 @@ int main(int argc, char *argv[]) {
+-    if (do_register(scanner_ip, local_ip, mac) < 0
+-        || do_handshake_conn1(scanner_ip, local_ip, mac) < 0
+-        || do_init_session(scanner_ip, mac) < 0) return 1;
++    if (!reuse_session
++        && (do_register(scanner_ip, local_ip, mac) < 0
++            || do_handshake_conn1(scanner_ip, local_ip, mac) < 0
++            || do_init_session(scanner_ip, mac) < 0)) return 1;
+     do_re_register(scanner_ip, local_ip, mac);

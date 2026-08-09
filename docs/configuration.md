@@ -74,7 +74,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCANSNAP_BUTTON_SCAN_ENABLED` | `true` | Enable physical scanner button listener |
 | `SCANSNAP_BUTTON_PORT` | `55265` | UDP port for ScanSnap button notices |
 | `SCANSNAP_STARTUP_ADVERTISEMENT_PORT` | `53220` | UDP port on which the scanner announces startup/power-on |
-| `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` | `300` | Slow safety-net interval for a full button-session re-arm while idle |
+| `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` | `0` | Optional interval for replacing a healthy button session; `0` disables periodic replacement |
 | `SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS` | `45` | Timeout for one button arming attempt |
 | `SCANSNAP_BUTTON_HEARTBEAT_INTERVAL_SECONDS` | `0.5` | Interval for retaining an armed scanner session over UDP `52217`; `0` disables the heartbeat |
 | `SCANSNAP_BUTTON_HEALTH_INTERVAL_SECONDS` | `10` | TCP reachability check interval while the button session is armed |
@@ -216,7 +216,7 @@ scanner  -> service UDP 53220   startup advertisement
 service  -> scanner UDP 52217   registration and 500 ms heartbeat
 scanner  -> service UDP 55265   physical-button notice
 service  -> scanner TCP 53219   reachability and pairing/control
-service  -> scanner TCP 53218   D6 session release and scan acquisition
+service  -> scanner TCP 53218   D6 command finalization and scan acquisition
 ```
 
 On the Linux host, an optional packet capture can distinguish missing advertisements, heartbeats,
@@ -229,14 +229,19 @@ sudo tcpdump -ni any 'udp port 52217 or udp port 53220 or udp port 55265'
 Expected recovery behavior:
 
 1. Power-on advertisement: re-arm immediately after the first valid packet in the boot burst.
-2. Any web or physical-button scan: stop the heartbeat, send D6 on TCP `53218` to release the
-   retained button session, then begin acquisition and re-arm immediately after completion.
-3. Failed or cancelled scan: release potentially stale state, then perform a recovery arm.
+2. Any web or physical-button scan: stop the heartbeat, finish the current command sequence with
+   D6 on TCP `53218`, and hand the already registered session to native acquisition. On success,
+   resume its heartbeat without another registration.
+3. Failed or cancelled scan: finalize potentially stale state, then perform a recovery arm. If a
+   valid button notice arrives during that recovery, cancel recovery and reuse the session that the
+   scanner has just confirmed is still routed to this client.
 4. Failed health check: mark the scanner offline and retry every three seconds.
-5. Missed event: release the retained session and perform a full safety re-arm after five idle
-   minutes.
+5. Optional diagnostic fallback: when `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` is greater than zero,
+   finalize and replace a healthy session after that idle interval. This is disabled by default
+   because unnecessary fresh registrations can themselves produce `-7` and an unarmed interval.
 
 `scanner rejected registration (error -7)` immediately after a button notice means the scanner
-still considers another session owner active. If `ScanSnap button client armed` appeared just
-before it, capture TCP `53218` as well as UDP `52217`: the service must stop the heartbeat and send
-the release before `scansnap-wifi` registers for acquisition.
+still considers a session owner active. If `ScanSnap button client armed` appeared first, the scan
+must reuse that armed session; a second UDP registration is a protocol error, not a recovery step.
+Confirm the image includes session handoff support and that `scansnap-wifi` is launched with
+`--reuse-session`. Also confirm the lifecycle and native client derive the same client IP and MAC.

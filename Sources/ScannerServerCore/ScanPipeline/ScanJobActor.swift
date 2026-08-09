@@ -1,8 +1,22 @@
 import Foundation
 import JLog
 
+public enum ScanJobTrigger: Sendable, Hashable {
+    case web
+    case scannerButton
+    case unspecified
+
+    init(environmentValue: String?) {
+        switch environmentValue {
+        case "web": self = .web
+        case "button": self = .scannerButton
+        default: self = .unspecified
+        }
+    }
+}
+
 public enum ScanJobEvent: Sendable, Hashable {
-    case started
+    case started(trigger: ScanJobTrigger)
     case finished(succeeded: Bool)
 }
 
@@ -79,7 +93,9 @@ public actor ScanJobActor {
         guard worker == nil, jobState.status != "running" else { return false }
 
         jobState = ScanJobState(started: Date(), status: "running")
-        await publish(.started)
+        await publish(.started(trigger: ScanJobTrigger(
+            environmentValue: configuration.environment["SCAN_TRIGGER"]
+        )))
         worker = Task {
             do {
                 let result = try await nativeScanner.scan(configuration: configuration)

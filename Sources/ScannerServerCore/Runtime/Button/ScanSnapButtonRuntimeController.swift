@@ -12,6 +12,7 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
 
     private let lifecycle: ScanSnapButtonLifecycleActor
     private let scanJobs: ScanJobActor
+    private let acquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     private let startupAdvertisementListener: ScanSnapStartupAdvertisementListener
     private let configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator?
     private var scanEventHandlerID: UUID?
@@ -20,12 +21,14 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
         isEligible: Bool,
         lifecycle: ScanSnapButtonLifecycleActor,
         scanJobs: ScanJobActor,
+        acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         startupAdvertisementListener: ScanSnapStartupAdvertisementListener,
         configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) {
         self.isEligible = isEligible
         self.lifecycle = lifecycle
         self.scanJobs = scanJobs
+        self.acquisitionSessions = acquisitionSessions
         self.startupAdvertisementListener = startupAdvertisementListener
         self.configurationChangeCoordinator = configurationChangeCoordinator
     }
@@ -35,10 +38,15 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
         guard isEligible else { return false }
         guard scanEventHandlerID == nil else { return false }
 
-        scanEventHandlerID = await scanJobs.addEventHandler { [lifecycle] event in
+        scanEventHandlerID = await scanJobs.addEventHandler { [lifecycle, acquisitionSessions] event in
             switch event {
-            case .started:
-                await lifecycle.scanDidStart()
+            case .started(let trigger):
+                let reusesArmedSession = await lifecycle.scanDidStart(
+                    buttonNoticeConfirmsSession: trigger == .scannerButton
+                )
+                await acquisitionSessions.prepareForAcquisition(
+                    reusingArmedSession: reusesArmedSession
+                )
             case .finished(let succeeded):
                 if !succeeded {
                     JLog.warning("Scan failed; recovering ScanSnap button session")
@@ -96,6 +104,7 @@ public enum ScanSnapButtonRuntimeFactory {
         scannerStore: ScannerConfigStore? = nil,
         settingsStore: ScanSettingsStore? = nil,
         scanJobs: ScanJobActor,
+        acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         network: any ScanSnapSetupNetworkProviding = SystemScanSnapSetupNetworkProvider(),
         udpTransportFactory: any ScanSnapUDPTransportFactory = POSIXScanSnapUDPTransportFactory(),
         reachability: any ScanSnapButtonReachabilityChecking = ScanSnapButtonTCPReachabilityChecker(),
@@ -147,6 +156,7 @@ public enum ScanSnapButtonRuntimeFactory {
             isEligible: isWiFiBackend && buttonConfiguration.isEnabled,
             lifecycle: lifecycle,
             scanJobs: scanJobs,
+            acquisitionSessions: acquisitionSessions,
             startupAdvertisementListener: startupAdvertisementListener,
             configurationChangeCoordinator: configurationChangeCoordinator
         )

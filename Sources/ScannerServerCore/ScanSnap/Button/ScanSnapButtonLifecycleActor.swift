@@ -65,6 +65,7 @@ public actor ScanSnapButtonLifecycleActor {
     private var buttonScanInFlight = false
     private var rearmRequested = false
     private var recoveryArmRequested = false
+    private var scanUsesRetainedSession = false
     private var nextArmAtMilliseconds: UInt64?
     private var nextReachabilityAtMilliseconds: UInt64 = 0
     private var lastButtonStartedAtMilliseconds: UInt64?
@@ -186,6 +187,7 @@ public actor ScanSnapButtonLifecycleActor {
         buttonScanInFlight = false
         rearmRequested = false
         recoveryArmRequested = false
+        scanUsesRetainedSession = false
         nextArmAtMilliseconds = nil
         lastScannerConfiguration = nil
         listener?.cancel()
@@ -376,30 +378,65 @@ public actor ScanSnapButtonLifecycleActor {
         let lifecycleGeneration = lifecycleGeneration
         let now = await clock.nowMilliseconds()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
-        scanDidFinish(succeeded: succeeded, atMilliseconds: now)
+        let resumedRetainedSession = scanDidFinish(succeeded: succeeded, atMilliseconds: now)
+        if resumedRetainedSession, let scanner = lastScannerConfiguration {
+            await heartbeat.start(scanner: scanner, configuration: configuration)
+            JLog.notice("ScanSnap button client resumed after scan")
+        }
         await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
     }
 
-    public func scanDidFinish(succeeded: Bool = true, atMilliseconds now: UInt64) {
-        guard acceptsLifecycleOperations else { return }
+    @discardableResult
+    public func scanDidFinish(succeeded: Bool = true, atMilliseconds now: UInt64) -> Bool {
+        guard acceptsLifecycleOperations else { return false }
         buttonScanInFlight = false
         lastScanCompletedAtMilliseconds = now
+
+        let shouldResumeRetainedSession = succeeded
+            && scanUsesRetainedSession
+            && lastScannerConfiguration != nil
+        scanUsesRetainedSession = false
+        if shouldResumeRetainedSession {
+            isArmed = true
+            rearmRequested = false
+            recoveryArmRequested = false
+            nextArmAtMilliseconds = nextSafetyArm(after: now)
+            nextReachabilityAtMilliseconds = adding(configuration.healthCheckIntervalMilliseconds, to: now)
+            lastReachableAtMilliseconds = now
+            return true
+        }
+
         isArmed = false
         nextArmAtMilliseconds = nil
         rearmRequested = true
         recoveryArmRequested = recoveryArmRequested || !succeeded
+        return false
     }
 
-    public func scanDidStart() async {
-        guard acceptsLifecycleOperations else { return }
-        let retainedScanner = isArmed ? lastScannerConfiguration : nil
+    @discardableResult
+    public func scanDidStart(buttonNoticeConfirmsSession: Bool = false) async -> Bool {
+        guard acceptsLifecycleOperations else { return false }
+        let lifecycleGeneration = lifecycleGeneration
+        let retainedScanner = isArmed || buttonNoticeConfirmsSession
+            ? lastScannerConfiguration
+            : nil
+        let reusesRetainedSession = retainedScanner != nil
+        if buttonNoticeConfirmsSession, !isArmed, reusesRetainedSession {
+            JLog.notice("Scanner button notice reclaimed the session during recovery")
+        }
+        scanUsesRetainedSession = reusesRetainedSession
         isArmed = false
         nextArmAtMilliseconds = nil
-        cancelArming()
+        let cancelledArming = cancelArming()
+        await cancelledArming?.value
+        guard isCurrentLifecycle(lifecycleGeneration) else { return false }
         await heartbeat.stop()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return false }
         if let retainedScanner {
-            await releaseRetainedSession(scanner: retainedScanner)
+            await finalizeRetainedSession(scanner: retainedScanner)
         }
+        guard isCurrentLifecycle(lifecycleGeneration) else { return false }
+        return reusesRetainedSession
     }
 
     public func scannerDidAdvertiseStartup(_ advertisement: ScanSnapStartupAdvertisement) async {
@@ -670,19 +707,19 @@ public actor ScanSnapButtonLifecycleActor {
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
         if hasRetainedSession {
             isArmed = false
-            await releaseRetainedSession(scanner: scanner)
+            await finalizeRetainedSession(scanner: scanner)
             guard isCurrentLifecycle(lifecycleGeneration) else { return }
         }
         beginArming(scanner: scanner, lifecycleGeneration: lifecycleGeneration)
     }
 
-    private func releaseRetainedSession(scanner: ScanSnapButtonScannerConfiguration) async {
+    private func finalizeRetainedSession(scanner: ScanSnapButtonScannerConfiguration) async {
         do {
             try await armer.releaseSession(scanner: scanner, configuration: configuration)
         } catch is CancellationError {
             return
         } catch {
-            JLog.warning("ScanSnap button session release failed: \(error)")
+            JLog.warning("ScanSnap button session finalization failed: \(error)")
         }
     }
 
@@ -732,7 +769,7 @@ public actor ScanSnapButtonLifecycleActor {
         isArmed = succeeded
         if succeeded {
             recoveryArmRequested = false
-            nextArmAtMilliseconds = adding(configuration.armIntervalMilliseconds, to: now)
+            nextArmAtMilliseconds = nextSafetyArm(after: now)
             nextReachabilityAtMilliseconds = adding(configuration.healthCheckIntervalMilliseconds, to: now)
             await setOnline(true)
             lastReachableAtMilliseconds = now
@@ -746,17 +783,21 @@ public actor ScanSnapButtonLifecycleActor {
         }
     }
 
-    private func cancelArming() {
+    @discardableResult
+    private func cancelArming() -> Task<Void, Never>? {
         armingGeneration &+= 1
-        armingTask?.cancel()
+        let task = armingTask
+        task?.cancel()
         armingTask = nil
         isArming = false
+        return task
     }
 
     private func resetForMissingScanner(retryAt: UInt64) async {
         scannerConfigurationGeneration &+= 1
         cancelArming()
         lastScannerConfiguration = nil
+        scanUsesRetainedSession = false
         await setOnline(false)
         isArmed = false
         nextArmAtMilliseconds = nil
@@ -767,6 +808,7 @@ public actor ScanSnapButtonLifecycleActor {
         scannerConfigurationGeneration &+= 1
         cancelArming()
         lastScannerConfiguration = nil
+        scanUsesRetainedSession = false
         await setOnline(false)
         isArmed = false
         nextArmAtMilliseconds = nil
@@ -789,6 +831,11 @@ public actor ScanSnapButtonLifecycleActor {
     private func adding(_ interval: UInt64, to instant: UInt64) -> UInt64 {
         let (result, overflow) = instant.addingReportingOverflow(interval)
         return overflow ? .max : result
+    }
+
+    private func nextSafetyArm(after instant: UInt64) -> UInt64? {
+        guard configuration.armIntervalMilliseconds > 0 else { return nil }
+        return adding(configuration.armIntervalMilliseconds, to: instant)
     }
 
     private func isCurrentLifecycle(_ generation: UInt64) -> Bool {

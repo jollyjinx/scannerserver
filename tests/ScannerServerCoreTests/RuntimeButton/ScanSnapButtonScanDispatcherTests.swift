@@ -102,6 +102,9 @@ struct ScanSnapButtonScanDispatcherTests {
         await executor.complete()
         await scanJobs.waitUntilIdle()
 
-        #expect(await eventTask.value == [.started, .finished(succeeded: false)])
+        #expect(await eventTask.value == [
+            .started(trigger: .scannerButton),
+            .finished(succeeded: false),
+        ])
     }
 }

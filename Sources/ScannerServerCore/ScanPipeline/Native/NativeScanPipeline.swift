@@ -9,23 +9,27 @@ public actor NativeScanPipeline: NativeScanExecuting {
     public typealias WorkDirectorySuffixProvider = @Sendable () -> String
 
     private let executor: any ProcessExecutor
+    private let acquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     private let fileSystem: any NativeScanFileSystem
     private let timestampProvider: TimestampProvider
     private let workDirectorySuffixProvider: WorkDirectorySuffixProvider
 
     public init(
         executor: any ProcessExecutor,
+        acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         fileSystem: any NativeScanFileSystem = FoundationNativeScanFileSystem(),
         timestampProvider: @escaping TimestampProvider = { ScanTimestamp(date: Date()) },
         workDirectorySuffixProvider: @escaping WorkDirectorySuffixProvider = { UUID().uuidString }
     ) {
         self.executor = executor
+        self.acquisitionSessions = acquisitionSessions
         self.fileSystem = fileSystem
         self.timestampProvider = timestampProvider
         self.workDirectorySuffixProvider = workDirectorySuffixProvider
     }
 
     public func scan(configuration: ScanPipelineConfiguration) async throws -> ProcessResult {
+        let acquisitionSessionMode = await acquisitionSessions.consumeForAcquisition()
         let environment = configuration.environment
         let outputDirectory = URL(
             fileURLWithPath: nonEmpty(environment["SCAN_OUTPUT_DIR"]) ?? "/scans",
@@ -61,6 +65,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
 
             if let acquisitionFailure = try await acquireRawPDF(
                 configuration: configuration,
+                acquisitionSessionMode: acquisitionSessionMode,
                 rawPDF: rawPDF,
                 workDirectory: workDirectory,
                 executor: capturingExecutor
@@ -164,6 +169,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
 
     private func acquireRawPDF(
         configuration: ScanPipelineConfiguration,
+        acquisitionSessionMode: ScanSnapAcquisitionSessionMode,
         rawPDF: URL,
         workDirectory: URL,
         executor: NativeScanCapturingExecutor
@@ -224,8 +230,14 @@ public actor NativeScanPipeline: NativeScanExecuting {
             }
 
             var arguments = ["-s", scannerIP, "-k", pairingKey, "-o", rawPDF.path]
+            if acquisitionSessionMode == .reuseArmed {
+                arguments.append("--reuse-session")
+            }
             if let clientIP = nonEmpty(environment["SCANSNAP_CLIENT_IP"]) {
                 arguments += ["--client-ip", clientIP]
+            }
+            if let clientMAC = nonEmpty(environment["SCANSNAP_CLIENT_MAC"]) {
+                arguments += ["--client-mac", clientMAC]
             }
             if configuration.simplex
                 || configuration.source.contains("Simplex")

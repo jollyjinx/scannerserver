@@ -241,6 +241,7 @@ public struct ScannerServerDependencies: Sendable {
     public let settingsStore: ScanSettingsStore
     public let scannerStore: ScannerConfigStore
     public let scanJobs: ScanJobActor
+    public let scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     public let ocrQueue: OCRQueueActor
     public let outputPathResolver: ScanOutputPathResolver
     public let scannerSetup: any ScannerSetupServing
@@ -255,6 +256,7 @@ public struct ScannerServerDependencies: Sendable {
         settingsStore: ScanSettingsStore,
         scannerStore: ScannerConfigStore? = nil,
         scanJobs: ScanJobActor,
+        scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         ocrQueue: OCRQueueActor? = nil,
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
@@ -267,6 +269,7 @@ public struct ScannerServerDependencies: Sendable {
         self.settingsStore = settingsStore
         self.scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
         self.scanJobs = scanJobs
+        self.scanSnapAcquisitionSessions = scanSnapAcquisitionSessions
         self.ocrQueue = ocrQueue ?? OCRQueueActor(executor: FoundationProcessExecutor())
         self.outputPathResolver = outputPathResolver
         self.scannerSetup = scannerSetup
@@ -293,14 +296,19 @@ public struct ScannerServerDependencies: Sendable {
         let scannerStore = ScannerConfigStore(environment: environment)
         let buttonConfigurationChanges = ScanSnapButtonConfigurationChangeCoordinator()
         let scannerReachability = ScanSnapReachabilityState(webUpdates: webUpdates)
+        let scanSnapAcquisitionSessions = ScanSnapAcquisitionSessionCoordinator()
         return ScannerServerDependencies(
             settingsStore: settingsStore,
             scannerStore: scannerStore,
             scanJobs: ScanJobActor(
-                nativeScanner: NativeScanPipeline(executor: documentExecutor),
+                nativeScanner: NativeScanPipeline(
+                    executor: documentExecutor,
+                    acquisitionSessions: scanSnapAcquisitionSessions
+                ),
                 ocrQueue: ocrQueue,
                 webUpdates: webUpdates
             ),
+            scanSnapAcquisitionSessions: scanSnapAcquisitionSessions,
             ocrQueue: ocrQueue,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: ScanSnapSetupService(
