@@ -125,9 +125,10 @@ health checks, and keeps a five-minute full re-arm only as a fallback. `ScanJobA
 start/finish events for every scan origin, so web and physical-button scans both stop the heartbeat
 for acquisition and immediately restore the notification session afterward.
 
-The web UI renders that shared lifecycle reachability state beside the configured scanner name.
-Reachability transitions notify the existing browser long-poll, producing a green `Reachable` or
-grey `Not reachable` indicator without a second network probe or a new polling loop.
+The web UI renders that shared lifecycle reachability state in a summary at the top of the page,
+beside the configured scanner name rather than inside Advanced settings. Reachability transitions
+notify the existing browser long-poll, producing a green `Reachable` or grey `Not reachable`
+indicator without a second network probe or a new polling loop.
 
 While first-run setup remains unresolved, an actor-owned discovery loop continues with a bounded
 retry delay alongside manual input. A single discovered scanner is paired automatically with its

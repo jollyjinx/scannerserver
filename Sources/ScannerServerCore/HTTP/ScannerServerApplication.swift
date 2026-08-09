@@ -809,8 +809,14 @@ private func renderIndexContent(
     if let message = setupMessage(setupMessageCode) {
         html += "<p class=\"notice\">\(htmlEscape(message))</p>"
     }
+    if wifiBackend && setup.configured {
+        html += renderScannerReachabilitySummary(
+            setup,
+            scannerIsReachable: scannerIsReachable
+        )
+    }
     if wifiBackend && !setup.configured {
-        html += renderScannerSetup(setup, scannerIsReachable: scannerIsReachable)
+        html += renderScannerSetup(setup)
     }
 
     if !wifiBackend || setup.configured {
@@ -829,7 +835,6 @@ private func renderIndexContent(
             settings: settings,
             selectedMode: selectedMode,
             scannerSetup: wifiBackend ? setup : nil,
-            scannerIsReachable: scannerIsReachable,
             open: editModeID != nil
         )
         html += renderStatus(job: job, ocr: ocr)
@@ -838,25 +843,28 @@ private func renderIndexContent(
     return html
 }
 
-private func renderScannerSetup(
+private func renderScannerReachabilitySummary(
     _ setup: ScannerSetupState,
     scannerIsReachable: Bool
 ) -> String {
-    "<section data-scanner-setup data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup, scannerIsReachable: scannerIsReachable))</section>"
+    let reachabilityClass = scannerIsReachable ? "reachable" : "unreachable"
+    let reachabilityText = scannerIsReachable ? "Reachable" : "Not reachable"
+    var html = "<section class=\"scanner-summary\" aria-label=\"Scanner status\">"
+    html += "<p class=\"scanner-name\"><strong>\(htmlEscape(setup.name))</strong>"
+    html += " <span class=\"scanner-reachability \(reachabilityClass)\">"
+    html += "<span class=\"scanner-reachability-dot\" aria-hidden=\"true\"></span>"
+    html += "\(reachabilityText)</span></p></section>"
+    return html
 }
 
-private func renderScannerSetupContent(
-    _ setup: ScannerSetupState,
-    scannerIsReachable: Bool
-) -> String {
+private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
+    "<section data-scanner-setup data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup))</section>"
+}
+
+private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
     var html = "<h2>Scanner setup</h2>"
     if setup.configured {
-        let reachabilityClass = scannerIsReachable ? "reachable" : "unreachable"
-        let reachabilityText = scannerIsReachable ? "Reachable" : "Not reachable"
-        html += "<p class=\"scanner-name\"><strong>\(htmlEscape(setup.name))</strong>"
-        html += " <span class=\"scanner-reachability \(reachabilityClass)\">"
-        html += "<span class=\"scanner-reachability-dot\" aria-hidden=\"true\"></span>"
-        html += "\(reachabilityText)</span></p>"
+        html += "<p><strong>\(htmlEscape(setup.name))</strong> <span class=\"status\">configured</span></p>"
         html += "<p class=\"muted\">IP \(htmlEscape(setup.ipAddress))"
         if !setup.serial.isEmpty { html += " · Serial \(htmlEscape(setup.serial))" }
         if !setup.macAddress.isEmpty { html += " · MAC \(htmlEscape(setup.macAddress))" }
@@ -904,7 +912,6 @@ private func renderModes(
     settings: ScanSettings,
     selectedMode: ScanMode,
     scannerSetup: ScannerSetupState?,
-    scannerIsReachable: Bool,
     open: Bool
 ) -> String {
     var html = "<section><details\(open ? " open" : "")><summary>Advanced settings</summary><ul class=\"mode-list\">"
@@ -1023,7 +1030,7 @@ private func renderModes(
     }
     html += "</div></form>"
     if let scannerSetup {
-        html += "<div class=\"advanced-setup\">\(renderScannerSetupContent(scannerSetup, scannerIsReachable: scannerIsReachable))</div>"
+        html += "<div class=\"advanced-setup\">\(renderScannerSetupContent(scannerSetup))</div>"
     }
     html += "</details></section>"
     return html

@@ -210,24 +210,36 @@ struct ScannerServerApplicationTests {
         try await application.test(.router) { client in
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
+                let summary = try #require(body.range(of: "<section class=\"scanner-summary\""))
+                let summaryEnd = try #require(body.range(of: "</section>", range: summary.lowerBound..<body.endIndex))
+                let scan = try #require(body.range(of: "<section><h2>Scan</h2>"))
                 let advanced = try #require(body.range(of: "<details><summary>Advanced settings</summary>"))
                 let scannerSetup = try #require(body.range(of: "<h2>Scanner setup</h2>"))
                 let advancedEnd = try #require(body.range(of: "</details>", range: advanced.lowerBound..<body.endIndex))
+                let reachability = try #require(body.range(of: "scanner-reachability reachable"))
 
                 #expect(body.contains("action=\"/scan\""))
-                #expect(body.contains("scanner-reachability reachable"))
                 #expect(body.contains("scanner-reachability-dot"))
                 #expect(body.contains("Reachable</span>"))
+                #expect(summary.lowerBound < reachability.lowerBound)
+                #expect(reachability.lowerBound < summaryEnd.lowerBound)
+                #expect(summaryEnd.lowerBound < scan.lowerBound)
+                #expect(scan.lowerBound < advanced.lowerBound)
                 #expect(advanced.lowerBound < scannerSetup.lowerBound)
                 #expect(scannerSetup.lowerBound < advancedEnd.lowerBound)
+                let advancedContent = body[advanced.lowerBound..<advancedEnd.upperBound]
+                #expect(!advancedContent.contains("scanner-reachability"))
             }
 
             await scannerReachability.update(isReachable: false)
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
+                let summary = try #require(body.range(of: "<section class=\"scanner-summary\""))
+                let scan = try #require(body.range(of: "<section><h2>Scan</h2>"))
                 #expect(body.contains("scanner-reachability unreachable"))
                 #expect(body.contains("Not reachable</span>"))
                 #expect(!body.contains("scanner-reachability reachable"))
+                #expect(summary.lowerBound < scan.lowerBound)
             }
         }
     }

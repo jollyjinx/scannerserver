@@ -39,8 +39,8 @@ After setup, scan either way:
 - Press **Start scan** in the web UI.
 - Press the physical scan button on the iX500.
 
-The configured scanner name includes a live reachability indicator: green when the scanner's
-control port is reachable and grey when it is not reachable.
+The top of the page shows the configured scanner name with a live reachability indicator: green
+when the scanner's control port is reachable and grey when it is not reachable.
 
 The physical button uses a volatile notification session stored in the scanner. While that session
 is armed, scannerserver retains it with a 500 ms heartbeat. A web or button scan temporarily owns
