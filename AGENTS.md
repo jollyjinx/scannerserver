@@ -1,15 +1,24 @@
 ---
 name: spm-local-scansnap-linux
-description: Guidance for working on the local ScanSnap Linux Swift Package migration. Use when changing Package.swift, Sources or Tests for scannerserver, ScanSnap iX500 Wi-Fi protocol code, scan/OCR pipeline orchestration, Linux container packaging, compose files, or migration docs in /Users/jolly/git/ScanSnap Linux.
+description: Guidance for working on the current ScanSnap Linux Swift package. Use when changing Package.swift, Sources or Tests, ScanSnap protocol code, scan/OCR orchestration, container packaging, compose files, or project documentation.
 ---
 
 # ScanSnap Linux SwiftPM
 
 ## Overview
 
-This package is intended to become a Swift 6.3, Linux-first, containerized drop-in replacement for the existing Python scannerserver in `/Users/jolly/git/ScanSnap Linux`.
+This package is the Swift 6.3, Linux-first, containerized replacement for the former Python scannerserver. The production service and default container have already migrated to Swift.
 
 Use this skill together with `spm-multiplatform-swift-package`, `swift-linux-service`, `swift-concurrency`, and `swift-testing-expert` when those topics apply.
+
+Read `docs/architecture.md` before broad source changes. It is the normative description of the current service. `docs/history/swift-migration.md` is historical evidence only and must not be treated as an active plan or backlog.
+
+## Task Interpretation
+
+- Verify a task's premise against the current tree and recent history before starting a broad rewrite.
+- If a request assumes the Python service still exists or the Swift migration is incomplete, report the stale premise and restrict work to genuine remaining cleanup.
+- Treat an unqualified “cleanup” as behavior-preserving removal of dead files, generated artifacts, obsolete documentation, duplication, or clearly unused code.
+- Do not change runtime orchestration, actor ownership, public API, external contracts, or working subsystems under the label of cleanup. Those changes require explicit authorization.
 
 ## Compatibility Contract
 
@@ -26,11 +35,11 @@ Use this skill together with `spm-multiplatform-swift-package`, `swift-linux-ser
 - Prefer actors or isolated runtime types for mutable service state: scan job state, OCR queue, discovery state, scanner config, settings, and button arming.
 - Use Swift Testing for package tests. Keep hardware/network integration tests opt-in.
 
-## Migration Plan
+## Current Architecture And History
 
-Start from `docs/swift-migration-plan.md`. Update that plan when implementation decisions change.
+Use `docs/architecture.md` for current package boundaries, dependency strategy, compatibility contracts, and validation requirements.
 
-The first migration milestone should keep native external tools such as SANE, Tesseract, OCRmyPDF, qpdf/poppler-like utilities, and the existing ScanSnap C implementation only where needed to preserve behavior. Later milestones can replace those subprocesses with Swift or C-library integrations after the drop-in service is stable.
+Use `docs/history/swift-migration.md` only when historical migration evidence is relevant. The migration milestones are complete. The service intentionally retains SANE, Tesseract, OCRmyPDF, qpdf, Poppler, and the ScanSnap acquisition utility; replacing them is separate follow-up work.
 
 ## Validation
 

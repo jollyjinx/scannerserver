@@ -1,16 +1,19 @@
 ---
-title: Swift Migration Plan
-description: Plan for migrating scannerserver to a Swift 6.3 Linux service while preserving the container contract.
-type: plan
+title: Swift Migration History
+description: Historical evidence and completed milestones from the scannerserver migration to a Swift 6.3 Linux service.
+type: history
 audience: maintainers
-status: current
+status: historical
 ---
 
-# Swift Migration Plan
+# Swift Migration History
 
-## Goal
+This is an archived implementation record, not an active plan or current architecture guide. Use
+[`../architecture.md`](../architecture.md) for current work. Every milestone below is complete.
 
-Replace the long-running Python scannerserver with a Swift 6.3 Linux service that remains a drop-in container replacement for current users.
+## Outcome
+
+The long-running Python scannerserver was replaced by a Swift 6.3 Linux service while remaining a drop-in container replacement for existing users.
 
 The replacement keeps the same image purpose, ports, environment variables, `/scans` volume layout, setup files, scan output names, web workflows, physical button support, and compose examples. Reducing resident runtime cost comes first; replacing every native helper or OCR dependency can happen after the service boundary is stable.
 
@@ -74,7 +77,7 @@ The Swift service reduces idle RSS by 27.9%. The image is 93.6 MB larger because
 
 The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on ARM64 crashes in the compiler while expanding `@TaskLocal` in `swift-service-context`; the same dependency graph builds successfully with 6.3.2. The package remains `swift-tools-version: 6.3` and Swift 6 language mode.
 
-## Non-Negotiable Compatibility
+## Compatibility Contract At Cutover
 
 - Keep the `ghcr.io/jollyjinx/scannerserver` image contract and the `scannerserver` container name examples.
 - Keep host-network deployment working because ScanSnap discovery depends on LAN UDP traffic.
@@ -85,7 +88,7 @@ The container build pins the official Swift 6.3.2 Noble images. Swift 6.3.3 on A
 - Keep OCR work observable and controllable: the web UI can cancel the active OCR subprocess together with queued jobs and shows bounded recent-job durations (per page when the scan mode emits one PDF per page, per document for multipage PDFs).
 - Use Docker commands consistently in documentation, development workflows, smoke tests, and publishing examples.
 
-## Architecture
+## Architecture At Cutover
 
 The SwiftPM package uses `// swift-tools-version: 6.3`, Swift 6 language mode, and strict concurrency for all targets.
 
@@ -147,7 +150,7 @@ Manual setup accepts either an IPv4 address or a host name. Host names are resol
 blocking the setup actor, and the resolved IPv4 address is persisted so protocol packets and
 physical-button source matching continue to use the iX500's IPv4-only contract.
 
-## Dependency Strategy
+## Dependency Strategy At Cutover
 
 Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The implemented boundary is:
 
@@ -160,7 +163,9 @@ Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The imple
 executor. Document processing may use a full CPU core for an extended period, but it must not
 prevent the HTTP server, physical-button listener, or session-recovery actors from being scheduled.
 
-## Milestones
+## Historical Milestones
+
+The completed milestones and acceptance criteria below are retained as implementation history. They describe work that has already shipped, not an active backlog.
 
 ### 0. Baseline And Skill
 
@@ -256,7 +261,7 @@ Acceptance:
 - Scan directory ownership and non-root port binding still work.
 - Documentation uses Docker consistently for build, run, Compose, smoke-test, and publishing workflows.
 
-## Test Plan
+## Migration Test Plan
 
 - Swift unit tests for parsing, settings, file grouping, output naming, protocol packet construction, protocol packet parsing, and state machines.
 - Swift async tests for scan job locking, OCR queue ordering, button arm scheduling, cancellation, and signal/log-level helpers.
@@ -264,14 +269,3 @@ Acceptance:
 - Route-level tests for methods, redirects, response codes, and form field compatibility.
 - Container smoke test for startup, port binding, `/scans` write access, and health/index routes.
 - Manual hardware test checklist for iX500 discovery, setup, scan, button press, OCR, and update flow.
-
-## Subagent Work Split
-
-Use subagents for independent slices with disjoint write scopes.
-
-- Scanner protocol agent: own `Sources/ScannerServerCore/ScanSnap/`, protocol fixtures, and protocol tests.
-- HTTP/settings agent: own `Sources/ScannerServerCore/HTTP/`, `Sources/ScannerServerCore/Settings/`, route tests, and UI template resources.
-- Scan pipeline agent: own `Sources/ScannerServerCore/ScanPipeline/`, process execution, OCR queue, and command-construction tests.
-- PDF/container agent: own `Sources/ScannerServerCore/Documents/`, container files, package resource copying, and deployment doc updates.
-
-The main agent should own integration, `Package.swift`, final container cutover, and compatibility review.

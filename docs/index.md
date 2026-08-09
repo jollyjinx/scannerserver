@@ -15,11 +15,12 @@ Use this page as the entry point for repository documentation. The root [`README
 | Document | Use it for | Primary audience |
 | --- | --- | --- |
 | [`../AI/README.md`](../AI/README.md) | Agent routing, package shape, compatibility boundaries, and validation baseline | Agents |
+| [`architecture.md`](architecture.md) | Current Swift architecture, scope guardrails, compatibility contracts, and validation | Maintainers and agents |
 | [`configuration.md`](configuration.md) | Environment variables, scan modes, output names, OCR, blank-page removal, and cropping | Operators |
 | [`deployment.md`](deployment.md) | Published images, host networking, Compose, local builds, and image publishing | Operators |
 | [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, directed port map, startup advertisements, heartbeat, and physical-button session lifecycle | Maintainers |
 | [`swift-hardware-validation.md`](swift-hardware-validation.md) | Manual acceptance testing with a real scanner | Maintainers |
-| [`swift-migration-plan.md`](swift-migration-plan.md) | Architecture, compatibility constraints, migration history, and test strategy | Maintainers |
+| [`history/swift-migration.md`](history/swift-migration.md) | Completed Python-to-Swift migration evidence and historical milestones | Maintainers |
 | [`../AGENTS.md`](../AGENTS.md) | Repository-wide instructions that coding agents must follow | Agents |
 
 ## Front Matter Convention
@@ -34,7 +35,7 @@ Topic documentation must provide these fields:
 | `description` | One-sentence summary that lets an agent judge relevance without reading the body |
 | `type` | Document role, such as `index`, `guide`, `reference`, `plan`, or `instructions` |
 | `audience` | Primary readers, such as `users`, `operators`, `maintainers`, or `agents` |
-| `status` | Lifecycle state, normally `current` for maintained documentation |
+| `status` | Lifecycle state, normally `current` for maintained documentation and `historical` for archived records |
 
 Use this template for new documentation:
 
