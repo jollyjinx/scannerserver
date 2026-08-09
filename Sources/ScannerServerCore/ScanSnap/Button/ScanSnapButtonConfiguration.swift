@@ -3,10 +3,14 @@ import Foundation
 public struct ScanSnapButtonConfiguration: Sendable, Hashable {
     public var isEnabled: Bool
     public var listenerPort: UInt16
+    public var startupAdvertisementPort: UInt16
     public var debounceMilliseconds: UInt64
     public var cooldownMilliseconds: UInt64
     public var armIntervalMilliseconds: UInt64
     public var armTimeoutMilliseconds: UInt64
+    public var heartbeatIntervalMilliseconds: UInt64
+    public var healthCheckIntervalMilliseconds: UInt64
+    public var startupRearmDebounceMilliseconds: UInt64
     public var reachabilityPort: UInt16
     public var reachabilityTimeoutMilliseconds: UInt64
     public var reachabilityIntervalMilliseconds: UInt64
@@ -17,10 +21,14 @@ public struct ScanSnapButtonConfiguration: Sendable, Hashable {
     public init(
         isEnabled: Bool = true,
         listenerPort: UInt16 = ScanSnapPacketBuilder.buttonNoticePort,
+        startupAdvertisementPort: UInt16 = ScanSnapPacketBuilder.startupAdvertisementPort,
         debounceMilliseconds: UInt64 = 3_000,
         cooldownMilliseconds: UInt64 = 1_000,
-        armIntervalMilliseconds: UInt64 = 60_000,
+        armIntervalMilliseconds: UInt64 = 300_000,
         armTimeoutMilliseconds: UInt64 = 45_000,
+        heartbeatIntervalMilliseconds: UInt64 = 500,
+        healthCheckIntervalMilliseconds: UInt64 = 10_000,
+        startupRearmDebounceMilliseconds: UInt64 = 3_000,
         reachabilityPort: UInt16 = ScanSnapPacketBuilder.controlPort,
         reachabilityTimeoutMilliseconds: UInt64 = 1_000,
         reachabilityIntervalMilliseconds: UInt64 = 3_000,
@@ -30,10 +38,14 @@ public struct ScanSnapButtonConfiguration: Sendable, Hashable {
     ) {
         self.isEnabled = isEnabled
         self.listenerPort = listenerPort
+        self.startupAdvertisementPort = startupAdvertisementPort
         self.debounceMilliseconds = debounceMilliseconds
         self.cooldownMilliseconds = cooldownMilliseconds
         self.armIntervalMilliseconds = armIntervalMilliseconds
         self.armTimeoutMilliseconds = armTimeoutMilliseconds
+        self.heartbeatIntervalMilliseconds = heartbeatIntervalMilliseconds
+        self.healthCheckIntervalMilliseconds = healthCheckIntervalMilliseconds
+        self.startupRearmDebounceMilliseconds = startupRearmDebounceMilliseconds
         self.reachabilityPort = reachabilityPort
         self.reachabilityTimeoutMilliseconds = reachabilityTimeoutMilliseconds
         self.reachabilityIntervalMilliseconds = reachabilityIntervalMilliseconds
@@ -66,10 +78,20 @@ public struct ScanSnapButtonConfiguration: Sendable, Hashable {
         self.init(
             isEnabled: ModeSettings.isTruthy(environment["SCANSNAP_BUTTON_SCAN_ENABLED"] ?? "true"),
             listenerPort: port("SCANSNAP_BUTTON_PORT", default: ScanSnapPacketBuilder.buttonNoticePort),
+            startupAdvertisementPort: port(
+                "SCANSNAP_STARTUP_ADVERTISEMENT_PORT",
+                default: ScanSnapPacketBuilder.startupAdvertisementPort
+            ),
             debounceMilliseconds: seconds("SCANSNAP_BUTTON_DEBOUNCE_SECONDS", default: 3),
             cooldownMilliseconds: seconds("SCANSNAP_BUTTON_COOLDOWN_SECONDS", default: 1),
-            armIntervalMilliseconds: seconds(armIntervalKey, default: 60),
+            armIntervalMilliseconds: seconds(armIntervalKey, default: 300),
             armTimeoutMilliseconds: seconds("SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS", default: 45),
+            heartbeatIntervalMilliseconds: seconds("SCANSNAP_BUTTON_HEARTBEAT_INTERVAL_SECONDS", default: 0.5),
+            healthCheckIntervalMilliseconds: seconds("SCANSNAP_BUTTON_HEALTH_INTERVAL_SECONDS", default: 10),
+            startupRearmDebounceMilliseconds: seconds(
+                "SCANSNAP_BUTTON_STARTUP_REARM_DEBOUNCE_SECONDS",
+                default: 3
+            ),
             reachabilityPort: port("SCANSNAP_BUTTON_REACHABILITY_PORT", default: ScanSnapPacketBuilder.controlPort),
             reachabilityTimeoutMilliseconds: seconds("SCANSNAP_BUTTON_REACHABILITY_TIMEOUT_SECONDS", default: 1),
             reachabilityIntervalMilliseconds: seconds("SCANSNAP_BUTTON_REACHABILITY_INTERVAL_SECONDS", default: 3),

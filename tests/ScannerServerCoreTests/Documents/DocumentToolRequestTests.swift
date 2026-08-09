@@ -37,7 +37,7 @@ struct DocumentToolRequestTests {
             "/work/raw.pdf",
             "--background-delta", "8",
             "--border-px", "64",
-            "--margin-points", "12",
+            "--margin-points", "1",
             "--max-width-ratio", "0.80",
             "--max-height-ratio", "0.80",
             "--min-density", "0.08",

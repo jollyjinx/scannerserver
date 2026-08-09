@@ -543,6 +543,7 @@ private struct ModeSaveForm: Decodable {
     let ocrEnabled: String?
     let removeBlankPages: String?
     let cropPages: String?
+    let cropMarginPoints: String?
     let setDefault: String?
 
     enum CodingKeys: String, CodingKey {
@@ -558,6 +559,7 @@ private struct ModeSaveForm: Decodable {
         case ocrEnabled = "SCAN_OCR_ENABLED"
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
+        case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
         case setDefault = "set_default"
     }
 
@@ -574,6 +576,7 @@ private struct ModeSaveForm: Decodable {
             "SCAN_OCR_ENABLED": ocrEnabled == nil ? "false" : "true",
             "SCAN_REMOVE_BLANK_PAGES": removeBlankPages == nil ? "false" : "true",
             "SCAN_CROP_PAGES": cropPages == nil ? "false" : "true",
+            "SCAN_CROP_MARGIN_POINTS": cropMarginPoints ?? "",
         ])
     }
 }
@@ -887,20 +890,69 @@ private func renderModes(
         let badge = mode.id == settings.defaultModeID ? " <span class=\"default-badge\">button</span>" : ""
         html += "<li><strong>\(htmlEscape(mode.name))</strong>\(badge)<div class=\"muted\">\(htmlEscape(modeSummary(mode)))</div></li>"
     }
-    html += "</ul><form method=\"get\" action=\"/\"><label>Edit mode<select name=\"edit_mode\">"
+    html += "</ul><form class=\"mode-load-form\" method=\"get\" action=\"/\"><label>Edit mode<select name=\"edit_mode\">"
     for mode in settings.modes {
         html += option(value: mode.id, label: mode.name, selected: mode.id == selectedMode.id)
     }
     html += option(value: "new", label: "New mode", selected: selectedMode.id.isEmpty)
     html += "</select></label><button class=\"secondary-button\">Load</button></form>"
-    html += "<form class=\"stack-form\" method=\"post\" action=\"/modes/save\">"
-    html += "<input type=\"hidden\" name=\"mode_id\" value=\"\(htmlEscape(selectedMode.id))\"><div class=\"settings-grid\">"
-    html += "<label>Name<input name=\"name\" value=\"\(htmlEscape(selectedMode.name))\"></label>"
-    html += select(name: "SCAN_SIMPLEX", label: "Sides", values: [("false", "Duplex"), ("true", "Simplex")], selected: selectedMode.settings.simplexText)
-    html += select(name: "SCAN_FORMAT", label: "Output", values: [("pdf", "PDF"), ("png", "PNG pages")], selected: selectedMode.settings.format)
-    html += select(name: "SCAN_PAGE_MODE", label: "Pages", values: [("multi", "Multipage file"), ("single", "One file per page")], selected: selectedMode.settings.pageMode)
-    html += select(name: "SCAN_RESOLUTION", label: "Resolution", values: ["200", "300", "400", "600"].map { ($0, "\($0) dpi") }, selected: selectedMode.settings.resolution)
-    html += select(name: "SCAN_MODE", label: "Color mode", values: ["Color", "Gray", "Lineart"].map { ($0, $0) }, selected: selectedMode.settings.mode)
+    html += "<form class=\"mode-editor-form\" method=\"post\" action=\"/modes/save\">"
+    html += "<input type=\"hidden\" name=\"mode_id\" value=\"\(htmlEscape(selectedMode.id))\">"
+    html += "<fieldset class=\"setting-group\"><legend>Document</legend>"
+    html += "<div class=\"settings-grid settings-grid-four\">"
+    html += textInput(
+        name: "name",
+        label: "Name",
+        value: selectedMode.name,
+        help: "A label for this reusable scan mode."
+    )
+    html += select(
+        name: "SCAN_SIMPLEX",
+        label: "Sides",
+        values: [("false", "Duplex"), ("true", "Simplex")],
+        selected: selectedMode.settings.simplexText,
+        help: "Duplex scans both sides; simplex scans only the front."
+    )
+    html += select(
+        name: "SCAN_FORMAT",
+        label: "Output",
+        values: [("pdf", "PDF"), ("png", "PNG pages")],
+        selected: selectedMode.settings.format,
+        help: "Create a PDF document or one PNG image per scanned page."
+    )
+    html += select(
+        name: "SCAN_PAGE_MODE",
+        label: "Pages",
+        values: [("multi", "Multipage file"), ("single", "One file per page")],
+        selected: selectedMode.settings.pageMode,
+        help: "Combine pages into one PDF or save one PDF per page."
+    )
+    html += "</div></fieldset>"
+    html += "<fieldset class=\"setting-group\"><legend>Scan quality</legend>"
+    html += "<div class=\"settings-grid settings-grid-two\">"
+    html += select(
+        name: "SCAN_RESOLUTION",
+        label: "Resolution",
+        values: ["200", "300", "400", "600"].map { ($0, "\($0) dpi") },
+        selected: selectedMode.settings.resolution,
+        help: "Requested scan resolution. The iX500 Wi-Fi backend does not expose this control."
+    )
+    html += select(
+        name: "SCAN_MODE",
+        label: "Color mode",
+        values: ["Color", "Gray", "Lineart"].map { ($0, $0) },
+        selected: selectedMode.settings.mode,
+        help: "Requested color processing. The iX500 Wi-Fi backend does not expose this control."
+    )
+    html += "</div></fieldset>"
+    html += "<fieldset class=\"setting-group\"><legend>Processing</legend>"
+    html += "<div class=\"processing-grid\"><div class=\"setting-card\">"
+    html += checkbox(
+        name: "SCAN_OCR_ENABLED",
+        label: "OCR",
+        checked: selectedMode.settings.ocrEnabled,
+        help: "Create searchable text in the background for PDF output."
+    )
     html += select(
         name: "SCAN_LANGUAGE",
         label: "OCR language",
@@ -909,15 +961,41 @@ private func renderModes(
             ("deu", "German"),
             ("eng", "English"),
         ],
-        selected: selectedMode.settings.language
+        selected: selectedMode.settings.language,
+        help: "Languages used by Tesseract when OCR is enabled."
     )
-    html += "</div>"
-    html += "<div class=\"checkbox-grid\">"
-    html += checkbox(name: "SCAN_OCR_ENABLED", label: "OCR", checked: selectedMode.settings.ocrEnabled)
-    html += checkbox(name: "SCAN_CROP_PAGES", label: "Autocrop", checked: selectedMode.settings.cropPages)
-    html += checkbox(name: "SCAN_REMOVE_BLANK_PAGES", label: "Remove blanks", checked: selectedMode.settings.removeBlankPages)
-    html += checkbox(name: "set_default", label: "Button default", checked: selectedMode.id == settings.defaultModeID)
-    html += "</div><div class=\"button-row\"><button>Save mode</button>"
+    html += "</div><div class=\"setting-card\">"
+    html += checkbox(
+        name: "SCAN_CROP_PAGES",
+        label: "Autocrop",
+        checked: selectedMode.settings.cropPages,
+        help: "Trim scanner-bed borders around detected paper before OCR."
+    )
+    html += numberInput(
+        name: "SCAN_CROP_MARGIN_POINTS",
+        label: "Crop margin",
+        value: selectedMode.settings.cropMarginPointsText,
+        minimum: "0",
+        step: "0.1",
+        help: "Extra space kept around detected content after autocropping, in PDF points (1 pt = 1/72 inch)."
+    )
+    html += "</div><div class=\"setting-card\">"
+    html += checkbox(
+        name: "SCAN_REMOVE_BLANK_PAGES",
+        label: "Remove blanks",
+        checked: selectedMode.settings.removeBlankPages,
+        help: "Discard pages detected as blank before OCR for PDF output."
+    )
+    html += "</div></div></fieldset>"
+    html += "<fieldset class=\"setting-group\"><legend>Physical button</legend>"
+    html += "<div class=\"button-setting-card\">"
+    html += checkbox(
+        name: "set_default",
+        label: "Button default",
+        checked: selectedMode.id == settings.defaultModeID,
+        help: "Use this mode when the scanner's physical button is pressed."
+    )
+    html += "</div></fieldset><div class=\"mode-actions button-row\"><button>Save mode</button>"
     if !selectedMode.id.isEmpty {
         html += "<button class=\"danger-button\" formaction=\"/modes/delete\">Delete mode</button>"
     }
@@ -991,7 +1069,9 @@ private func modeSummary(_ mode: ScanMode) -> String {
     let output = value.format == "png" ? "PNG pages" : "PDF"
     let pages = value.pageMode == "single" ? "single pages" : "multipage"
     let ocr = value.ocrEnabled ? "OCR on" : "OCR off"
-    let crop = value.cropPages ? "autocrop on" : "autocrop off"
+    let crop = value.cropPages
+        ? "autocrop on (\(value.cropMarginPointsText) pt margin)"
+        : "autocrop off"
     return "\(sides), \(output), \(pages), \(ocr), \(crop), \(value.resolution) dpi \(value.mode)"
 }
 
@@ -1010,14 +1090,44 @@ private func option(value: String, label: String, selected: Bool) -> String {
     "<option value=\"\(htmlEscape(value))\"\(selected ? " selected" : "")>\(htmlEscape(label))</option>"
 }
 
-private func select(name: String, label: String, values: [(String, String)], selected: String) -> String {
-    "<label>\(htmlEscape(label))<select name=\"\(htmlEscape(name))\">"
-        + values.map { option(value: $0.0, label: $0.1, selected: $0.0 == selected) }.joined()
-        + "</select></label>"
+private func textInput(name: String, label: String, value: String, help: String) -> String {
+    "<label>\(htmlEscape(label))<input name=\"\(htmlEscape(name))\" value=\"\(htmlEscape(value))\">"
+        + settingHelp(help) + "</label>"
 }
 
-private func checkbox(name: String, label: String, checked: Bool) -> String {
-    "<label><input type=\"checkbox\" name=\"\(htmlEscape(name))\"\(checked ? " checked" : "")> \(htmlEscape(label))</label>"
+private func numberInput(
+    name: String,
+    label: String,
+    value: String,
+    minimum: String,
+    step: String,
+    help: String
+) -> String {
+    "<label>\(htmlEscape(label))<input type=\"number\" name=\"\(htmlEscape(name))\" "
+        + "value=\"\(htmlEscape(value))\" min=\"\(htmlEscape(minimum))\" "
+        + "step=\"\(htmlEscape(step))\">\(settingHelp(help))</label>"
+}
+
+private func select(
+    name: String,
+    label: String,
+    values: [(String, String)],
+    selected: String,
+    help: String
+) -> String {
+    "<label>\(htmlEscape(label))<select name=\"\(htmlEscape(name))\">"
+        + values.map { option(value: $0.0, label: $0.1, selected: $0.0 == selected) }.joined()
+        + "</select>\(settingHelp(help))</label>"
+}
+
+private func checkbox(name: String, label: String, checked: Bool, help: String) -> String {
+    "<label class=\"checkbox-setting\"><span><input type=\"checkbox\" name=\"\(htmlEscape(name))\""
+        + "\(checked ? " checked" : "")> \(htmlEscape(label))</span>"
+        + settingHelp(help) + "</label>"
+}
+
+private func settingHelp(_ help: String) -> String {
+    "<span class=\"setting-help\">\(htmlEscape(help))</span>"
 }
 
 private func setupMessage(_ code: String?) -> String? {

@@ -12,6 +12,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         "SCAN_OCR_ENABLED",
         "SCAN_REMOVE_BLANK_PAGES",
         "SCAN_CROP_PAGES",
+        "SCAN_CROP_MARGIN_POINTS",
     ]
 
     public let language: String

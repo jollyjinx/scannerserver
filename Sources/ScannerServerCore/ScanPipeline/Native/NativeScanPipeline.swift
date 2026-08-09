@@ -467,7 +467,7 @@ struct DocumentProcessingOptions {
         blankDebug = Self.nonEmpty(environment["SCAN_BLANK_DEBUG"]) != nil
         backgroundDelta = try Self.integer(environment, key: "SCAN_CROP_BACKGROUND_DELTA", default: 8)
         borderPixels = try Self.integer(environment, key: "SCAN_CROP_BORDER_PX", default: 64)
-        marginPoints = try Self.double(environment, key: "SCAN_CROP_MARGIN_POINTS", default: 12.0)
+        marginPoints = try Self.double(environment, key: "SCAN_CROP_MARGIN_POINTS", default: 1.0)
         maximumWidthRatio = try Self.double(environment, key: "SCAN_CROP_MAX_WIDTH_RATIO", default: 0.80)
         maximumHeightRatio = try Self.double(environment, key: "SCAN_CROP_MAX_HEIGHT_RATIO", default: 0.80)
         minimumDensity = try Self.double(environment, key: "SCAN_CROP_MIN_DENSITY", default: 0.08)

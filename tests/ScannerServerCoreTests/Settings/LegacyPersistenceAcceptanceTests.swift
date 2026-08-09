@@ -52,6 +52,7 @@ struct LegacyPersistenceAcceptanceTests {
         #expect(receipts.settings.ocrEnabled)
         #expect(receipts.settings.removeBlankPages)
         #expect(!receipts.settings.cropPages)
+        #expect(receipts.settings.cropMarginPoints == 1.0)
 
         let archivePhoto = try #require(settings.mode(id: "archive-photo"))
         #expect(archivePhoto.settings.language == "eng")
@@ -64,6 +65,7 @@ struct LegacyPersistenceAcceptanceTests {
         #expect(!archivePhoto.settings.ocrEnabled)
         #expect(!archivePhoto.settings.removeBlankPages)
         #expect(archivePhoto.settings.cropPages)
+        #expect(archivePhoto.settings.cropMarginPoints == 1.0)
     }
 
     private func verifyScanner(_ scanner: ScannerConfig) {
@@ -93,7 +95,11 @@ struct LegacyPersistenceAcceptanceTests {
         let modes = try #require(settingsObject["modes"] as? [[String: Any]])
         #expect(modes.count == 2)
         #expect(modes.allSatisfy { Set($0.keys) == ["id", "name", "settings"] })
-        let expectedSettingKeys = Set(ModeSettings.EnvironmentKey.allCases.map(\.rawValue))
+        let expectedSettingKeys = Set(
+            ModeSettings.EnvironmentKey.allCases
+                .filter { $0 != .cropMarginPoints }
+                .map(\.rawValue)
+        )
         for mode in modes {
             let values = try #require(mode["settings"] as? [String: Any])
             #expect(Set(values.keys) == expectedSettingKeys)

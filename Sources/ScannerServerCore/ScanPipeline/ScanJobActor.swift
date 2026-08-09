@@ -1,5 +1,10 @@
 import Foundation
 
+public enum ScanJobEvent: Sendable, Hashable {
+    case started
+    case finished(succeeded: Bool)
+}
+
 public struct ScanJobState: Equatable, Sendable {
     public var started: Date?
     public var finished: Date?
@@ -23,11 +28,15 @@ public struct ScanJobState: Equatable, Sendable {
 }
 
 public actor ScanJobActor {
+    public typealias EventHandler = @Sendable (ScanJobEvent) async -> Void
+
     public nonisolated let webUpdates: WebUpdateNotifier
     private let nativeScanner: any NativeScanExecuting
     private let ocrQueue: OCRQueueActor?
     private var worker: Task<Void, Never>?
     private var jobState = ScanJobState()
+    private var eventContinuations: [UUID: AsyncStream<ScanJobEvent>.Continuation] = [:]
+    private var eventHandlers: [UUID: EventHandler] = [:]
 
     public init(
         nativeScanner: any NativeScanExecuting,
@@ -41,12 +50,35 @@ public actor ScanJobActor {
 
     public var state: ScanJobState { jobState }
 
+    public func eventStream() -> AsyncStream<ScanJobEvent> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<ScanJobEvent>.makeStream(
+            bufferingPolicy: .bufferingNewest(16)
+        )
+        eventContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeEventContinuation(id) }
+        }
+        return stream
+    }
+
+    @discardableResult
+    public func addEventHandler(_ handler: @escaping EventHandler) -> UUID {
+        let id = UUID()
+        eventHandlers[id] = handler
+        return id
+    }
+
+    public func removeEventHandler(_ id: UUID) {
+        eventHandlers.removeValue(forKey: id)
+    }
+
     @discardableResult
     public func start(configuration: ScanPipelineConfiguration) async -> Bool {
-        guard worker == nil else { return false }
+        guard worker == nil, jobState.status != "running" else { return false }
 
         jobState = ScanJobState(started: Date(), status: "running")
-        await webUpdates.notify()
+        await publish(.started)
         worker = Task {
             do {
                 let result = try await nativeScanner.scan(configuration: configuration)
@@ -57,6 +89,7 @@ public actor ScanJobActor {
                 await finish(error: error)
             }
         }
+        await webUpdates.notify()
         return true
     }
 
@@ -93,6 +126,7 @@ public actor ScanJobActor {
             }
         }
         worker = nil
+        await publish(.finished(succeeded: result.succeeded))
         await webUpdates.notify()
     }
 
@@ -100,6 +134,7 @@ public actor ScanJobActor {
         jobState.finished = Date()
         jobState.status = "cancelled"
         worker = nil
+        await publish(.finished(succeeded: false))
         await webUpdates.notify()
     }
 
@@ -108,6 +143,21 @@ public actor ScanJobActor {
         jobState.status = "failed"
         jobState.error = error.localizedDescription
         worker = nil
+        await publish(.finished(succeeded: false))
         await webUpdates.notify()
+    }
+
+    private func publish(_ event: ScanJobEvent) async {
+        for continuation in eventContinuations.values {
+            continuation.yield(event)
+        }
+        let handlers = Array(eventHandlers.values)
+        for handler in handlers {
+            await handler(event)
+        }
+    }
+
+    private func removeEventContinuation(_ id: UUID) {
+        eventContinuations.removeValue(forKey: id)
     }
 }

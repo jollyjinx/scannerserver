@@ -22,12 +22,15 @@ public struct ScanSnapButtonLifecycleState: Sendable, Hashable {
     public let boundPort: UInt16?
     public let isArmed: Bool
     public let isArming: Bool
+    public let isOnline: Bool
     public let buttonScanInFlight: Bool
     public let rearmRequested: Bool
     public let nextArmAtMilliseconds: UInt64?
     public let nextReachabilityAtMilliseconds: UInt64
     public let lastButtonStartedAtMilliseconds: UInt64?
     public let lastScanCompletedAtMilliseconds: UInt64?
+    public let lastStartupAdvertisementAtMilliseconds: UInt64?
+    public let lastReachableAtMilliseconds: UInt64?
 }
 
 public actor ScanSnapButtonLifecycleActor {
@@ -38,6 +41,7 @@ public actor ScanSnapButtonLifecycleActor {
     private let scanDispatcher: any ScanSnapButtonScanDispatching
     private let reachability: any ScanSnapButtonReachabilityChecking
     private let armer: any ScanSnapButtonArming
+    private let heartbeat: any ScanSnapButtonHeartbeatControlling
     private let clock: any ScanSnapButtonClock
     private let sleeper: any ScanSnapSleeper
 
@@ -56,6 +60,7 @@ public actor ScanSnapButtonLifecycleActor {
     private var boundPort: UInt16?
     private var isArmed = false
     private var isArming = false
+    private var isOnline = false
     private var buttonScanInFlight = false
     private var rearmRequested = false
     private var recoveryArmRequested = false
@@ -63,6 +68,8 @@ public actor ScanSnapButtonLifecycleActor {
     private var nextReachabilityAtMilliseconds: UInt64 = 0
     private var lastButtonStartedAtMilliseconds: UInt64?
     private var lastScanCompletedAtMilliseconds: UInt64?
+    private var lastStartupAdvertisementAtMilliseconds: UInt64?
+    private var lastReachableAtMilliseconds: UInt64?
     private var lastScannerConfiguration: ScanSnapButtonScannerConfiguration?
 
     public init(
@@ -73,6 +80,7 @@ public actor ScanSnapButtonLifecycleActor {
         scanDispatcher: any ScanSnapButtonScanDispatching,
         reachability: any ScanSnapButtonReachabilityChecking = ScanSnapButtonTCPReachabilityChecker(),
         armer: any ScanSnapButtonArming = ScanSnapButtonSessionArmer(),
+        heartbeat: any ScanSnapButtonHeartbeatControlling = NoopScanSnapButtonHeartbeat(),
         clock: any ScanSnapButtonClock = SystemScanSnapButtonClock(),
         sleeper: any ScanSnapSleeper = TaskScanSnapSleeper()
     ) {
@@ -83,6 +91,7 @@ public actor ScanSnapButtonLifecycleActor {
         self.scanDispatcher = scanDispatcher
         self.reachability = reachability
         self.armer = armer
+        self.heartbeat = heartbeat
         self.clock = clock
         self.sleeper = sleeper
     }
@@ -170,6 +179,7 @@ public actor ScanSnapButtonLifecycleActor {
         isRunning = false
         isArming = false
         isArmed = false
+        isOnline = false
         buttonScanInFlight = false
         rearmRequested = false
         recoveryArmRequested = false
@@ -177,6 +187,7 @@ public actor ScanSnapButtonLifecycleActor {
         lastScannerConfiguration = nil
         listener?.cancel()
         arming?.cancel()
+        await heartbeat.stop()
         await transport?.close()
         await listener?.value
         await arming?.value
@@ -301,6 +312,8 @@ public actor ScanSnapButtonLifecycleActor {
         do {
             guard let configuredScanner = try await scannerProvider.currentButtonScannerConfiguration() else {
                 guard isCurrentLifecycle(lifecycleGeneration) else { return }
+                await heartbeat.stop()
+                guard isCurrentLifecycle(lifecycleGeneration) else { return }
                 resetForMissingScanner(retryAt: adding(configuration.reachabilityIntervalMilliseconds, to: now))
                 return
             }
@@ -331,7 +344,18 @@ public actor ScanSnapButtonLifecycleActor {
             return
         }
         if isArmed, let nextArmAtMilliseconds, now >= nextArmAtMilliseconds {
-            beginArming(scanner: scanner, lifecycleGeneration: lifecycleGeneration)
+            await beginArmingAfterStoppingHeartbeat(
+                scanner: scanner,
+                lifecycleGeneration: lifecycleGeneration
+            )
+            return
+        }
+        if isArmed, now >= nextReachabilityAtMilliseconds {
+            await checkArmedHealth(
+                scanner: scanner,
+                now: now,
+                lifecycleGeneration: lifecycleGeneration
+            )
             return
         }
         if !isArmed, now >= nextReachabilityAtMilliseconds {
@@ -348,6 +372,7 @@ public actor ScanSnapButtonLifecycleActor {
         let now = await clock.nowMilliseconds()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
         scanDidFinish(succeeded: succeeded, atMilliseconds: now)
+        await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
     }
 
     public func scanDidFinish(succeeded: Bool = true, atMilliseconds now: UInt64) {
@@ -360,9 +385,54 @@ public actor ScanSnapButtonLifecycleActor {
         recoveryArmRequested = recoveryArmRequested || !succeeded
     }
 
+    public func scanDidStart() async {
+        guard acceptsLifecycleOperations else { return }
+        isArmed = false
+        nextArmAtMilliseconds = nil
+        cancelArming()
+        await heartbeat.stop()
+    }
+
+    public func scannerDidAdvertiseStartup(_ advertisement: ScanSnapStartupAdvertisement) async {
+        let lifecycleGeneration = lifecycleGeneration
+        let now = await clock.nowMilliseconds()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
+
+        let scanner: ScanSnapButtonScannerConfiguration
+        do {
+            guard let configuredScanner = try await scannerProvider.currentButtonScannerConfiguration() else {
+                return
+            }
+            scanner = configuredScanner
+        } catch {
+            return
+        }
+        guard isCurrentLifecycle(lifecycleGeneration),
+              advertisement.scannerIPAddress == scanner.scannerIPAddress
+        else {
+            return
+        }
+
+        let previousAdvertisementAtMilliseconds = lastStartupAdvertisementAtMilliseconds
+        lastStartupAdvertisementAtMilliseconds = now
+        isOnline = true
+        if isWithin(
+            configuration.startupRearmDebounceMilliseconds,
+            of: previousAdvertisementAtMilliseconds,
+            at: now
+        ) {
+            return
+        }
+        JLog.notice("ScanSnap startup advertisement received from \(advertisement.scannerIPAddress)")
+        requestRearm()
+        await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
+    }
+
     public func scannerConfigurationDidChange() async {
         let lifecycleGeneration = lifecycleGeneration
         let now = await clock.nowMilliseconds()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        await heartbeat.stop()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
         resetForScannerChange(atMilliseconds: now)
         await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
@@ -384,12 +454,15 @@ public actor ScanSnapButtonLifecycleActor {
             boundPort: boundPort,
             isArmed: isArmed,
             isArming: isArming,
+            isOnline: isOnline,
             buttonScanInFlight: buttonScanInFlight,
             rearmRequested: rearmRequested,
             nextArmAtMilliseconds: nextArmAtMilliseconds,
             nextReachabilityAtMilliseconds: nextReachabilityAtMilliseconds,
             lastButtonStartedAtMilliseconds: lastButtonStartedAtMilliseconds,
-            lastScanCompletedAtMilliseconds: lastScanCompletedAtMilliseconds
+            lastScanCompletedAtMilliseconds: lastScanCompletedAtMilliseconds,
+            lastStartupAdvertisementAtMilliseconds: lastStartupAdvertisementAtMilliseconds,
+            lastReachableAtMilliseconds: lastReachableAtMilliseconds
         )
     }
 
@@ -526,6 +599,8 @@ public actor ScanSnapButtonLifecycleActor {
         lifecycleGeneration: UInt64
     ) async {
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
+        await heartbeat.stop()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
         nextReachabilityAtMilliseconds = adding(configuration.reachabilityIntervalMilliseconds, to: now)
         let scannerConfigurationGeneration = scannerConfigurationGeneration
         let reachable = await reachability.isReachable(
@@ -540,9 +615,49 @@ public actor ScanSnapButtonLifecycleActor {
             return
         }
         guard reachable else {
+            isOnline = false
             isArmed = false
             return
         }
+        isOnline = true
+        lastReachableAtMilliseconds = now
+        await beginArmingAfterStoppingHeartbeat(
+            scanner: scanner,
+            lifecycleGeneration: lifecycleGeneration
+        )
+    }
+
+    private func checkArmedHealth(
+        scanner: ScanSnapButtonScannerConfiguration,
+        now: UInt64,
+        lifecycleGeneration: UInt64
+    ) async {
+        let reachable = await reachability.isReachable(
+            scanner: scanner,
+            port: configuration.reachabilityPort,
+            timeoutMilliseconds: configuration.reachabilityTimeoutMilliseconds
+        )
+        guard isCurrentLifecycle(lifecycleGeneration), scanner == lastScannerConfiguration else { return }
+        if reachable {
+            isOnline = true
+            lastReachableAtMilliseconds = now
+            nextReachabilityAtMilliseconds = adding(configuration.healthCheckIntervalMilliseconds, to: now)
+        } else {
+            isOnline = false
+            isArmed = false
+            nextArmAtMilliseconds = nil
+            nextReachabilityAtMilliseconds = adding(configuration.reachabilityIntervalMilliseconds, to: now)
+            await heartbeat.stop()
+            JLog.warning("ScanSnap button session marked offline after reachability check failed")
+        }
+    }
+
+    private func beginArmingAfterStoppingHeartbeat(
+        scanner: ScanSnapButtonScannerConfiguration,
+        lifecycleGeneration: UInt64
+    ) async {
+        await heartbeat.stop()
+        guard isCurrentLifecycle(lifecycleGeneration) else { return }
         beginArming(scanner: scanner, lifecycleGeneration: lifecycleGeneration)
     }
 
@@ -593,6 +708,12 @@ public actor ScanSnapButtonLifecycleActor {
         if succeeded {
             recoveryArmRequested = false
             nextArmAtMilliseconds = adding(configuration.armIntervalMilliseconds, to: now)
+            nextReachabilityAtMilliseconds = adding(configuration.healthCheckIntervalMilliseconds, to: now)
+            isOnline = true
+            lastReachableAtMilliseconds = now
+            if let scanner = lastScannerConfiguration {
+                await heartbeat.start(scanner: scanner, configuration: configuration)
+            }
             JLog.notice("ScanSnap button client armed")
         } else {
             nextArmAtMilliseconds = nil
@@ -611,6 +732,7 @@ public actor ScanSnapButtonLifecycleActor {
         scannerConfigurationGeneration &+= 1
         cancelArming()
         lastScannerConfiguration = nil
+        isOnline = false
         isArmed = false
         nextArmAtMilliseconds = nil
         nextReachabilityAtMilliseconds = retryAt
@@ -620,6 +742,7 @@ public actor ScanSnapButtonLifecycleActor {
         scannerConfigurationGeneration &+= 1
         cancelArming()
         lastScannerConfiguration = nil
+        isOnline = false
         isArmed = false
         nextArmAtMilliseconds = nil
         nextReachabilityAtMilliseconds = now

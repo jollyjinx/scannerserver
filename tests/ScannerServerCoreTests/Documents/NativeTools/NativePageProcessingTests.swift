@@ -19,6 +19,7 @@ struct NativePageProcessingTests {
         ).isBlank)
 
         let cropOptions = try NativeCropPDFPagesOptions(arguments: ["scan.pdf"])
+        #expect(cropOptions.marginPoints == 1.0)
         let image = NativeDocumentImageDimensions(width: 100, height: 100)
         #expect(NativeCropPageDecision.evaluate(
             image: image,

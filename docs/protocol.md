@@ -17,6 +17,7 @@ Important ports:
 | Port | Purpose |
 | --- | --- |
 | UDP `52217` | ScanSnap discovery/registration |
+| UDP `53220` | Scanner startup/power-on advertisement listener in this app |
 | TCP `53219` | Pairing/control handshake |
 | TCP `53218` | Scan control/data |
 | UDP `55265` | Button notice listener in this app |
@@ -59,7 +60,8 @@ The Ethernet/MAC address is not sufficient to calculate the password or pairing 
 
 The routed path and its firewall must still permit UDP `52217` for discovery/registration and TCP
 `53218`/`53219` for scanner control and data. Physical-button delivery additionally requires the
-scanner to reach the service on UDP `55265`.
+scanner to reach the service on UDP `55265`; power-on detection requires its UDP `53220` startup
+advertisement to reach the service.
 
 ## Pairing Key From Serial Number
 
@@ -114,14 +116,58 @@ If the scanner password was changed in ScanSnap Wireless Setup Tool, use that pa
 
 The Ethernet/MAC address is not part of this calculation. This derivation is also documented by [`mzyy94/AirScap`](https://github.com/mzyy94/AirScap/blob/master/protocol.en.md).
 
+### Long Password Hardware Validation
+
+The Wireless Setup Tool permits scanner passwords up to 16 characters. For printable ASCII,
+the derived decimal pairing identity normally uses three bytes per password character and can
+therefore require up to 48 bytes.
+
+Real-iX500 validation confirmed that the existing 128-byte VENS `0x11` reservation frame accepts
+the complete identity in bytes `52..<100`. A scanner configured with a six-character password
+rejected the identity truncated to 16 bytes with status `-1` and accepted the complete 18-byte
+identity with status `0`. The larger 384-byte reservation variant was consequently not required
+for that scanner.
+
+Both the Swift VENS packet builder and the container's patched `scansnap-wifi` binary populate
+the complete 48-byte identity field. The `scansnap-wifi --getkey` capture path also reads all 48
+bytes so identities captured from official software are not truncated.
+
+Run the opt-in diagnostic with credentials supplied only through the process environment:
+
+```bash
+SCANNERSERVER_RUN_SCANSNAP_HARDWARE_TESTS=1 \
+SCANSNAP_TEST_IP=SCANNER_IP \
+SCANSNAP_TEST_PASSWORD=SCANNER_PASSWORD \
+swift test --filter ScanSnapLongPasswordHardwareTests
+```
+
+The test first verifies that the legacy 16-byte truncation is rejected, then tries the complete
+identity in the 128-byte frame. It tries the 384-byte official-password reservation frame only if
+the full-width 128-byte frame is rejected. Successful probes release their temporary scanner
+session before returning. Never commit the hardware password or a generated pairing identity.
+
 ## Physical Button Support
 
-The app periodically arms itself with the scanner by:
+Button "arming" is a volatile session registration inside the scanner; it is not a local boolean
+or a permanent configuration setting. Power loss, another client claiming the scanner, and the
+ScanSnap scan/release sequence can discard that registration. The app establishes it by:
 
 1. Registering over UDP `52217`.
 2. Completing the TCP `53219` pairing handshake.
 3. Running the TCP `53218` init sequence.
 4. Listening for button notices on UDP `55265`.
+5. Retaining the session with a VENS heartbeat to UDP `52217` every 500 ms while armed.
+
+The scanner sends a 48-byte VENS command `0x21` startup advertisement to UDP `53220`. The app
+validates the advertised scanner IP, folds repeated packets into one boot burst, marks the scanner
+online, and immediately establishes a fresh button session. A 10-second TCP health check tracks
+offline state. A full five-minute re-arm remains only as a safety net.
+
+Every scan start stops the heartbeat because acquisition owns the scanner session. Every scan
+completion immediately re-arms, whether the scan came from the physical button or the web UI.
+Failed and cancelled scans use the recovery arm path, which releases stale state first. This is
+why re-arming is necessary: the scanner-side notification registration does not reliably survive
+an acquisition session.
 
 If scanner setup has not been completed yet, the listener waits and starts arming after setup saves a scanner. When a notice arrives from the configured scanner IP, the app starts a scan with the saved button-default mode.
 
@@ -134,6 +180,7 @@ Useful log lines:
 
 ```text
 ScanSnap button client armed
+ScanSnap startup advertisement received from <scanner-ip>
 Started scan from scanner button notice from <scanner-ip>
 ```
 

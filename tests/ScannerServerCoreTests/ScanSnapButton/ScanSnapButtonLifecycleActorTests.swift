@@ -173,6 +173,68 @@ func freshSetupWaitsForInitialButtonArming() async {
     #expect(await armer.calls.count == 1)
 }
 
+@Test("Startup advertisements re-arm once per boot advertisement burst")
+func startupAdvertisementRearmsAfterPowerOn() async {
+    let reachability = ButtonFakeReachability([true, true, true])
+    let armer = ButtonFakeArmer()
+    let heartbeat = ButtonFakeHeartbeat()
+    let clock = ButtonFakeClock(1_000)
+    let lifecycle = makeLifecycle(
+        configuration: ScanSnapButtonConfiguration(startupRearmDebounceMilliseconds: 3_000),
+        reachability: reachability,
+        armer: armer,
+        heartbeat: heartbeat,
+        clock: clock
+    )
+
+    await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    #expect(await eventually { await armer.calls.count == 1 })
+    #expect(await eventually { await heartbeat.startCalls.count == 1 })
+
+    let advertisement = ScanSnapStartupAdvertisement(
+        scannerIPAddress: "192.168.1.44",
+        scannerMACAddress: "02:11:22:33:44:55"
+    )
+    await clock.set(10_000)
+    await lifecycle.scannerDidAdvertiseStartup(advertisement)
+    #expect(await eventually { await armer.calls.count == 2 })
+    #expect(await lifecycle.state.lastStartupAdvertisementAtMilliseconds == 10_000)
+
+    await clock.set(11_000)
+    await lifecycle.scannerDidAdvertiseStartup(advertisement)
+    #expect(await armer.calls.count == 2)
+
+    await clock.set(15_000)
+    await lifecycle.scannerDidAdvertiseStartup(advertisement)
+    #expect(await eventually { await armer.calls.count == 3 })
+}
+
+@Test("Scan completion immediately re-arms and restarts the heartbeat")
+func scanCompletionImmediatelyRearms() async {
+    let reachability = ButtonFakeReachability([true, true])
+    let armer = ButtonFakeArmer()
+    let heartbeat = ButtonFakeHeartbeat()
+    let clock = ButtonFakeClock(1_000)
+    let lifecycle = makeLifecycle(
+        reachability: reachability,
+        armer: armer,
+        heartbeat: heartbeat,
+        clock: clock
+    )
+
+    await lifecycle.runMaintenance(atMilliseconds: 1_000)
+    #expect(await eventually { await lifecycle.state.isArmed })
+    await lifecycle.scanDidStart()
+    #expect(!(await lifecycle.state.isArmed))
+
+    await clock.set(2_000)
+    await lifecycle.scanDidFinish()
+
+    #expect(await eventually { await armer.calls.count == 2 })
+    #expect(await eventually { await heartbeat.startCalls.count == 2 })
+    #expect(await lifecycle.state.isArmed)
+}
+
 @Test("Stop cancels listener and in-progress arming and closes UDP transport")
 func buttonLifecycleCancellationAndShutdown() async throws {
     let transport = ButtonFakeUDPTransport(boundPort: 50_555)
@@ -341,6 +403,7 @@ private func makeLifecycle(
     dispatcher: any ScanSnapButtonScanDispatching = ButtonFakeScanDispatcher(),
     reachability: any ScanSnapButtonReachabilityChecking = ButtonFakeReachability(),
     armer: any ScanSnapButtonArming = ButtonFakeArmer(),
+    heartbeat: any ScanSnapButtonHeartbeatControlling = NoopScanSnapButtonHeartbeat(),
     clock: any ScanSnapButtonClock = ButtonFakeClock(),
     sleeper: any ScanSnapSleeper = ButtonFakeSleeper()
 ) -> ScanSnapButtonLifecycleActor {
@@ -352,6 +415,7 @@ private func makeLifecycle(
         scanDispatcher: dispatcher,
         reachability: reachability,
         armer: armer,
+        heartbeat: heartbeat,
         clock: clock,
         sleeper: sleeper
     )

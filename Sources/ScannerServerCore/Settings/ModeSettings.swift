@@ -18,6 +18,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         case ocrEnabled = "SCAN_OCR_ENABLED"
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
+        case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
     }
 
     public static let truthyValues: Set<String> = ["1", "true", "yes", "on"]
@@ -32,6 +33,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
     public var ocrEnabled: Bool
     public var removeBlankPages: Bool
     public var cropPages: Bool
+    public var cropMarginPoints: Double
 
     public init(
         language: String = "deu+eng",
@@ -43,7 +45,8 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         pageMode: String = "multi",
         ocrEnabled: Bool = true,
         removeBlankPages: Bool = true,
-        cropPages: Bool = true
+        cropPages: Bool = true,
+        cropMarginPoints: Double = 1.0
     ) {
         self.language = language
         self.resolution = resolution
@@ -55,6 +58,10 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         self.ocrEnabled = ocrEnabled
         self.removeBlankPages = removeBlankPages
         self.cropPages = cropPages
+        self.cropMarginPoints = Self.validCropMarginPoints(
+            cropMarginPoints,
+            fallback: 1.0
+        )
     }
 
     public init(values: [String: String], defaults: ModeSettings = .standard) {
@@ -84,6 +91,14 @@ public struct ModeSettings: Codable, Equatable, Sendable {
             values[EnvironmentKey.removeBlankPages.rawValue] ?? defaults.removeBlankPagesText
         )
         cropPages = Self.isTruthy(values[EnvironmentKey.cropPages.rawValue] ?? defaults.cropPagesText)
+        let requestedCropMargin = Double(value(
+            .cropMarginPoints,
+            fallback: defaults.cropMarginPointsText
+        ))
+        cropMarginPoints = Self.validCropMarginPoints(
+            requestedCropMargin,
+            fallback: defaults.cropMarginPoints
+        )
     }
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
@@ -116,6 +131,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
             EnvironmentKey.ocrEnabled.rawValue: ocrEnabledText,
             EnvironmentKey.removeBlankPages.rawValue: removeBlankPagesText,
             EnvironmentKey.cropPages.rawValue: cropPagesText,
+            EnvironmentKey.cropMarginPoints.rawValue: cropMarginPointsText,
         ]
     }
 
@@ -127,6 +143,18 @@ public struct ModeSettings: Codable, Equatable, Sendable {
     public var ocrEnabledText: String { Self.booleanText(ocrEnabled) }
     public var removeBlankPagesText: String { Self.booleanText(removeBlankPages) }
     public var cropPagesText: String { Self.booleanText(cropPages) }
+    public var cropMarginPointsText: String {
+        String(
+            format: "%.12g",
+            locale: Locale(identifier: "en_US_POSIX"),
+            cropMarginPoints
+        )
+    }
+
+    private static func validCropMarginPoints(_ value: Double?, fallback: Double) -> Double {
+        guard let value, value.isFinite, value >= 0 else { return fallback }
+        return value
+    }
 
     private var validFormat: String {
         ["pdf", "png"].contains(format) ? format : "pdf"
@@ -168,6 +196,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         case ocrEnabled = "SCAN_OCR_ENABLED"
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
+        case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
     }
 }
 

@@ -55,7 +55,7 @@ struct NativeDocumentToolIntegrationTests {
         let document = try NativePDFJSONDocument(data: Data(inspection.standardOutput.utf8))
         #expect(document.pageReferences.count == 2)
 
-        let expectedSizes = [(260.4, 823.68), (257.52, 828.0)]
+        let expectedSizes = [(238.4, 801.68), (235.52, 806.0)]
         for (index, expected) in expectedSizes.enumerated() {
             let box = try document.mediaBox(forPageAt: index)
             #expect(abs((box.right - box.left) - expected.0) < 0.02)

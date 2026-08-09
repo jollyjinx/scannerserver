@@ -6,10 +6,14 @@ func buttonEnvironmentConfiguration() {
     let configuration = ScanSnapButtonConfiguration(environment: [
         "SCANSNAP_BUTTON_SCAN_ENABLED": "off",
         "SCANSNAP_BUTTON_PORT": "50001",
+        "SCANSNAP_STARTUP_ADVERTISEMENT_PORT": "50005",
         "SCANSNAP_BUTTON_DEBOUNCE_SECONDS": "2.5",
         "SCANSNAP_BUTTON_COOLDOWN_SECONDS": "1.25",
         "SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS": "42",
         "SCANSNAP_BUTTON_ARM_TIMEOUT_SECONDS": "7.5",
+        "SCANSNAP_BUTTON_HEARTBEAT_INTERVAL_SECONDS": "0.4",
+        "SCANSNAP_BUTTON_HEALTH_INTERVAL_SECONDS": "8",
+        "SCANSNAP_BUTTON_STARTUP_REARM_DEBOUNCE_SECONDS": "2",
         "SCANSNAP_BUTTON_REACHABILITY_PORT": "50002",
         "SCANSNAP_BUTTON_REACHABILITY_TIMEOUT_SECONDS": "0.75",
         "SCANSNAP_BUTTON_REACHABILITY_INTERVAL_SECONDS": "4.5",
@@ -19,10 +23,14 @@ func buttonEnvironmentConfiguration() {
 
     #expect(!configuration.isEnabled)
     #expect(configuration.listenerPort == 50_001)
+    #expect(configuration.startupAdvertisementPort == 50_005)
     #expect(configuration.debounceMilliseconds == 2_500)
     #expect(configuration.cooldownMilliseconds == 1_250)
     #expect(configuration.armIntervalMilliseconds == 42_000)
     #expect(configuration.armTimeoutMilliseconds == 7_500)
+    #expect(configuration.heartbeatIntervalMilliseconds == 400)
+    #expect(configuration.healthCheckIntervalMilliseconds == 8_000)
+    #expect(configuration.startupRearmDebounceMilliseconds == 2_000)
     #expect(configuration.reachabilityPort == 50_002)
     #expect(configuration.reachabilityTimeoutMilliseconds == 750)
     #expect(configuration.reachabilityIntervalMilliseconds == 4_500)
@@ -42,6 +50,8 @@ func legacyButtonRegistrationInterval() {
     ])
 
     #expect(defaults.cooldownMilliseconds == 1_000)
+    #expect(defaults.armIntervalMilliseconds == 300_000)
+    #expect(defaults.heartbeatIntervalMilliseconds == 500)
     #expect(legacy.armIntervalMilliseconds == 17_000)
     #expect(currentWins.armIntervalMilliseconds == 11_000)
 }

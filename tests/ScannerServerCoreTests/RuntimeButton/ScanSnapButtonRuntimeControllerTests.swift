@@ -74,8 +74,11 @@ struct ScanSnapButtonRuntimeControllerTests {
 
         #expect(controller.isEligible)
         #expect(try await controller.start())
-        #expect(await factory.makeCallCount == 1)
-        #expect(await transport.bindCalls == [.anyIPv4(port: 50_001)])
+        #expect(await factory.makeCallCount == 2)
+        #expect(await transport.bindCalls == [
+            .anyIPv4(port: 50_001),
+            .anyIPv4(port: 53_220),
+        ])
         #expect(await controller.state().isRunning)
         #expect(await controller.state().boundPort == 50_555)
 
@@ -128,6 +131,58 @@ struct ScanSnapButtonRuntimeControllerTests {
 
         await coordinator.scannerConfigurationDidChange()
 
+        #expect(await controller.state().isArmed)
+        await controller.stop()
+    }
+
+    @Test("A web scan invalidates and immediately restores the button session")
+    func webScanRearmsButtonSession() async throws {
+        let directory = try runtimeButtonTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let environment = [
+            "SCAN_BACKEND": "wifi",
+            "SCAN_OUTPUT_DIR": directory.path,
+            "SCANSNAP_CLIENT_IP": "192.168.50.10",
+            "SCANSNAP_CLIENT_MAC": "02:11:22:33:44:55",
+        ]
+        let scannerStore = ScannerConfigStore(
+            fileURL: directory.appendingPathComponent("scanner.json"),
+            environment: environment
+        )
+        _ = try await scannerStore.save(ScannerConfig(
+            status: .configured,
+            scannerIP: "192.168.50.44",
+            pairingKey: "pairing-key"
+        ))
+        let executor = RuntimeButtonProcessExecutor()
+        let scanJobs = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
+        let armer = ButtonFakeArmer()
+        let controller = ScanSnapButtonRuntimeFactory.live(
+            environment: environment,
+            scannerStore: scannerStore,
+            settingsStore: ScanSettingsStore(
+                fileURL: directory.appendingPathComponent("settings.json"),
+                environment: environment
+            ),
+            scanJobs: scanJobs,
+            network: RuntimeButtonFakeNetwork(),
+            udpTransportFactory: RuntimeButtonFakeUDPFactory(),
+            reachability: ButtonFakeReachability([true, true]),
+            armer: armer,
+            clock: ButtonFakeClock(12_000)
+        )
+
+        #expect(try await controller.start())
+        #expect(await runtimeButtonEventually { await controller.state().isArmed })
+
+        #expect(await scanJobs.start(configuration: ScanPipelineConfiguration(environment: environment)))
+        #expect(await runtimeButtonEventually { !(await controller.state().isArmed) })
+        #expect(await runtimeButtonEventually { await executor.requests().count == 1 })
+
+        await executor.complete()
+        await scanJobs.waitUntilIdle()
+
+        #expect(await runtimeButtonEventually { await armer.calls.count == 2 })
         #expect(await controller.state().isArmed)
         await controller.stop()
     }

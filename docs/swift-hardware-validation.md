@@ -43,6 +43,19 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 - Verify `/scans/.scannerserver-scanner.json` is created, remains owned by the configured container UID/GID, and contains no transient file beside it.
 - Clear setup and confirm scanning is blocked until the scanner is configured again.
 
+For a scanner whose configured password derives to more than 16 identity bytes, run the opt-in
+long-password reservation diagnostic before the browser flow:
+
+```bash
+SCANNERSERVER_RUN_SCANSNAP_HARDWARE_TESTS=1 \
+SCANSNAP_TEST_IP=SCANNER_IP \
+SCANSNAP_TEST_PASSWORD=SCANNER_PASSWORD \
+swift test --filter ScanSnapLongPasswordHardwareTests
+```
+
+The credentials are read only from the test process environment. Do not add real scanner
+credentials to the repository or ordinary test fixtures.
+
 ## Scan And OCR
 
 - Run a duplex PDF scan from the web UI and confirm exactly one scan job starts.
@@ -56,13 +69,16 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 
 ## Physical Button
 
-- Leave the service idle until the configured arm interval has elapsed and confirm the scanner remains ready.
+- Confirm startup logs show the UDP `53220` listener and `ScanSnap button client armed`.
+- Power the scanner off, wait at least ten seconds, then power it on. Confirm a startup-advertisement log appears and the button session re-arms without waiting for the five-minute safety interval.
+- Leave the service idle for at least ten minutes and confirm the 500 ms heartbeat keeps the scanner button ready.
 - Press the physical scan button once and confirm one scan starts with the configured default mode and `SCAN_TRIGGER=button`.
 - Press repeatedly during debounce, cooldown, and an active scan; confirm no duplicate scan starts.
 - Wait for scan completion and confirm the session re-arms without restarting the container.
+- Start a scan from the web UI, wait for completion, then press the physical button and confirm it starts another scan immediately.
 - Press the button with an empty feeder, wait for the brief orange error indication to clear, then load paper and confirm the next button press scans without restarting the scanner or container.
 - Change the default mode and scanner configuration, then confirm the next button scan uses the new values.
-- Temporarily disconnect the scanner, reconnect it, and confirm reachability retry and periodic re-arming recover.
+- Temporarily disconnect the scanner, confirm it is marked offline by the health check, reconnect it, and confirm reachability retry recovers.
 
 ## Restart Compatibility
 

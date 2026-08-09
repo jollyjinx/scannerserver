@@ -239,6 +239,7 @@ struct ScannerServerApplicationTests {
                 "SCAN_RESOLUTION=600",
                 "SCAN_MODE=Gray",
                 "SCAN_LANGUAGE=eng",
+                "SCAN_CROP_MARGIN_POINTS=2.5",
                 "SCAN_OCR_ENABLED=on",
                 "SCAN_CROP_PAGES=on",
                 "set_default=on",
@@ -258,6 +259,7 @@ struct ScannerServerApplicationTests {
             #expect(mode.settings.ocrEnabled)
             #expect(!mode.settings.removeBlankPages)
             #expect(mode.settings.cropPages)
+            #expect(mode.settings.cropMarginPoints == 2.5)
             #expect(settings.defaultModeID == mode.id)
 
             try await client.execute(uri: "/?edit_mode=script-alert-1-script", method: .get) { response in
@@ -269,6 +271,19 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#"<option value="deu">German</option>"#))
                 #expect(body.contains(#"<option value="eng" selected>English</option>"#))
                 #expect(!body.contains(#"<input name="SCAN_LANGUAGE""#))
+                #expect(body.contains(#"name="SCAN_CROP_MARGIN_POINTS" value="2.5" min="0" step="0.1""#))
+                #expect(body.contains(#"class="mode-load-form""#))
+                #expect(body.contains(#"class="mode-editor-form""#))
+                #expect(body.contains("<legend>Document</legend>"))
+                #expect(body.contains("<legend>Scan quality</legend>"))
+                #expect(body.contains("<legend>Processing</legend>"))
+                #expect(body.contains("<legend>Physical button</legend>"))
+                #expect(body.components(separatedBy: #"class="setting-card""#).count - 1 == 3)
+                #expect(body.contains("Extra space kept around detected content after autocropping"))
+                #expect(body.contains("Duplex scans both sides; simplex scans only the front."))
+                #expect(body.contains("The iX500 Wi-Fi backend does not expose this control."))
+                #expect(body.contains("Create searchable text in the background for PDF output."))
+                #expect(body.contains("Use this mode when the scanner&#39;s physical button is pressed."))
             }
             try await postForm(client, uri: "/modes/delete", body: "mode_id=script-alert-1-script") { response in
                 expectRedirect(response, to: "/")

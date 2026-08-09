@@ -70,7 +70,7 @@ struct NativeCropPDFPagesOptions: Equatable, Sendable {
     let pdfPath: String
     var backgroundDelta = 8
     var borderPixels = 64
-    var marginPoints = 12.0
+    var marginPoints = 1.0
     var maximumWidthRatio = 0.80
     var maximumHeightRatio = 0.80
     var minimumDensity = 0.08

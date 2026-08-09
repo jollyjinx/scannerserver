@@ -20,6 +20,10 @@ The production ARM64 image passes its non-root container acceptance flow: health
 
 Browser acceptance against that image also passes: changing the physical-button default survives navigation, the PDF view route opens the fixture, and bulk deletion removes the selected document without losing the mode setting.
 
+The advanced mode editor persists the autocrop margin per mode, defaults it to one PDF point, and
+shows inline explanations for every mode control. Legacy mode files that omit the margin inherit
+the default without requiring a schema migration.
+
 ## Progress
 
 | Milestone | Status |
@@ -44,6 +48,11 @@ Validation on 2026-07-10 used the Mac's `vlan5` address, `10.112.10.129`. The re
 - A web scan reached the native `scansnap-wifi` acquisition path and reported `Scanning...`, then `No pages scanned` because no document was available in the feeder.
 - Physical button scans completed on 2026-07-10, including post-scan re-arm, source PDF download,
   blank/crop processing, searchable OCR output, and preview generation.
+- Long-password pairing validation on 2026-08-09 used the iX500 at `10.112.10.11`. Its
+  six-character test password derived to an 18-byte identity: the former 16-byte truncation was
+  rejected with status `-1`, while the complete identity in bytes `52..<100` of the existing
+  128-byte VENS frame was accepted with status `0`. The Swift builder and container-pinned
+  `scansnap-wifi` helper now use the full 48-byte identity field.
 
 After confirming `10.112.10.6` is unused, an administrator can temporarily add and later remove the requested macOS alias:
 
@@ -110,6 +119,12 @@ Fresh scanner setup synchronously hands the saved configuration to the physical-
 The setup response waits for the first button arming attempt, so a configured page is not exposed
 during the former polling gap between the released setup probe and the persistent button session.
 
+The button lifecycle also owns scanner online/session state. It listens for the iX500 UDP `53220`
+startup advertisement, retains an armed session with a 500 ms UDP heartbeat, performs low-rate TCP
+health checks, and keeps a five-minute full re-arm only as a fallback. `ScanJobActor` publishes
+start/finish events for every scan origin, so web and physical-button scans both stop the heartbeat
+for acquisition and immediately restore the notification session afterward.
+
 While first-run setup remains unresolved, an actor-owned discovery loop continues with a bounded
 retry delay alongside manual input. A single discovered scanner is paired automatically with its
 serial-derived default identity; an explicit password prompt appears only after that identity is
@@ -122,7 +137,7 @@ explicit user operations priority over suspended automatic discovery or pairing 
 Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The implemented boundary is:
 
 1. The always-running HTTP service, button coordinator, ScanSnap protocol logic, scan orchestration, settings, and document-processing decisions are Swift.
-2. SANE, Tesseract/OCRmyPDF, qpdf, Poppler, libvips, ExifTool, `img2pdf`, and the existing `scansnap-wifi` acquisition binary remain subprocess tools.
+2. SANE, Tesseract/OCRmyPDF, qpdf, Poppler, libvips, ExifTool, `img2pdf`, and the existing `scansnap-wifi` acquisition binary remain subprocess tools. The container applies a small pinned-source patch so `scansnap-wifi` sends and captures the protocol's complete 48-byte pairing-identity field.
 3. Project-owned Python and scan-orchestration shell helpers are removed from the production image and repository.
 4. Direct replacement of OCRmyPDF is deferred because matching searchable PDF quality is a separate project and Python is not resident while the service is idle.
 

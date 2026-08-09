@@ -275,13 +275,23 @@ actor ButtonFakeUDPTransport: ScanSnapUDPTransport {
     enum ReceiveBehavior: Sendable {
         case waitForCancellation
         case fail
+        case returnNil
+        case datagrams([ScanSnapDatagram])
+    }
+
+    struct SendCall: Sendable, Hashable {
+        let bytes: [UInt8]
+        let remoteAddress: ScanSnapSocketAddress
     }
 
     let boundPort: UInt16
-    let receiveBehavior: ReceiveBehavior
+    private var receiveBehavior: ReceiveBehavior
     private(set) var bindCalls: [ScanSnapSocketAddress] = []
+    private(set) var allowsBroadcastCalls: [Bool] = []
+    private(set) var sendCalls: [SendCall] = []
     private(set) var isClosed = false
     private var bindWaiters: [CheckedContinuation<Void, Never>] = []
+    private var sendWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
     init(boundPort: UInt16, receiveBehavior: ReceiveBehavior = .waitForCancellation) {
         self.boundPort = boundPort
@@ -290,6 +300,7 @@ actor ButtonFakeUDPTransport: ScanSnapUDPTransport {
 
     func bind(to localAddress: ScanSnapSocketAddress, allowsBroadcast: Bool) -> UInt16 {
         bindCalls.append(localAddress)
+        allowsBroadcastCalls.append(allowsBroadcast)
         let waiting = bindWaiters
         bindWaiters.removeAll()
         for continuation in waiting {
@@ -305,7 +316,21 @@ actor ButtonFakeUDPTransport: ScanSnapUDPTransport {
         }
     }
 
-    func send(_ bytes: [UInt8], to remoteAddress: ScanSnapSocketAddress) {}
+    func send(_ bytes: [UInt8], to remoteAddress: ScanSnapSocketAddress) {
+        sendCalls.append(SendCall(bytes: bytes, remoteAddress: remoteAddress))
+        let satisfied = sendWaiters.filter { sendCalls.count >= $0.count }
+        sendWaiters.removeAll { sendCalls.count >= $0.count }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
+    }
+
+    func waitForSendCount(_ count: Int) async {
+        guard sendCalls.count < count else { return }
+        await withCheckedContinuation { continuation in
+            sendWaiters.append((count, continuation))
+        }
+    }
 
     func receive(maximumBytes: Int, timeoutMilliseconds: UInt64) async throws -> ScanSnapDatagram? {
         switch receiveBehavior {
@@ -314,11 +339,42 @@ actor ButtonFakeUDPTransport: ScanSnapUDPTransport {
             return nil
         case .fail:
             throw ButtonFakeError.expected
+        case .returnNil:
+            return nil
+        case .datagrams(var datagrams):
+            guard !datagrams.isEmpty else {
+                try await Task.sleep(for: .seconds(60))
+                return nil
+            }
+            let datagram = datagrams.removeFirst()
+            receiveBehavior = .datagrams(datagrams)
+            return datagram
         }
     }
 
     func close() {
         isClosed = true
+    }
+}
+
+actor ButtonFakeHeartbeat: ScanSnapButtonHeartbeatControlling {
+    struct StartCall: Sendable, Hashable {
+        let scanner: ScanSnapButtonScannerConfiguration
+        let configuration: ScanSnapButtonConfiguration
+    }
+
+    private(set) var startCalls: [StartCall] = []
+    private(set) var stopCount = 0
+
+    func start(
+        scanner: ScanSnapButtonScannerConfiguration,
+        configuration: ScanSnapButtonConfiguration
+    ) {
+        startCalls.append(StartCall(scanner: scanner, configuration: configuration))
+    }
+
+    func stop() {
+        stopCount += 1
     }
 }
 

@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Button scan dispatcher")
 struct ScanSnapButtonScanDispatcherTests {
-    @Test("Button dispatch merges scanner and mode environment, stays single-flight, and rearms")
+    @Test("Button dispatch merges scanner and mode environment and stays single-flight")
     func dispatchAndCompletion() async throws {
         let directory = try runtimeButtonTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -23,10 +23,6 @@ struct ScanSnapButtonScanDispatcherTests {
             scannerIP: "192.168.60.44",
             pairingKey: "active-key"
         ))
-        let settingsStore = ScanSettingsStore(
-            fileURL: directory.appendingPathComponent("settings.json"),
-            environment: environment
-        )
         let mode = ScanMode(
             id: "button-receipts",
             name: "Button Receipts",
@@ -34,14 +30,10 @@ struct ScanSnapButtonScanDispatcherTests {
                 language: "eng",
                 resolution: "400",
                 format: "png",
-                ocrEnabled: false
+                ocrEnabled: false,
+                cropMarginPoints: 2.5
             )
         )
-        _ = try await settingsStore.save(ScanSettings(
-            defaultModeID: mode.id,
-            modes: [mode],
-            environment: environment
-        ))
         let executor = RuntimeButtonProcessExecutor()
         let scanJobs = ScanJobActor(nativeScanner: ProcessBackedTestScanner(executor))
         let dispatcher = ScanJobButtonScanDispatcher(
@@ -49,24 +41,7 @@ struct ScanSnapButtonScanDispatcherTests {
             scannerStore: scannerStore,
             environment: environment
         )
-        let lifecycle = ScanSnapButtonLifecycleActor(
-            scannerProvider: StoreBackedScanSnapButtonScannerConfigurationProvider(
-                store: scannerStore,
-                environment: environment,
-                network: RuntimeButtonFakeNetwork()
-            ),
-            modeProvider: StoreBackedScanSnapButtonModeProvider(store: settingsStore),
-            scanDispatcher: dispatcher,
-            reachability: RuntimeButtonUnreachable(),
-            armer: RuntimeButtonNoopArmer()
-        )
-        await dispatcher.attach(lifecycle: lifecycle)
-
-        let noticeResult = await lifecycle.processNotice(
-            runtimeButtonNotice(source: "192.168.60.44"),
-            atMilliseconds: 10_000
-        )
-        #expect(noticeResult == .scanStarted(modeID: mode.id))
+        #expect(await dispatcher.startButtonScan(mode: mode))
         #expect(await runtimeButtonEventually { await executor.requests().count == 1 })
         #expect(!(await dispatcher.startButtonScan(mode: mode)))
 
@@ -81,18 +56,15 @@ struct ScanSnapButtonScanDispatcherTests {
         #expect(requestEnvironment["SCAN_RESOLUTION"] == "400")
         #expect(requestEnvironment["SCAN_FORMAT"] == "png")
         #expect(requestEnvironment["SCAN_OCR_ENABLED"] == "false")
-        #expect(await lifecycle.state.buttonScanInFlight)
-
+        #expect(requestEnvironment["SCAN_CROP_MARGIN_POINTS"] == "2.5")
         await executor.complete()
         await scanJobs.waitUntilIdle()
 
-        #expect(await runtimeButtonEventually { await lifecycle.state.rearmRequested })
-        #expect(!(await lifecycle.state.buttonScanInFlight))
         #expect(!(await dispatcher.isScanRunning()))
     }
 
-    @Test("Failed button scan requests scanner-session recovery")
-    func failedScanRequestsRecovery() async throws {
+    @Test("Failed button scan publishes a failed scan-job event")
+    func failedScanPublishesEvent() async throws {
         let directory = try runtimeButtonTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let environment = [
@@ -119,34 +91,17 @@ struct ScanSnapButtonScanDispatcherTests {
             scannerStore: scannerStore,
             environment: environment
         )
-        let armer = ButtonFakeArmer()
-        let lifecycle = ScanSnapButtonLifecycleActor(
-            scannerProvider: StoreBackedScanSnapButtonScannerConfigurationProvider(
-                store: scannerStore,
-                environment: environment,
-                network: RuntimeButtonFakeNetwork()
-            ),
-            modeProvider: ButtonFakeModeProvider(),
-            scanDispatcher: dispatcher,
-            reachability: ButtonFakeReachability([true]),
-            armer: armer,
-            clock: ButtonFakeClock(12_000)
-        )
-        await dispatcher.attach(lifecycle: lifecycle)
+        let stream = await scanJobs.eventStream()
+        let eventTask = Task {
+            var iterator = stream.makeAsyncIterator()
+            return [await iterator.next(), await iterator.next()].compactMap { $0 }
+        }
 
-        #expect(await lifecycle.processNotice(
-            runtimeButtonNotice(source: "192.168.60.44"),
-            atMilliseconds: 10_000
-        ) == .scanStarted(modeID: "button-default"))
+        #expect(await dispatcher.startButtonScan(mode: buttonMode()))
         #expect(await runtimeButtonEventually { await executor.requests().count == 1 })
         await executor.complete()
         await scanJobs.waitUntilIdle()
-        #expect(await runtimeButtonEventually { await lifecycle.state.rearmRequested })
 
-        await lifecycle.runMaintenance(atMilliseconds: 12_000)
-
-        #expect(await runtimeButtonEventually { await armer.recoveryCalls.count == 1 })
-        #expect(await armer.calls.isEmpty)
-        #expect(await runtimeButtonEventually { await lifecycle.state.isArmed })
+        #expect(await eventTask.value == [.started, .finished(succeeded: false)])
     }
 }

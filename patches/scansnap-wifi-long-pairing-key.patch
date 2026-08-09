@@ -1,0 +1,30 @@
+diff --git a/scansnap.c b/scansnap.c
+index c269b63..b7d3a9b 100644
+--- a/scansnap.c
++++ b/scansnap.c
+@@ -677,9 +677,9 @@ static int try_handshake(uint32_t scanner_ip, uint32_t local_ip, const uint8_t
+     memcpy(pkt + 16, mac, 6);
+     memcpy(pkt + 44, &local_ip, 4);
+     if (g_pairing_key) {
+-        memset(pkt + 52, 0, 16);
++        memset(pkt + 52, 0, 48);
+         size_t klen = strlen(g_pairing_key);
+-        if (klen > 16) klen = 16;
++        if (klen > 48) klen = 48;
+         memcpy(pkt + 52, g_pairing_key, klen);
+     }
+     time_t now = time(NULL);
+@@ -1364,9 +1364,9 @@ static int do_getkey(const char *forced_ip, const char *device_name,
+                 uint32_t cmd = get_be32(pkt + 8);
+ 
+-                if (pkt_len == 128 && cmd == 0x11) {
++                if (pkt_len == 128 && n >= 100 && cmd == 0x11) {
+-                    /* Extract key from offset 52, null-terminated */
+-                    char key[17] = {0};
+-                    memcpy(key, pkt + 52, 16);
++                    /* Extract the 48-byte key field from offset 52. */
++                    char key[49] = {0};
++                    memcpy(key, pkt + 52, 48);
+ 
+                     printf("%s\n", key);
+                     if (save_key(key) == 0)

@@ -35,11 +35,13 @@ public enum ScanSnapButtonSequenceStep: Sendable, Hashable {
 }
 
 public enum ScanSnapPacketBuilder {
+    public static let startupAdvertisementPort: UInt16 = 53_220
     public static let registrationSourcePort: UInt16 = 55_264
     public static let registrationPort: UInt16 = 52_217
     public static let controlPort: UInt16 = 53_219
     public static let dataPort: UInt16 = 53_218
     public static let buttonNoticePort: UInt16 = 55_265
+    public static let pairingIdentityFieldLength = 48
 
     public static let buttonHandshakeCommands: [UInt32] = [0x13, 0x30]
     public static let buttonInitializationSequence: [ScanSnapButtonSequenceStep] = [
@@ -107,6 +109,19 @@ public enum ScanSnapPacketBuilder {
         )
     }
 
+    public static func heartbeat(
+        clientIPAddress: String,
+        clientMACAddress: [UInt8]
+    ) throws -> [UInt8] {
+        var packet = try registration(
+            clientIPAddress: clientIPAddress,
+            clientMACAddress: clientMACAddress
+        ).vens
+        packet.replaceBytes(at: 4, with: ScanSnapByteCodec.bigEndianBytes(UInt32(1)))
+        packet.replaceBytes(at: 24, with: ScanSnapByteCodec.bigEndianBytes(UInt16(0x1000)))
+        return packet
+    }
+
     public static func vensFrame(
         clientMACAddress: [UInt8],
         command: [UInt8]
@@ -146,7 +161,7 @@ public enum ScanSnapPacketBuilder {
         packet.replaceBytes(at: 44, with: ip)
         packet[50] = 0xD7
         packet[51] = 0xE1
-        packet.replaceBytes(at: 52, with: identity.asciiBytes.prefix(16))
+        packet.replaceBytes(at: 52, with: identity.asciiBytes.prefix(pairingIdentityFieldLength))
         packet.replaceBytes(at: 100, with: ScanSnapByteCodec.bigEndianBytes(timestamp.year))
         packet[102] = timestamp.month
         packet[103] = timestamp.day

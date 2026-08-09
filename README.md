@@ -1,4 +1,4 @@
-# scannerserver
+# iX500 scannerserver
 
 `scannerserver` is a containerized web scanner service for the Fujitsu/Ricoh ScanSnap iX500.
 

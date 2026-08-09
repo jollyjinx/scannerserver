@@ -25,6 +25,14 @@ func buildsRegistrationPackets() throws {
     #expect(packets.v2ss == hexBytes("5632737300000001c0a8010a02112233445500000000d7e01000000000000000"))
 }
 
+@Test("Button heartbeat is byte-exact")
+func buildsButtonHeartbeat() throws {
+    #expect(try ScanSnapPacketBuilder.heartbeat(
+        clientIPAddress: "192.168.1.10",
+        clientMACAddress: fixtureClientMAC
+    ) == hexBytes("56454e5300000001c0a8010a02112233445500000000d7e01000000000000000"))
+}
+
 @Test("Pairing request preserves every proven offset")
 func buildsPairingPacket() throws {
     let packet = try ScanSnapPacketBuilder.pairing(
@@ -38,6 +46,23 @@ func buildsPairingPacket() throws {
     #expect(packet == hexBytes(
         "0000008056454e5300000011000000000211223344550000000000000000000000061e000000000000000001c0a8010a0000d7e131373931333031373831373600000000000000000000000000000000000000000000000000000000000000000000000007ea070a0e050900aabbccdd11223344ffffe3e00000000000000000"
     ))
+}
+
+@Test("Pairing request preserves password identities longer than 16 bytes")
+func buildsPairingPacketWithLongPasswordIdentity() throws {
+    let identity = try ScanSnapIdentity.derive(fromPassword: "123456")
+    let packet = try ScanSnapPacketBuilder.pairing(
+        clientMACAddress: fixtureClientMAC,
+        identity: identity,
+        clientIPAddress: "192.168.1.10",
+        timestamp: ScanSnapTimestamp(year: 2026, month: 7, day: 10, hour: 14, minute: 5, second: 9),
+        deviceMetadata: hexBytes("aabbccdd11223344")
+    )
+
+    #expect(identity.value == "172131179178131130")
+    #expect(Array(packet[52..<70]) == Array(identity.value.utf8))
+    #expect(packet[70..<100].allSatisfy { $0 == 0 })
+    #expect(Array(packet[100..<107]) == hexBytes("07ea070a0e0509"))
 }
 
 @Test("Handshake and release frames are byte-exact")

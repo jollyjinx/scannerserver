@@ -18,6 +18,7 @@ struct ModeSettingsTests {
         #expect(settings.ocrEnabled)
         #expect(settings.removeBlankPages)
         #expect(settings.cropPages)
+        #expect(settings.cropMarginPoints == 1.0)
     }
 
     @Test("Truthy values are accepted case-insensitively", arguments: ["1", "true", "TRUE", " yes ", "On"])
@@ -43,6 +44,7 @@ struct ModeSettingsTests {
             "SCAN_OCR_ENABLED": "off",
             "SCAN_REMOVE_BLANK_PAGES": "1",
             "SCAN_CROP_PAGES": "false",
+            "SCAN_CROP_MARGIN_POINTS": "2.5",
         ])
 
         #expect(settings.language == "eng")
@@ -55,6 +57,8 @@ struct ModeSettingsTests {
         #expect(!settings.ocrEnabled)
         #expect(settings.removeBlankPages)
         #expect(!settings.cropPages)
+        #expect(settings.cropMarginPoints == 2.5)
+        #expect(settings.environment["SCAN_CROP_MARGIN_POINTS"] == "2.5")
     }
 
     @Test("JSON uses exact environment keys and string booleans")
@@ -66,16 +70,28 @@ struct ModeSettingsTests {
         #expect(object["SCAN_SIMPLEX"] == "true")
         #expect(object["SCAN_OCR_ENABLED"] == "false")
         #expect(object["SCAN_REMOVE_BLANK_PAGES"] == "true")
+        #expect(object["SCAN_CROP_MARGIN_POINTS"] == "1")
     }
 
     @Test("Existing numeric and boolean JSON values remain readable")
     func legacyJSONScalars() throws {
-        let data = Data(#"{"SCAN_RESOLUTION":600,"SCAN_SIMPLEX":true,"SCAN_FORMAT":"image"}"#.utf8)
+        let data = Data(#"{"SCAN_RESOLUTION":600,"SCAN_SIMPLEX":true,"SCAN_FORMAT":"image","SCAN_CROP_MARGIN_POINTS":0.5}"#.utf8)
         let settings = try JSONDecoder().decode(ModeSettings.self, from: data)
 
         #expect(settings.resolution == "600")
         #expect(settings.simplex)
         #expect(settings.format == "png")
         #expect(settings.language == "deu+eng")
+        #expect(settings.cropMarginPoints == 0.5)
+    }
+
+    @Test("Invalid crop margins fall back without making a scan mode unusable", arguments: ["-1", "nan", "invalid"])
+    func invalidCropMargin(value: String) {
+        let settings = ModeSettings(
+            values: ["SCAN_CROP_MARGIN_POINTS": value],
+            defaults: ModeSettings(cropMarginPoints: 2.0)
+        )
+
+        #expect(settings.cropMarginPoints == 2.0)
     }
 }

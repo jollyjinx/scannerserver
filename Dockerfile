@@ -13,9 +13,12 @@ RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+COPY patches/scansnap-wifi-long-pairing-key.patch /tmp/scansnap-wifi-long-pairing-key.patch
 RUN mkdir -p /out \
     && git clone https://github.com/bramheerink/scansnap.git . \
     && git checkout "${SCANSNAP_WIFI_REF}" \
+    && git apply --check /tmp/scansnap-wifi-long-pairing-key.patch \
+    && git apply /tmp/scansnap-wifi-long-pairing-key.patch \
     && gcc -std=c17 -Wall -Wextra -Wpedantic -Wformat-security \
         -fstack-protector-strong -O2 -D_GNU_SOURCE \
         -Wno-error=unused-result \

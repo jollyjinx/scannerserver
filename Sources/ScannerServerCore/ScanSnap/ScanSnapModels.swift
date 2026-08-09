@@ -39,6 +39,7 @@ public struct ScanSnapDevice: Sendable, Hashable {
 public enum ScanSnapProtocolError: Error, Sendable, Equatable {
     case packetTooShort(minimum: Int, actual: Int)
     case invalidSignature(expected: [UInt8], actual: [UInt8])
+    case invalidCommand(expected: UInt32, actual: UInt32)
     case invalidByteCount(field: String, expected: Int, actual: Int)
     case invalidIPv4Address(String)
     case passwordTooLong(maximumCharacters: Int, actualCharacters: Int)

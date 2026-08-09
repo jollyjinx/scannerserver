@@ -1,4 +1,5 @@
 import Foundation
+import JLog
 
 public protocol ScanSnapButtonRuntimeControlling: Sendable {
     @discardableResult
@@ -10,40 +11,77 @@ public actor ScanSnapButtonRuntimeController: ScanSnapButtonRuntimeControlling {
     public nonisolated let isEligible: Bool
 
     private let lifecycle: ScanSnapButtonLifecycleActor
-    private let dispatcher: ScanJobButtonScanDispatcher
+    private let scanJobs: ScanJobActor
+    private let startupAdvertisementListener: ScanSnapStartupAdvertisementListener
     private let configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator?
+    private var scanEventHandlerID: UUID?
 
     public init(
         isEligible: Bool,
         lifecycle: ScanSnapButtonLifecycleActor,
-        dispatcher: ScanJobButtonScanDispatcher,
+        scanJobs: ScanJobActor,
+        startupAdvertisementListener: ScanSnapStartupAdvertisementListener,
         configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) {
         self.isEligible = isEligible
         self.lifecycle = lifecycle
-        self.dispatcher = dispatcher
+        self.scanJobs = scanJobs
+        self.startupAdvertisementListener = startupAdvertisementListener
         self.configurationChangeCoordinator = configurationChangeCoordinator
     }
 
     @discardableResult
     public func start() async throws -> Bool {
         guard isEligible else { return false }
-        await dispatcher.attach(lifecycle: lifecycle)
+        guard scanEventHandlerID == nil else { return false }
+
+        scanEventHandlerID = await scanJobs.addEventHandler { [lifecycle] event in
+            switch event {
+            case .started:
+                await lifecycle.scanDidStart()
+            case .finished(let succeeded):
+                if !succeeded {
+                    JLog.warning("Scan failed; recovering ScanSnap button session")
+                }
+                await lifecycle.scanDidFinish(succeeded: succeeded)
+            }
+        }
         do {
             let started = try await lifecycle.start()
             if started {
                 await configurationChangeCoordinator?.attach(lifecycle: lifecycle)
+                do {
+                    _ = try await startupAdvertisementListener.start { [lifecycle] advertisement in
+                        await lifecycle.scannerDidAdvertiseStartup(advertisement)
+                    }
+                } catch {
+                    JLog.warning(
+                        "ScanSnap startup-advertisement listener failed to start: \(error.localizedDescription)"
+                    )
+                }
+            } else {
+                if let scanEventHandlerID {
+                    await scanJobs.removeEventHandler(scanEventHandlerID)
+                    self.scanEventHandlerID = nil
+                }
             }
             return started
         } catch {
-            await dispatcher.detachLifecycle()
+            if let scanEventHandlerID {
+                await scanJobs.removeEventHandler(scanEventHandlerID)
+                self.scanEventHandlerID = nil
+            }
             throw error
         }
     }
 
     public func stop() async {
+        if let scanEventHandlerID {
+            await scanJobs.removeEventHandler(scanEventHandlerID)
+            self.scanEventHandlerID = nil
+        }
+        await startupAdvertisementListener.stop()
         await configurationChangeCoordinator?.detach()
-        await dispatcher.detachLifecycle()
         await lifecycle.stop()
     }
 
@@ -63,6 +101,7 @@ public enum ScanSnapButtonRuntimeFactory {
         reachability: any ScanSnapButtonReachabilityChecking = ScanSnapButtonTCPReachabilityChecker(),
         armer: any ScanSnapButtonArming = ScanSnapButtonSessionArmer(),
         clock: any ScanSnapButtonClock = SystemScanSnapButtonClock(),
+        sleeper: any ScanSnapSleeper = TaskScanSnapSleeper(),
         configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) -> ScanSnapButtonRuntimeController {
         let scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
@@ -79,6 +118,10 @@ public enum ScanSnapButtonRuntimeFactory {
             scannerStore: scannerStore,
             environment: environment
         )
+        let heartbeat = ScanSnapButtonHeartbeatActor(
+            udpTransportFactory: udpTransportFactory,
+            sleeper: sleeper
+        )
         let lifecycle = ScanSnapButtonLifecycleActor(
             configuration: buttonConfiguration,
             udpTransportFactory: udpTransportFactory,
@@ -87,13 +130,22 @@ public enum ScanSnapButtonRuntimeFactory {
             scanDispatcher: dispatcher,
             reachability: reachability,
             armer: armer,
-            clock: clock
+            heartbeat: heartbeat,
+            clock: clock,
+            sleeper: sleeper
+        )
+        let startupAdvertisementListener = ScanSnapStartupAdvertisementListener(
+            port: buttonConfiguration.startupAdvertisementPort,
+            pollMilliseconds: buttonConfiguration.listenerPollMilliseconds,
+            udpTransportFactory: udpTransportFactory,
+            sleeper: sleeper
         )
         let isWiFiBackend = environment["SCAN_BACKEND", default: "wifi"] == "wifi"
         return ScanSnapButtonRuntimeController(
             isEligible: isWiFiBackend && buttonConfiguration.isEnabled,
             lifecycle: lifecycle,
-            dispatcher: dispatcher,
+            scanJobs: scanJobs,
+            startupAdvertisementListener: startupAdvertisementListener,
             configurationChangeCoordinator: configurationChangeCoordinator
         )
     }

@@ -21,6 +21,7 @@ struct ScanSettingsTests {
         #expect(settings.mode(id: "photo-png")?.settings.resolution == "600")
         #expect(settings.mode(id: "photo-png")?.settings.format == "png")
         #expect(settings.mode(id: "photo-png")?.settings.ocrEnabled == false)
+        #expect(settings.defaultMode.settings.cropMarginPoints == 1.0)
     }
 
     @Test("Built-in modes inherit environment defaults")
@@ -29,11 +30,13 @@ struct ScanSettingsTests {
             "SCAN_LANGUAGE": "fra+eng",
             "SCAN_RESOLUTION": "400",
             "SCAN_CROP_PAGES": "false",
+            "SCAN_CROP_MARGIN_POINTS": "3.5",
         ])
 
         #expect(settings.defaultMode.settings.language == "fra+eng")
         #expect(settings.defaultMode.settings.resolution == "400")
         #expect(!settings.defaultMode.settings.cropPages)
+        #expect(settings.defaultMode.settings.cropMarginPoints == 3.5)
         #expect(settings.mode(id: "photo-png")?.settings.resolution == "600")
     }
 
@@ -78,6 +81,7 @@ struct ScanSettingsTests {
         #expect(settings.modes[0].settings.pageMode == "multi")
         #expect(settings.modes[0].settings.ocrEnabled)
         #expect(!settings.modes[0].settings.removeBlankPages)
+        #expect(settings.modes[0].settings.cropMarginPoints == 1.0)
     }
 
     @Test("Save, update, delete, and default operations preserve IDs")
