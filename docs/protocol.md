@@ -221,6 +221,10 @@ lifecycle cancels and drains that recovery attempt, reclaims the scanner-confirm
 hands it to acquisition. Without this rule, the notice could race recovery, run as a fresh session,
 and leave the button unavailable during another 40–60 second registration cycle.
 
+Draining a cancelled recovery depends on unrelated native document tools not blocking Swift's
+cooperative executor. Their pipe reads and process waits run on a dedicated blocking queue so a
+long `pdfimages` or OCR operation cannot postpone this handoff or stall HTTP requests.
+
 If scanner setup has not been completed yet, the listener waits and starts arming after setup saves a scanner. When a notice arrives from the configured scanner IP, the app starts a scan with the saved button-default mode.
 
 Successful first-run setup does not return control to the browser until the button lifecycle has

@@ -156,6 +156,10 @@ Swift cannot use PDFKit on Linux, and OCRmyPDF is itself Python-based. The imple
 3. Project-owned Python and scan-orchestration shell helpers are removed from the production image and repository.
 4. Direct replacement of OCRmyPDF is deferred because matching searchable PDF quality is a separate project and Python is not resident while the service is idle.
 
+`FoundationProcessExecutor` keeps native-tool pipe reads and `waitpid` calls off Swift's cooperative
+executor. Document processing may use a full CPU core for an extended period, but it must not
+prevent the HTTP server, physical-button listener, or session-recovery actors from being scheduled.
+
 ## Milestones
 
 ### 0. Baseline And Skill

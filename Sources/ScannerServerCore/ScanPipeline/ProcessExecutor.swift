@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -69,6 +70,16 @@ public enum ProcessExecutorError: Error, Equatable, LocalizedError, Sendable {
 }
 
 public actor FoundationProcessExecutor: ProcessExecutor {
+    /// POSIX pipe reads and `waitpid` are blocking calls. Running them on Swift's
+    /// cooperative executor can consume every worker while a document tool is
+    /// active, preventing unrelated actors (including HTTP and button recovery)
+    /// from making progress.
+    private nonisolated static let blockingQueue = DispatchQueue(
+        label: "eu.jinx.scannerserver.process-io",
+        qos: .utility,
+        attributes: .concurrent
+    )
+
     private struct RunningProcess: Sendable {
         let processID: pid_t
     }
@@ -318,8 +329,15 @@ public actor FoundationProcessExecutor: ProcessExecutor {
         }
     }
 
-    @concurrent
     private nonisolated static func wait(for processID: pid_t) async throws -> Int32 {
+        try await withCheckedThrowingContinuation { continuation in
+            blockingQueue.async {
+                continuation.resume(with: Result { try waitSynchronously(for: processID) })
+            }
+        }
+    }
+
+    private nonisolated static func waitSynchronously(for processID: pid_t) throws -> Int32 {
         var status: Int32 = 0
         while true {
             let result = waitpid(processID, &status, 0)
@@ -332,8 +350,15 @@ public actor FoundationProcessExecutor: ProcessExecutor {
         }
     }
 
-    @concurrent
     private nonisolated static func readToEnd(_ descriptor: Int32) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            blockingQueue.async {
+                continuation.resume(with: Result { try readToEndSynchronously(descriptor) })
+            }
+        }
+    }
+
+    private nonisolated static func readToEndSynchronously(_ descriptor: Int32) throws -> Data {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
         while true {

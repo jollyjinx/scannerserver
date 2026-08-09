@@ -9,6 +9,31 @@ import Testing
 
 @Suite("Foundation process executor", .serialized)
 struct FoundationProcessExecutorTests {
+    @Test("Long-running subprocess I/O does not starve unrelated Swift tasks")
+    func subprocessDoesNotStarveCooperativeExecutor() async throws {
+        let executor = FoundationProcessExecutor()
+        let processCount = max(ProcessInfo.processInfo.activeProcessorCount, 2)
+        let processes = (0..<processCount).map { _ in
+            Task {
+                try await executor.execute(ProcessRequest(
+                    executable: "/bin/sleep",
+                    arguments: ["1"]
+                ))
+            }
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+        try await Task.sleep(for: .milliseconds(10))
+        let unrelatedTaskDelay = startedAt.duration(to: clock.now)
+
+        for process in processes {
+            _ = try await process.value
+        }
+        #expect(unrelatedTaskDelay < .milliseconds(500))
+    }
+
     @Test("Drains stdout and stderr concurrently")
     func drainsBothStreams() async throws {
         let result = try await FoundationProcessExecutor().execute(ProcessRequest(
