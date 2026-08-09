@@ -40,7 +40,7 @@ The web setup flow:
 
 1. Repeatedly sends VENS discovery/registration packets to LAN broadcast addresses and ARP neighbors with known ScanSnap/Silex MAC prefixes while setup remains unresolved.
 2. Automatically selects a sole discovered ScanSnap, or lists multiple devices for user selection, without interrupting manual form input.
-3. Lets the user enter an IP address with an optional serial number when discovery cannot find the scanner.
+3. Lets the user enter an IPv4 address or host name with an optional serial number when discovery cannot find the scanner. Host names are resolved to IPv4 before protocol traffic begins.
 4. Derives the default pairing identity from the discovered or supplied serial number.
 5. Tests the pairing identity against TCP `53219`.
 6. Stops automatic discovery and asks for the security key/password only when the default is rejected or no serial is available. Transient pairing failures remain retryable.
@@ -51,7 +51,8 @@ Discovery intentionally does not sweep every IP address in the subnet.
 ## Scanner On Another Network
 
 Layer-2 broadcast discovery and ARP Ethernet addresses do not normally cross a router. To configure
-a scanner on another routed network, enter its routable IPv4 address and:
+a scanner on another routed network, enter its routable IPv4 address or a host name that resolves
+to one and:
 
 - the product serial number, when it is available, so setup can try the factory-default password.
 

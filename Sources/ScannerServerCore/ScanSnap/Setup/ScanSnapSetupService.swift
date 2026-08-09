@@ -180,16 +180,24 @@ public actor ScanSnapSetupService: ScannerSetupServing {
     ) async -> ScannerSetupOutcome {
         let revision = beginInteractiveSetupOperation()
         defer { endInteractiveSetupOperation() }
+        let scannerAddress = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedIP: String
         let normalizedMAC: String
         do {
-            normalizedIP = try ScannerConfig.normalizeIPv4Address(ipAddress)
+            normalizedIP = scannerAddress.isEmpty
+                ? ""
+                : try await network.resolveScannerIPv4Address(scannerAddress)
             normalizedMAC = macAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? ""
                 : try ScannerConfig.normalizeMACAddress(macAddress)
+        } catch is CancellationError {
+            return .unavailable
+        } catch let validationError as SettingsValidationError {
+            operationError = Self.message(for: validationError)
+            return .manualInvalid
         } catch {
             operationError = Self.message(for: error)
-            return .manualInvalid
+            return .manualNotFound
         }
         let serial = serial.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedIP.isEmpty || !normalizedMAC.isEmpty else {
@@ -225,7 +233,7 @@ public actor ScanSnapSetupService: ScannerSetupServing {
                 let discovered = SetupDeviceRecord(found)
                 if !normalizedMAC.isEmpty, !discovered.macAddress.isEmpty,
                    discovered.macAddress != normalizedMAC {
-                    operationError = "the scanner at that IP address answered with a different Ethernet address"
+                    operationError = "the scanner at that address answered with a different Ethernet address"
                     return .manualInvalid
                 }
                 record = discovered

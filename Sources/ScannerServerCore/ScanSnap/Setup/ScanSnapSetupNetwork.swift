@@ -1,4 +1,9 @@
 import Foundation
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 
 public struct ScanSnapSetupIPv4Interface: Equatable, Hashable, Sendable {
     public let name: String
@@ -52,8 +57,15 @@ public struct ScanSnapSetupARPNeighbor: Equatable, Hashable, Sendable {
 public protocol ScanSnapSetupNetworkProviding: Sendable {
     func ipv4Interfaces() async throws -> [ScanSnapSetupIPv4Interface]
     func arpNeighbors() async throws -> [ScanSnapSetupARPNeighbor]
+    func resolveScannerIPv4Address(_ addressOrName: String) async throws -> String
     func clientIPAddress(for scannerIPAddress: String) async throws -> String
     func clientMACAddress(preferredInterface: String) async throws -> [UInt8]
+}
+
+public extension ScanSnapSetupNetworkProviding {
+    func resolveScannerIPv4Address(_ addressOrName: String) async throws -> String {
+        try ScannerConfig.normalizeIPv4Address(addressOrName)
+    }
 }
 
 public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding {
@@ -88,6 +100,19 @@ public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding 
             return Self.parseProcARP(data)
         }
         return []
+    }
+
+    @concurrent
+    public func resolveScannerIPv4Address(_ addressOrName: String) async throws -> String {
+        let addressOrName = addressOrName.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            return try ScannerConfig.normalizeIPv4Address(addressOrName)
+        } catch SettingsValidationError.invalidIPv4Address {
+            guard !addressOrName.allSatisfy({ $0.isASCII && ($0.isNumber || $0 == ".") }) else {
+                throw SettingsValidationError.invalidIPv4Address
+            }
+            return try Self.resolveHostName(addressOrName)
+        }
     }
 
     public func clientIPAddress(for scannerIPAddress: String) async throws -> String {
@@ -243,6 +268,52 @@ public struct SystemScanSnapSetupNetworkProvider: ScanSnapSetupNetworkProviding 
             }
         }
         return nil
+    }
+
+    private static func resolveHostName(_ name: String) throws -> String {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        var results: UnsafeMutablePointer<addrinfo>?
+        let status = name.withCString { getaddrinfo($0, nil, &hints, &results) }
+        guard status == 0, let first = results else {
+            let message = gai_strerror(status).map(String.init(cString:)) ?? "name lookup failed"
+            throw ScanSnapSetupConfigurationError.scannerNameResolutionFailed(
+                name: name,
+                message: message
+            )
+        }
+        defer { freeaddrinfo(first) }
+
+        var current: UnsafeMutablePointer<addrinfo>? = first
+        while let result = current {
+            defer { current = result.pointee.ai_next }
+            guard result.pointee.ai_family == AF_INET,
+                  let address = result.pointee.ai_addr
+            else {
+                continue
+            }
+            let ipv4 = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+            var rawAddress = ipv4.sin_addr
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            let converted = buffer.withUnsafeMutableBufferPointer { pointer in
+                inet_ntop(AF_INET, &rawAddress, pointer.baseAddress, socklen_t(pointer.count))
+            }
+            let terminator = buffer.firstIndex(of: 0) ?? buffer.endIndex
+            let addressString = String(
+                decoding: buffer[..<terminator].map { UInt8(bitPattern: $0) },
+                as: UTF8.self
+            )
+            if converted != nil,
+               let normalized = try? ScannerConfig.normalizeIPv4Address(addressString),
+               !normalized.isEmpty {
+                return normalized
+            }
+        }
+
+        throw ScanSnapSetupConfigurationError.scannerNameResolutionFailed(
+            name: name,
+            message: "no IPv4 address was returned"
+        )
     }
 
     private static func unique(_ values: [String]) -> [String] {

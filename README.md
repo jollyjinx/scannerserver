@@ -39,6 +39,9 @@ After setup, scan either way:
 - Press **Start scan** in the web UI.
 - Press the physical scan button on the iX500.
 
+The configured scanner name includes a live reachability indicator: green when the scanner's
+control port is reachable and grey when it is not reachable.
+
 The physical button uses a volatile notification session stored in the scanner. While that session
 is armed, scannerserver retains it with a 500 ms heartbeat. A web or button scan temporarily owns
 the scanner and invalidates the notification session, so scannerserver stops the heartbeat before
@@ -75,7 +78,7 @@ The setup flow:
 
 1. Continuously discovers scanners on the local network using broadcast and ARP/neighbor entries while setup is open.
 2. Automatically chooses the scanner when exactly one iX500 is found; with multiple scanners, it shows them for manual selection.
-3. Keeps manual IP, serial-number, and Ethernet-address setup available while discovery runs.
+3. Keeps manual IPv4-address/host-name, serial-number, and Ethernet-address setup available while discovery runs.
 4. Reads the scanner serial number before pairing when the network permits it.
 5. Tries the factory-default password derived from the serial number.
 6. Stops discovery and asks for the scanner security key/password only when the default password is rejected or the serial number is unavailable.
@@ -83,11 +86,11 @@ The setup flow:
 
 It does not sweep every IP address in your subnet.
 
-For a scanner on another routed network, enter its IP address manually and provide its product
-serial number when available. Setup tries the derived default first, then asks for the scanner
-security key/password if necessary. An Ethernet/MAC address cannot be used to calculate the
-security key and normally does not cross routers; it only helps discovery when the scanner is on
-the same local network.
+For a scanner on another routed network, enter its IPv4 address or host name manually and provide
+its product serial number when available. Setup resolves host names to IPv4, tries the derived
+default first, then asks for the scanner security key/password if necessary. An Ethernet/MAC
+address cannot be used to calculate the security key and normally does not cross routers; it only
+helps discovery when the scanner is on the same local network.
 
 ## Features
 
@@ -144,7 +147,8 @@ With Compose:
 docker compose exec scansnap ip neigh show
 ```
 
-If discovery still fails but you know the scanner IP, enter the IP address manually on the setup page.
+If discovery still fails but you know the scanner IPv4 address or host name, enter it manually on
+the setup page.
 
 If the web UI reports **Scan directory is not accessible**, verify that the `SCAN_OUTPUT_DIR`
 bind mount exists and that the container user can list it and create, read, and delete files in

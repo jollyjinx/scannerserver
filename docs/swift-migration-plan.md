@@ -125,12 +125,20 @@ health checks, and keeps a five-minute full re-arm only as a fallback. `ScanJobA
 start/finish events for every scan origin, so web and physical-button scans both stop the heartbeat
 for acquisition and immediately restore the notification session afterward.
 
+The web UI renders that shared lifecycle reachability state beside the configured scanner name.
+Reachability transitions notify the existing browser long-poll, producing a green `Reachable` or
+grey `Not reachable` indicator without a second network probe or a new polling loop.
+
 While first-run setup remains unresolved, an actor-owned discovery loop continues with a bounded
 retry delay alongside manual input. A single discovered scanner is paired automatically with its
 serial-derived default identity; an explicit password prompt appears only after that identity is
 rejected or the serial is unavailable. The browser polls a setup-only JSON state endpoint and
 updates just the discovery results, preserving any manual form input. Setup revisions give
 explicit user operations priority over suspended automatic discovery or pairing work.
+
+Manual setup accepts either an IPv4 address or a host name. Host names are resolved without
+blocking the setup actor, and the resolved IPv4 address is persisted so protocol packets and
+physical-button source matching continue to use the iX500's IPv4-only contract.
 
 ## Dependency Strategy
 

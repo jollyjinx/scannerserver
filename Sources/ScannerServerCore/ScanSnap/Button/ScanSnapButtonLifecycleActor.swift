@@ -42,6 +42,7 @@ public actor ScanSnapButtonLifecycleActor {
     private let reachability: any ScanSnapButtonReachabilityChecking
     private let armer: any ScanSnapButtonArming
     private let heartbeat: any ScanSnapButtonHeartbeatControlling
+    private let reachabilityState: ScanSnapReachabilityState?
     private let clock: any ScanSnapButtonClock
     private let sleeper: any ScanSnapSleeper
 
@@ -81,6 +82,7 @@ public actor ScanSnapButtonLifecycleActor {
         reachability: any ScanSnapButtonReachabilityChecking = ScanSnapButtonTCPReachabilityChecker(),
         armer: any ScanSnapButtonArming = ScanSnapButtonSessionArmer(),
         heartbeat: any ScanSnapButtonHeartbeatControlling = NoopScanSnapButtonHeartbeat(),
+        reachabilityState: ScanSnapReachabilityState? = nil,
         clock: any ScanSnapButtonClock = SystemScanSnapButtonClock(),
         sleeper: any ScanSnapSleeper = TaskScanSnapSleeper()
     ) {
@@ -92,6 +94,7 @@ public actor ScanSnapButtonLifecycleActor {
         self.reachability = reachability
         self.armer = armer
         self.heartbeat = heartbeat
+        self.reachabilityState = reachabilityState
         self.clock = clock
         self.sleeper = sleeper
     }
@@ -179,7 +182,7 @@ public actor ScanSnapButtonLifecycleActor {
         isRunning = false
         isArming = false
         isArmed = false
-        isOnline = false
+        await setOnline(false)
         buttonScanInFlight = false
         rearmRequested = false
         recoveryArmRequested = false
@@ -314,7 +317,9 @@ public actor ScanSnapButtonLifecycleActor {
                 guard isCurrentLifecycle(lifecycleGeneration) else { return }
                 await heartbeat.stop()
                 guard isCurrentLifecycle(lifecycleGeneration) else { return }
-                resetForMissingScanner(retryAt: adding(configuration.reachabilityIntervalMilliseconds, to: now))
+                await resetForMissingScanner(
+                    retryAt: adding(configuration.reachabilityIntervalMilliseconds, to: now)
+                )
                 return
             }
             scanner = configuredScanner
@@ -326,7 +331,7 @@ public actor ScanSnapButtonLifecycleActor {
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
 
         if let previous = lastScannerConfiguration, previous != scanner {
-            resetForScannerChange(atMilliseconds: now)
+            await resetForScannerChange(atMilliseconds: now)
         }
         lastScannerConfiguration = scanner
 
@@ -415,7 +420,7 @@ public actor ScanSnapButtonLifecycleActor {
 
         let previousAdvertisementAtMilliseconds = lastStartupAdvertisementAtMilliseconds
         lastStartupAdvertisementAtMilliseconds = now
-        isOnline = true
+        await setOnline(true)
         if isWithin(
             configuration.startupRearmDebounceMilliseconds,
             of: previousAdvertisementAtMilliseconds,
@@ -434,7 +439,7 @@ public actor ScanSnapButtonLifecycleActor {
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
         await heartbeat.stop()
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
-        resetForScannerChange(atMilliseconds: now)
+        await resetForScannerChange(atMilliseconds: now)
         await runMaintenance(atMilliseconds: now, lifecycleGeneration: lifecycleGeneration)
         guard isCurrentLifecycle(lifecycleGeneration) else { return }
         let arming = armingTask
@@ -615,11 +620,11 @@ public actor ScanSnapButtonLifecycleActor {
             return
         }
         guard reachable else {
-            isOnline = false
+            await setOnline(false)
             isArmed = false
             return
         }
-        isOnline = true
+        await setOnline(true)
         lastReachableAtMilliseconds = now
         await beginArmingAfterStoppingHeartbeat(
             scanner: scanner,
@@ -639,11 +644,11 @@ public actor ScanSnapButtonLifecycleActor {
         )
         guard isCurrentLifecycle(lifecycleGeneration), scanner == lastScannerConfiguration else { return }
         if reachable {
-            isOnline = true
+            await setOnline(true)
             lastReachableAtMilliseconds = now
             nextReachabilityAtMilliseconds = adding(configuration.healthCheckIntervalMilliseconds, to: now)
         } else {
-            isOnline = false
+            await setOnline(false)
             isArmed = false
             nextArmAtMilliseconds = nil
             nextReachabilityAtMilliseconds = adding(configuration.reachabilityIntervalMilliseconds, to: now)
@@ -709,7 +714,7 @@ public actor ScanSnapButtonLifecycleActor {
             recoveryArmRequested = false
             nextArmAtMilliseconds = adding(configuration.armIntervalMilliseconds, to: now)
             nextReachabilityAtMilliseconds = adding(configuration.healthCheckIntervalMilliseconds, to: now)
-            isOnline = true
+            await setOnline(true)
             lastReachableAtMilliseconds = now
             if let scanner = lastScannerConfiguration {
                 await heartbeat.start(scanner: scanner, configuration: configuration)
@@ -728,26 +733,32 @@ public actor ScanSnapButtonLifecycleActor {
         isArming = false
     }
 
-    private func resetForMissingScanner(retryAt: UInt64) {
+    private func resetForMissingScanner(retryAt: UInt64) async {
         scannerConfigurationGeneration &+= 1
         cancelArming()
         lastScannerConfiguration = nil
-        isOnline = false
+        await setOnline(false)
         isArmed = false
         nextArmAtMilliseconds = nil
         nextReachabilityAtMilliseconds = retryAt
     }
 
-    private func resetForScannerChange(atMilliseconds now: UInt64) {
+    private func resetForScannerChange(atMilliseconds now: UInt64) async {
         scannerConfigurationGeneration &+= 1
         cancelArming()
         lastScannerConfiguration = nil
-        isOnline = false
+        await setOnline(false)
         isArmed = false
         nextArmAtMilliseconds = nil
         nextReachabilityAtMilliseconds = now
         rearmRequested = false
         recoveryArmRequested = false
+    }
+
+    private func setOnline(_ isOnline: Bool) async {
+        guard isOnline != self.isOnline else { return }
+        self.isOnline = isOnline
+        await reachabilityState?.update(isReachable: isOnline)
     }
 
     private func isWithin(_ interval: UInt64, of earlier: UInt64?, at now: UInt64) -> Bool {

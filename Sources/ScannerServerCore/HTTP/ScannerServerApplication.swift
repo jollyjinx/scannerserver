@@ -246,6 +246,7 @@ public struct ScannerServerDependencies: Sendable {
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
     public let webUpdates: WebUpdateNotifier
+    public let scannerReachability: ScanSnapReachabilityState
     public let environment: [String: String]
     public let buttonConfigurationChanges: ScanSnapButtonConfigurationChangeCoordinator?
     public let scanDirectoryAccessIssue: ScanDirectoryAccessIssue?
@@ -259,6 +260,7 @@ public struct ScannerServerDependencies: Sendable {
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
         webUpdates: WebUpdateNotifier? = nil,
+        scannerReachability: ScanSnapReachabilityState? = nil,
         environment: [String: String],
         buttonConfigurationChanges: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) {
@@ -269,7 +271,9 @@ public struct ScannerServerDependencies: Sendable {
         self.outputPathResolver = outputPathResolver
         self.scannerSetup = scannerSetup
         self.previewProvider = previewProvider
-        self.webUpdates = webUpdates ?? scanJobs.webUpdates
+        let webUpdates = webUpdates ?? scanJobs.webUpdates
+        self.webUpdates = webUpdates
+        self.scannerReachability = scannerReachability ?? ScanSnapReachabilityState(webUpdates: webUpdates)
         self.environment = environment
         self.buttonConfigurationChanges = buttonConfigurationChanges
         self.scanDirectoryAccessIssue = ScanDirectoryAccessIssue.check(
@@ -288,6 +292,7 @@ public struct ScannerServerDependencies: Sendable {
         let settingsStore = ScanSettingsStore(environment: environment)
         let scannerStore = ScannerConfigStore(environment: environment)
         let buttonConfigurationChanges = ScanSnapButtonConfigurationChangeCoordinator()
+        let scannerReachability = ScanSnapReachabilityState(webUpdates: webUpdates)
         return ScannerServerDependencies(
             settingsStore: settingsStore,
             scannerStore: scannerStore,
@@ -305,6 +310,7 @@ public struct ScannerServerDependencies: Sendable {
             ),
             previewProvider: NativeScanPreviewProvider(executor: processExecutor),
             webUpdates: webUpdates,
+            scannerReachability: scannerReachability,
             environment: environment,
             buttonConfigurationChanges: buttonConfigurationChanges
         )
@@ -739,6 +745,7 @@ private func indexResponse(
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
     let setup = await dependencies.scannerSetup.state()
+    let scannerIsReachable = await dependencies.scannerReachability.isReachable
     let query = queryValues(request.uri.query)
     let webRevision = await dependencies.webUpdates.currentRevision
     let groups = scanFileGroups(outputDirectory: dependencies.outputPathResolver.outputDirectory)
@@ -747,6 +754,7 @@ private func indexResponse(
         editModeID: query["edit_mode"],
         setupMessageCode: query["setup"],
         setup: setup,
+        scannerIsReachable: scannerIsReachable,
         wifiBackend: wifiBackend,
         job: job,
         ocr: ocr,
@@ -784,6 +792,7 @@ private func renderIndexContent(
     editModeID: String?,
     setupMessageCode: String?,
     setup: ScannerSetupState,
+    scannerIsReachable: Bool,
     wifiBackend: Bool,
     job: ScanJobState,
     ocr: OCRQueueState,
@@ -801,7 +810,7 @@ private func renderIndexContent(
         html += "<p class=\"notice\">\(htmlEscape(message))</p>"
     }
     if wifiBackend && !setup.configured {
-        html += renderScannerSetup(setup)
+        html += renderScannerSetup(setup, scannerIsReachable: scannerIsReachable)
     }
 
     if !wifiBackend || setup.configured {
@@ -820,6 +829,7 @@ private func renderIndexContent(
             settings: settings,
             selectedMode: selectedMode,
             scannerSetup: wifiBackend ? setup : nil,
+            scannerIsReachable: scannerIsReachable,
             open: editModeID != nil
         )
         html += renderStatus(job: job, ocr: ocr)
@@ -828,14 +838,25 @@ private func renderIndexContent(
     return html
 }
 
-private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
-    "<section data-scanner-setup data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup))</section>"
+private func renderScannerSetup(
+    _ setup: ScannerSetupState,
+    scannerIsReachable: Bool
+) -> String {
+    "<section data-scanner-setup data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup, scannerIsReachable: scannerIsReachable))</section>"
 }
 
-private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
+private func renderScannerSetupContent(
+    _ setup: ScannerSetupState,
+    scannerIsReachable: Bool
+) -> String {
     var html = "<h2>Scanner setup</h2>"
     if setup.configured {
-        html += "<p><strong>\(htmlEscape(setup.name))</strong> <span class=\"status\">configured</span></p>"
+        let reachabilityClass = scannerIsReachable ? "reachable" : "unreachable"
+        let reachabilityText = scannerIsReachable ? "Reachable" : "Not reachable"
+        html += "<p class=\"scanner-name\"><strong>\(htmlEscape(setup.name))</strong>"
+        html += " <span class=\"scanner-reachability \(reachabilityClass)\">"
+        html += "<span class=\"scanner-reachability-dot\" aria-hidden=\"true\"></span>"
+        html += "\(reachabilityText)</span></p>"
         html += "<p class=\"muted\">IP \(htmlEscape(setup.ipAddress))"
         if !setup.serial.isEmpty { html += " · Serial \(htmlEscape(setup.serial))" }
         if !setup.macAddress.isEmpty { html += " · MAC \(htmlEscape(setup.macAddress))" }
@@ -856,8 +877,8 @@ private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
     html += "<div class=\"setup-controls\"><form method=\"post\" action=\"/setup/scanners/discover\"><button>Discover scanners</button></form>"
     html += "<div data-scanner-devices>\(renderScannerDevices(setup.devices))</div>"
     html += "<form method=\"post\" action=\"/setup/scanners/manual\">"
-    html += "<label>Scanner IP<input name=\"scanner_ip\" value=\"\(htmlEscape(setup.ipAddress))\"></label>"
-    html += "<p class=\"muted\">For a scanner on another network, enter its IP address and product serial number. If its default password was changed, setup will ask for the password after trying the serial-derived default.</p>"
+    html += "<label>Scanner IPv4 address or host name<input name=\"scanner_ip\" value=\"\(htmlEscape(setup.ipAddress))\"></label>"
+    html += "<p class=\"muted\">For a scanner on another network, enter its IPv4 address or host name and product serial number. Host names are resolved to IPv4 during setup. If its default password was changed, setup will ask for the password after trying the serial-derived default.</p>"
     html += "<label>Product serial number<input name=\"scanner_serial\"></label>"
     html += "<label>Ethernet address (same network only)<input name=\"scanner_mac\"></label>"
     html += "<p class=\"muted\">The security key cannot be derived from the Ethernet address. The address only helps discovery on the same local network.</p>"
@@ -883,6 +904,7 @@ private func renderModes(
     settings: ScanSettings,
     selectedMode: ScanMode,
     scannerSetup: ScannerSetupState?,
+    scannerIsReachable: Bool,
     open: Bool
 ) -> String {
     var html = "<section><details\(open ? " open" : "")><summary>Advanced settings</summary><ul class=\"mode-list\">"
@@ -1001,7 +1023,7 @@ private func renderModes(
     }
     html += "</div></form>"
     if let scannerSetup {
-        html += "<div class=\"advanced-setup\">\(renderScannerSetupContent(scannerSetup))</div>"
+        html += "<div class=\"advanced-setup\">\(renderScannerSetupContent(scannerSetup, scannerIsReachable: scannerIsReachable))</div>"
     }
     html += "</details></section>"
     return html
@@ -1134,7 +1156,7 @@ private func setupMessage(_ code: String?) -> String? {
     switch code {
     case "discovery-started": "Scanner discovery started."
     case "no-device": "Choose a discovered scanner."
-    case "manual-missing": "Enter a scanner IP address or Ethernet address."
+    case "manual-missing": "Enter a scanner IPv4 address, host name, or Ethernet address."
     case "manual-not-found": "No scanner matching those details was found."
     case "manual-invalid": "The scanner details are invalid."
     case "password-needed": "Enter the scanner security key or password to finish setup."

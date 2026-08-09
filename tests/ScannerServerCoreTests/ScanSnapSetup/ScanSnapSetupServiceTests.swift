@@ -404,6 +404,41 @@ struct ScanSnapSetupServiceTests {
         #expect(pairingCall.configuration.identity.value == "179130178176")
     }
 
+    @Test("Manual setup resolves a scanner host name and persists its IPv4 address")
+    func manualSetupWithHostName() async throws {
+        let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
+        let pairing = FakeScanSnapSetupPairing([acceptedPairing()])
+        let network = FakeScanSnapSetupNetwork(
+            routeIPAddress: "10.20.30.10",
+            resolvedScannerAddresses: ["office-scanner.local": "192.0.2.44"]
+        )
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: network,
+            discovery: discovery,
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+
+        #expect(await service.configureManually(
+            ipAddress: " office-scanner.local ",
+            macAddress: "",
+            serial: "AWRHC08122"
+        ) == .configured)
+
+        let config = try #require(await store.loadStored())
+        #expect(config.scannerIP == "192.0.2.44")
+        #expect(await network.scannerAddressLookups == ["office-scanner.local"])
+        #expect(await network.routeLookups == ["192.0.2.44", "192.0.2.44"])
+        let discoveryConfiguration = try #require(await discovery.configurations.first)
+        #expect(discoveryConfiguration.routes.first?.targetIPAddresses == ["192.0.2.44"])
+        let pairingCall = try #require(await pairing.calls.first)
+        #expect(pairingCall.configuration.scannerIPAddress == "192.0.2.44")
+    }
+
     @Test("Password candidates accept derived passwords or a provided pairing key")
     func passwordAcceptanceAndPrecedence() async throws {
         let (store, directory) = setupStore()

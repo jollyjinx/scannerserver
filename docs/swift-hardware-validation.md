@@ -39,7 +39,8 @@ Use a dedicated scan directory for the clean-setup pass. Do not copy an existing
 - Open `http://<host>:8080/` and confirm scanner setup appears without an existing config file.
 - Start discovery and confirm the iX500 appears with its expected name, IP, MAC address, and serial number.
 - Select the scanner. If it requires a password, enter the scanner password and confirm pairing succeeds.
-- Repeat setup with the manual IP/MAC form and confirm the same scanner is resolved.
+- Repeat setup with the manual IPv4-address/host-name and MAC form and confirm both the scanner's
+  IP and a resolvable name select the same scanner.
 - Verify `/scans/.scannerserver-scanner.json` is created, remains owned by the configured container UID/GID, and contains no transient file beside it.
 - Clear setup and confirm scanning is blocked until the scanner is configured again.
 
@@ -80,7 +81,9 @@ credentials to the repository or ordinary test fixtures.
 - Start a scan from the web UI, wait for completion, then press the physical button and confirm it starts another scan immediately.
 - Press the button with an empty feeder, wait for the brief orange error indication to clear, then load paper and confirm the next button press scans without restarting the scanner or container.
 - Change the default mode and scanner configuration, then confirm the next button scan uses the new values.
-- Temporarily disconnect the scanner, confirm it is marked offline by the health check, reconnect it, and confirm reachability retry recovers.
+- Temporarily disconnect the scanner and confirm the web page changes to a grey **Not reachable**
+  indicator after the health check. Reconnect it and confirm reachability retry changes the
+  indicator to green **Reachable**.
 - Confirm only the configured scanner's startup advertisement or UDP `55265` button notice can trigger lifecycle work.
 
 ## Restart Compatibility

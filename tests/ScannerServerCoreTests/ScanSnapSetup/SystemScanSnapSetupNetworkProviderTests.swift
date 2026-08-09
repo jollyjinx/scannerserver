@@ -4,6 +4,14 @@ import Testing
 
 @Suite("System ScanSnap setup network provider")
 struct SystemScanSnapSetupNetworkProviderTests {
+    @Test("Scanner addresses accept IPv4 literals and resolvable host names")
+    func scannerAddressResolution() async throws {
+        let provider = SystemScanSnapSetupNetworkProvider()
+
+        #expect(try await provider.resolveScannerIPv4Address(" 192.0.2.44 ") == "192.0.2.44")
+        #expect(try await provider.resolveScannerIPv4Address("localhost") == "127.0.0.1")
+    }
+
     @Test("Network commands use the shared executor with a bounded timeout")
     func sharedExecutorAndTimeout() async throws {
         let executor = RecordingSetupProcessExecutor(results: [

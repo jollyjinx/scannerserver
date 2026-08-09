@@ -102,6 +102,7 @@ public enum ScanSnapButtonRuntimeFactory {
         armer: any ScanSnapButtonArming = ScanSnapButtonSessionArmer(),
         clock: any ScanSnapButtonClock = SystemScanSnapButtonClock(),
         sleeper: any ScanSnapSleeper = TaskScanSnapSleeper(),
+        reachabilityState: ScanSnapReachabilityState? = nil,
         configurationChangeCoordinator: ScanSnapButtonConfigurationChangeCoordinator? = nil
     ) -> ScanSnapButtonRuntimeController {
         let scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
@@ -131,6 +132,7 @@ public enum ScanSnapButtonRuntimeFactory {
             reachability: reachability,
             armer: armer,
             heartbeat: heartbeat,
+            reachabilityState: reachabilityState,
             clock: clock,
             sleeper: sleeper
         )

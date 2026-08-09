@@ -22,6 +22,7 @@ public actor ScannerServerRuntime {
             scannerStore: dependencies.scannerStore,
             settingsStore: dependencies.settingsStore,
             scanJobs: dependencies.scanJobs,
+            reachabilityState: dependencies.scannerReachability,
             configurationChangeCoordinator: dependencies.buttonConfigurationChanges
         )
         return ScannerServerRuntime(

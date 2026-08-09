@@ -6,6 +6,8 @@ actor FakeScanSnapSetupNetwork: ScanSnapSetupNetworkProviding {
     let neighbors: [ScanSnapSetupARPNeighbor]
     let routeIPAddress: String
     let macAddress: [UInt8]
+    let resolvedScannerAddresses: [String: String]
+    private(set) var scannerAddressLookups: [String] = []
     private(set) var routeLookups: [String] = []
     private(set) var preferredInterfaces: [String] = []
 
@@ -13,16 +15,26 @@ actor FakeScanSnapSetupNetwork: ScanSnapSetupNetworkProviding {
         interfaces: [ScanSnapSetupIPv4Interface] = [],
         neighbors: [ScanSnapSetupARPNeighbor] = [],
         routeIPAddress: String = "192.168.1.10",
-        macAddress: [UInt8] = [2, 0x11, 0x22, 0x33, 0x44, 0x55]
+        macAddress: [UInt8] = [2, 0x11, 0x22, 0x33, 0x44, 0x55],
+        resolvedScannerAddresses: [String: String] = [:]
     ) {
         self.interfaces = interfaces
         self.neighbors = neighbors
         self.routeIPAddress = routeIPAddress
         self.macAddress = macAddress
+        self.resolvedScannerAddresses = resolvedScannerAddresses
     }
 
     func ipv4Interfaces() -> [ScanSnapSetupIPv4Interface] { interfaces }
     func arpNeighbors() -> [ScanSnapSetupARPNeighbor] { neighbors }
+
+    func resolveScannerIPv4Address(_ addressOrName: String) throws -> String {
+        scannerAddressLookups.append(addressOrName)
+        if let resolved = resolvedScannerAddresses[addressOrName] {
+            return resolved
+        }
+        return try ScannerConfig.normalizeIPv4Address(addressOrName)
+    }
 
     func clientIPAddress(for scannerIPAddress: String) -> String {
         routeLookups.append(scannerIPAddress)

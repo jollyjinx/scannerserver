@@ -157,6 +157,8 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#"fetch("/setup/scanners/state""#))
                 #expect(body.contains("data-scanner-devices"))
                 #expect(body.contains("You can use manual setup at the same time."))
+                #expect(body.contains("Scanner IPv4 address or host name"))
+                #expect(body.contains("Host names are resolved to IPv4 during setup."))
                 #expect(!body.contains(#"name="scanner_security_key""#))
             }
             try await client.execute(uri: "/setup/scanners/state", method: .get) { response in
@@ -201,7 +203,8 @@ struct ScannerServerApplicationTests {
             name: "Office ScanSnap",
             pairingKey: "configured-key"
         ))
-        let application = try fixture.application()
+        let scannerReachability = ScanSnapReachabilityState(isReachable: true)
+        let application = try fixture.application(scannerReachability: scannerReachability)
 
         try await application.test(.router) { client in
             try await client.execute(uri: "/", method: .get) { response in
@@ -211,8 +214,19 @@ struct ScannerServerApplicationTests {
                 let advancedEnd = try #require(body.range(of: "</details>", range: advanced.lowerBound..<body.endIndex))
 
                 #expect(body.contains("action=\"/scan\""))
+                #expect(body.contains("scanner-reachability reachable"))
+                #expect(body.contains("scanner-reachability-dot"))
+                #expect(body.contains("Reachable</span>"))
                 #expect(advanced.lowerBound < scannerSetup.lowerBound)
                 #expect(scannerSetup.lowerBound < advancedEnd.lowerBound)
+            }
+
+            await scannerReachability.update(isReachable: false)
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("scanner-reachability unreachable"))
+                #expect(body.contains("Not reachable</span>"))
+                #expect(!body.contains("scanner-reachability reachable"))
             }
         }
     }
@@ -573,7 +587,8 @@ private struct HTTPFixture: Sendable {
     }
 
     func application(
-        scannerSetup: (any ScannerSetupServing)? = nil
+        scannerSetup: (any ScannerSetupServing)? = nil,
+        scannerReachability: ScanSnapReachabilityState? = nil
     ) throws -> some ApplicationProtocol {
         let dependencies = ScannerServerDependencies(
             settingsStore: settingsStore,
@@ -583,6 +598,7 @@ private struct HTTPFixture: Sendable {
             scannerSetup: scannerSetup ?? StoredScannerSetupService(
                 store: ScannerConfigStore(environment: environment)
             ),
+            scannerReachability: scannerReachability,
             environment: environment
         )
         return try ScannerServerApplication.make(

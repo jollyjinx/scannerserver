@@ -8,6 +8,7 @@ public enum ScanSnapSetupConfigurationError: Error, Equatable, Sendable, Localiz
     case noIPv4Interface
     case noClientMACAddress
     case noRouteToScanner(String)
+    case scannerNameResolutionFailed(name: String, message: String)
     case systemLookupFailed(String)
 
     public var errorDescription: String? {
@@ -26,11 +27,14 @@ public enum ScanSnapSetupConfigurationError: Error, Equatable, Sendable, Localiz
             "could not determine client MAC address; set SCANSNAP_CLIENT_MAC"
         case let .noRouteToScanner(address):
             "could not determine client IP address for scanner \(address)"
+        case let .scannerNameResolutionFailed(name, message):
+            "could not resolve scanner name \(name.debugDescription) to an IPv4 address: \(message)"
         case let .systemLookupFailed(message):
             message
         }
     }
 }
+
 
 public struct ScanSnapSetupEnvironmentConfiguration: Equatable, Sendable {
     public let clientIPAddress: String?
@@ -153,4 +157,3 @@ public struct ScanSnapSetupEnvironmentConfiguration: Equatable, Sendable {
         return UInt64(seconds * 1_000)
     }
 }
-

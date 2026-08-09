@@ -105,6 +105,9 @@ struct ScanSnapButtonRuntimeControllerTests {
             environment: environment
         )
         let coordinator = ScanSnapButtonConfigurationChangeCoordinator()
+        let webUpdates = WebUpdateNotifier()
+        let scannerReachability = ScanSnapReachabilityState(webUpdates: webUpdates)
+        let initialWebRevision = await webUpdates.currentRevision
         let controller = ScanSnapButtonRuntimeFactory.live(
             environment: environment,
             scannerStore: scannerStore,
@@ -119,6 +122,7 @@ struct ScanSnapButtonRuntimeControllerTests {
             udpTransportFactory: RuntimeButtonFakeUDPFactory(),
             reachability: ButtonFakeReachability([true]),
             armer: RuntimeButtonNoopArmer(),
+            reachabilityState: scannerReachability,
             configurationChangeCoordinator: coordinator
         )
 
@@ -132,7 +136,12 @@ struct ScanSnapButtonRuntimeControllerTests {
         await coordinator.scannerConfigurationDidChange()
 
         #expect(await controller.state().isArmed)
+        #expect(await scannerReachability.isReachable)
+        let reachableWebRevision = await webUpdates.currentRevision
+        #expect(reachableWebRevision > initialWebRevision)
         await controller.stop()
+        #expect(!(await scannerReachability.isReachable))
+        #expect(await webUpdates.currentRevision > reachableWebRevision)
     }
 
     @Test("A web scan invalidates and immediately restores the button session")
