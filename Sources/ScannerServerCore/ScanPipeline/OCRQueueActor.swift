@@ -60,6 +60,7 @@ public actor OCRQueueActor {
 
     private struct Job: Sendable {
         let inputPath: String
+        let batchID: UUID
         let environment: [String: String]?
         let workingDirectory: URL?
         let removeBlankPages: Bool
@@ -113,6 +114,7 @@ public actor OCRQueueActor {
 
     public func enqueue(
         _ inputPath: String,
+        batchID: UUID = UUID(),
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil,
         removeBlankPages: Bool = false,
@@ -120,6 +122,7 @@ public actor OCRQueueActor {
     ) async {
         queue.append(Job(
             inputPath: inputPath,
+            batchID: batchID,
             environment: environment,
             workingDirectory: workingDirectory,
             removeBlankPages: removeBlankPages,
@@ -170,10 +173,10 @@ public actor OCRQueueActor {
         var availableCPUs = configuration.cpuLimit
             - activeJobs.values.reduce(0) { $0 + $1.reservedCPUs }
 
-        while let job = queue.first {
+        while let index = queue.firstIndex(where: { canSchedule($0, availableCPUs: availableCPUs) }) {
+            let job = queue[index]
             let reservedCPUs = cpuReservation(for: job)
-            guard reservedCPUs <= availableCPUs else { break }
-            queue.removeFirst()
+            queue.remove(at: index)
             availableCPUs -= reservedCPUs
             start(job: job, reservedCPUs: reservedCPUs)
         }
@@ -295,7 +298,27 @@ public actor OCRQueueActor {
         let pageMode = job.environment?["SCAN_PAGE_MODE"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        return pageMode == "single" ? 1 : configuration.cpuLimit
+        return pageMode == "single" ? 1 : cpuLimit(for: job)
+    }
+
+    private func canSchedule(_ job: Job, availableCPUs: Int) -> Bool {
+        let reservation = cpuReservation(for: job)
+        guard reservation <= availableCPUs else { return false }
+        let batchUsage = activeJobs.values
+            .filter { $0.job.batchID == job.batchID }
+            .reduce(0) { $0 + $1.reservedCPUs }
+        return batchUsage + reservation <= cpuLimit(for: job)
+    }
+
+    private func cpuLimit(for job: Job) -> Int {
+        guard let rawValue = job.environment?["SCAN_OCR_CPU_LIMIT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            let requested = Int(rawValue),
+            requested > 0
+        else {
+            return configuration.cpuLimit
+        }
+        return min(requested, configuration.cpuLimit)
     }
 
     private func publishQueueState() async {

@@ -225,6 +225,62 @@ struct OCRQueueActorTests {
         #expect(await queue.state.running == 0)
         #expect(await queue.state.queued == 0)
     }
+
+    @Test("A saved CPU limit controls multipage OCRmyPDF workers")
+    func multipageCPULimit() async {
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 8, niceLevel: nil)
+        )
+
+        await queue.enqueue(
+            "/scans/one.pdf",
+            environment: ["SCAN_OCR_CPU_LIMIT": "3"]
+        )
+        await queue.waitUntilIdle()
+
+        let request = await executor.requests().first
+        #expect(request?.executable == "ocrmypdf")
+        #expect(argumentValue("--jobs", in: request?.arguments ?? []) == "3")
+    }
+
+    @Test("A saved CPU limit caps parallel pages from one scan")
+    func singlePageBatchCPULimit() async {
+        let executor = FakeProcessExecutor(stubs: [
+            .suspended(ProcessResult(exitStatus: 0)),
+            .suspended(ProcessResult(exitStatus: 0)),
+            .suspended(ProcessResult(exitStatus: 0)),
+            .suspended(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 4, niceLevel: nil)
+        )
+        let batchID = UUID()
+        let environment = [
+            "SCAN_PAGE_MODE": "single",
+            "SCAN_OCR_CPU_LIMIT": "2",
+        ]
+
+        await queue.enqueue("/scans/one.pdf", batchID: batchID, environment: environment)
+        await queue.enqueue("/scans/two.pdf", batchID: batchID, environment: environment)
+        await queue.enqueue("/scans/three.pdf", batchID: batchID, environment: environment)
+        await queue.enqueue("/scans/four.pdf", batchID: batchID, environment: environment)
+        await executor.waitForRequestCount(2)
+
+        #expect(await queue.state.running == 2)
+        #expect(await queue.state.queued == 2)
+
+        await executor.resumeNextSuspendedExecution()
+        await executor.waitForRequestCount(3)
+        #expect(await queue.state.running == 2)
+        #expect(await queue.state.queued == 1)
+
+        await queue.cancelAll()
+    }
 }
 
 private let serialOCRConfiguration = OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)

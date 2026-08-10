@@ -46,7 +46,7 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with default 
 
 Use **Advanced settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button.
 
-With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, blank-page removal, autocrop, and the extra margin kept around cropped content. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
+With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the OCR CPU limit, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers an **OCR CPUs** dropdown: **Automatic** uses the container-aware allowance, while a number lowers the limit for that mode. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
 
 ## Common Environment Variables
 
@@ -97,7 +97,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 
 OCR automatically uses the CPU allowance visible to the service. The detector considers the
 process's active processor count plus Linux cgroup CPU quota and cpuset restrictions, so Docker
-CPU limits are honored. `SCAN_OCR_CPU_LIMIT` can lower that detected allowance but cannot raise it.
+CPU limits are honored. `SCAN_OCR_CPU_LIMIT` can lower that detected allowance but cannot raise it. It can be configured globally in the container environment or per scan mode with the web UI. A mode set to **Automatic** inherits the global container-aware allowance.
 
 The queue treats the resulting value as one shared CPU budget:
 

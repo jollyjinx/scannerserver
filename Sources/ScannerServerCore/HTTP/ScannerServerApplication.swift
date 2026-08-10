@@ -534,6 +534,7 @@ private struct ModeSaveForm: Decodable {
     let format: String?
     let pageMode: String?
     let ocrEnabled: String?
+    let ocrCPULimit: String?
     let removeBlankPages: String?
     let cropPages: String?
     let cropMarginPoints: String?
@@ -550,6 +551,7 @@ private struct ModeSaveForm: Decodable {
         case format = "SCAN_FORMAT"
         case pageMode = "SCAN_PAGE_MODE"
         case ocrEnabled = "SCAN_OCR_ENABLED"
+        case ocrCPULimit = "SCAN_OCR_CPU_LIMIT"
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
         case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
@@ -567,6 +569,7 @@ private struct ModeSaveForm: Decodable {
             "SCAN_FORMAT": format ?? "pdf",
             "SCAN_PAGE_MODE": pageMode ?? "multi",
             "SCAN_OCR_ENABLED": ocrEnabled == nil ? "false" : "true",
+            "SCAN_OCR_CPU_LIMIT": ocrCPULimit ?? "",
             "SCAN_REMOVE_BLANK_PAGES": removeBlankPages == nil ? "false" : "true",
             "SCAN_CROP_PAGES": cropPages == nil ? "false" : "true",
             "SCAN_CROP_MARGIN_POINTS": cropMarginPoints ?? "",
@@ -812,6 +815,7 @@ private func renderIndexContent(
         html += renderModes(
             settings: settings,
             selectedMode: selectedMode,
+            maximumOCRCPUs: ocr.cpuLimit,
             scannerSetup: wifiBackend ? setup : nil,
             open: editModeID != nil
         )
@@ -884,6 +888,7 @@ private func renderScannerDevices(_ devices: [ScannerSetupDevice]) -> String {
 private func renderModes(
     settings: ScanSettings,
     selectedMode: ScanMode,
+    maximumOCRCPUs: Int,
     scannerSetup: ScannerSetupState?,
     open: Bool
 ) -> String {
@@ -965,6 +970,22 @@ private func renderModes(
         ],
         selected: selectedMode.settings.language,
         help: "Languages used by Tesseract when OCR is enabled."
+    )
+    var cpuChoices = [("", "Automatic (up to \(maximumOCRCPUs))")]
+    cpuChoices += (1...max(1, maximumOCRCPUs)).map { (String($0), "\($0)") }
+    if let selectedLimit = selectedMode.settings.ocrCPULimit,
+       selectedLimit > maximumOCRCPUs {
+        cpuChoices.append((
+            String(selectedLimit),
+            "\(selectedLimit) (currently capped to \(maximumOCRCPUs))"
+        ))
+    }
+    html += select(
+        name: "SCAN_OCR_CPU_LIMIT",
+        label: "OCR CPUs",
+        values: cpuChoices,
+        selected: selectedMode.settings.ocrCPULimitText,
+        help: "Automatic uses the container CPU allowance. Choose a lower limit to leave more CPU capacity free."
     )
     html += "</div><div class=\"setting-card\">"
     html += checkbox(

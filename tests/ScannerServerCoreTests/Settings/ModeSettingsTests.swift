@@ -16,6 +16,7 @@ struct ModeSettingsTests {
         #expect(settings.format == "pdf")
         #expect(settings.pageMode == "multi")
         #expect(settings.ocrEnabled)
+        #expect(settings.ocrCPULimit == nil)
         #expect(settings.removeBlankPages)
         #expect(settings.cropPages)
         #expect(settings.cropMarginPoints == 1.0)
@@ -42,6 +43,7 @@ struct ModeSettingsTests {
             "SCAN_FORMAT": "Images",
             "SCAN_PAGE_MODE": "SINGLE",
             "SCAN_OCR_ENABLED": "off",
+            "SCAN_OCR_CPU_LIMIT": "4",
             "SCAN_REMOVE_BLANK_PAGES": "1",
             "SCAN_CROP_PAGES": "false",
             "SCAN_CROP_MARGIN_POINTS": "2.5",
@@ -55,6 +57,7 @@ struct ModeSettingsTests {
         #expect(settings.format == "png")
         #expect(settings.pageMode == "single")
         #expect(!settings.ocrEnabled)
+        #expect(settings.ocrCPULimit == 4)
         #expect(settings.removeBlankPages)
         #expect(!settings.cropPages)
         #expect(settings.cropMarginPoints == 2.5)
@@ -69,6 +72,7 @@ struct ModeSettingsTests {
         #expect(Set(object.keys) == Set(ModeSettings.EnvironmentKey.allCases.map(\.rawValue)))
         #expect(object["SCAN_SIMPLEX"] == "true")
         #expect(object["SCAN_OCR_ENABLED"] == "false")
+        #expect(object["SCAN_OCR_CPU_LIMIT"] == "")
         #expect(object["SCAN_REMOVE_BLANK_PAGES"] == "true")
         #expect(object["SCAN_CROP_MARGIN_POINTS"] == "1")
     }
@@ -82,7 +86,19 @@ struct ModeSettingsTests {
         #expect(settings.simplex)
         #expect(settings.format == "png")
         #expect(settings.language == "deu+eng")
+        #expect(settings.ocrCPULimit == nil)
         #expect(settings.cropMarginPoints == 0.5)
+    }
+
+    @Test("OCR CPU limits accept positive numbers and preserve automatic mode", arguments: ["", "0", "-1", "invalid"])
+    func ocrCPULimit(value: String) {
+        let settings = ModeSettings(
+            values: ["SCAN_OCR_CPU_LIMIT": value],
+            defaults: ModeSettings(ocrCPULimit: nil)
+        )
+
+        #expect(settings.ocrCPULimit == nil)
+        #expect(settings.ocrCPULimitText.isEmpty)
     }
 
     @Test("Invalid crop margins fall back without making a scan mode unusable", arguments: ["-1", "nan", "invalid"])

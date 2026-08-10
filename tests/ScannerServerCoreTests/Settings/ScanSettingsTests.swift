@@ -31,12 +31,14 @@ struct ScanSettingsTests {
             "SCAN_RESOLUTION": "400",
             "SCAN_CROP_PAGES": "false",
             "SCAN_CROP_MARGIN_POINTS": "3.5",
+            "SCAN_OCR_CPU_LIMIT": "4",
         ])
 
         #expect(settings.defaultMode.settings.language == "fra+eng")
         #expect(settings.defaultMode.settings.resolution == "400")
         #expect(!settings.defaultMode.settings.cropPages)
         #expect(settings.defaultMode.settings.cropMarginPoints == 3.5)
+        #expect(settings.defaultMode.settings.ocrCPULimit == nil)
         #expect(settings.mode(id: "photo-png")?.settings.resolution == "600")
     }
 
@@ -164,6 +166,7 @@ struct ScanSettingsTests {
             "SCAN_OUTPUT_DIR": directory.path,
             "SCAN_SETTINGS_PATH": file.path,
             "SCAN_LANGUAGE": "nld+eng",
+            "SCAN_OCR_CPU_LIMIT": "4",
         ]
         #expect(ScanSettingsStore.defaultFileURL(environment: environment) == file)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -175,6 +178,7 @@ struct ScanSettingsTests {
         #expect(loaded.defaultModeID == "custom")
         #expect(loaded.defaultMode.settings.language == "nld+eng")
         #expect(loaded.defaultMode.settings.format == "png")
+        #expect(loaded.defaultMode.settings.ocrCPULimit == nil)
     }
 
     @Test("Concurrent store mutations preserve every mode update")

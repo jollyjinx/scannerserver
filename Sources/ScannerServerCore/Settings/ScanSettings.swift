@@ -78,7 +78,13 @@ public struct ScanSettings: Codable, Equatable, Sendable {
         let base = ModeSettings(environment: environment)
 
         func mode(_ id: String, _ name: String, _ overrides: [String: String] = [:]) -> ScanMode {
-            ScanMode(id: id, name: name, settings: ModeSettings(values: overrides, defaults: base))
+            var modeOverrides = ["SCAN_OCR_CPU_LIMIT": ""]
+            modeOverrides.merge(overrides) { _, override in override }
+            return ScanMode(
+                id: id,
+                name: name,
+                settings: ModeSettings(values: modeOverrides, defaults: base)
+            )
         }
 
         return [

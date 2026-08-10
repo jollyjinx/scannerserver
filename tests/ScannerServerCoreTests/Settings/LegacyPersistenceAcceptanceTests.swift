@@ -50,6 +50,7 @@ struct LegacyPersistenceAcceptanceTests {
         #expect(receipts.settings.format == "pdf")
         #expect(receipts.settings.pageMode == "multi")
         #expect(receipts.settings.ocrEnabled)
+        #expect(receipts.settings.ocrCPULimit == nil)
         #expect(receipts.settings.removeBlankPages)
         #expect(!receipts.settings.cropPages)
         #expect(receipts.settings.cropMarginPoints == 1.0)
@@ -63,6 +64,7 @@ struct LegacyPersistenceAcceptanceTests {
         #expect(archivePhoto.settings.format == "png")
         #expect(archivePhoto.settings.pageMode == "single")
         #expect(!archivePhoto.settings.ocrEnabled)
+        #expect(archivePhoto.settings.ocrCPULimit == nil)
         #expect(!archivePhoto.settings.removeBlankPages)
         #expect(archivePhoto.settings.cropPages)
         #expect(archivePhoto.settings.cropMarginPoints == 1.0)
@@ -97,7 +99,7 @@ struct LegacyPersistenceAcceptanceTests {
         #expect(modes.allSatisfy { Set($0.keys) == ["id", "name", "settings"] })
         let expectedSettingKeys = Set(
             ModeSettings.EnvironmentKey.allCases
-                .filter { $0 != .cropMarginPoints }
+                .filter { $0 != .cropMarginPoints && $0 != .ocrCPULimit }
                 .map(\.rawValue)
         )
         for mode in modes {
