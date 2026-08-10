@@ -80,6 +80,37 @@
         const scannerDevices = scannerSetup?.querySelector("[data-scanner-devices]");
         const scannerError = scannerSetup?.querySelector("[data-scanner-setup-error]");
         const scannerStatus = scannerSetup?.querySelector("[data-scanner-discovery-status]");
+        const manualSetupForm = scannerSetup?.querySelector("[data-scanner-manual-form]");
+        const manualIPAddress = manualSetupForm?.querySelector('input[name="scanner_ip"]');
+        const manualCredential = manualSetupForm?.querySelector('input[name="scanner_credential"]');
+        const manualSetupStorageKey = "scannerserver.manualSetup";
+        const manualSetupOutcome = new URLSearchParams(window.location.search).get("setup");
+        const restoreSubmittedIPAddress = [
+          "manual-missing", "manual-not-found", "manual-invalid", "password-failed", "unavailable",
+        ].includes(manualSetupOutcome);
+        const saveManualSetup = () => {
+          if (!manualIPAddress || !manualCredential) return;
+          try {
+            window.sessionStorage.setItem(manualSetupStorageKey, JSON.stringify({
+              ipAddress: manualIPAddress.value,
+              credential: manualCredential.value,
+            }));
+          } catch (_) {}
+        };
+        if (manualIPAddress && manualCredential) {
+          try {
+            const saved = JSON.parse(window.sessionStorage.getItem(manualSetupStorageKey) || "null");
+            if ((restoreSubmittedIPAddress || !manualIPAddress.value) && saved?.ipAddress) {
+              manualIPAddress.value = saved.ipAddress;
+            }
+            if (saved?.credential) manualCredential.value = saved.credential;
+          } catch (_) {}
+          manualIPAddress.addEventListener("input", saveManualSetup);
+          manualCredential.addEventListener("input", saveManualSetup);
+          manualSetupForm.addEventListener("submit", saveManualSetup);
+        } else {
+          try { window.sessionStorage.removeItem(manualSetupStorageKey); } catch (_) {}
+        }
         const renderScannerDevices = (devices) => {
           if (!scannerDevices) return;
           const currentIDs = Array.from(scannerDevices.querySelectorAll('input[name="device_id"]'))

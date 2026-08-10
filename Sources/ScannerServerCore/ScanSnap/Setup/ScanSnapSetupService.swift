@@ -175,21 +175,21 @@ public actor ScanSnapSetupService: ScannerSetupServing {
 
     public func configureManually(
         ipAddress: String,
-        macAddress: String,
-        serial: String
+        credential: String
     ) async -> ScannerSetupOutcome {
         let revision = beginInteractiveSetupOperation()
         defer { endInteractiveSetupOperation() }
+
         let scannerAddress = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let credential = credential.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !scannerAddress.isEmpty, !credential.isEmpty else {
+            operationError = "enter the scanner IP address or host name and its password or product serial number"
+            return .manualInvalid
+        }
+
         let normalizedIP: String
-        let normalizedMAC: String
         do {
-            normalizedIP = scannerAddress.isEmpty
-                ? ""
-                : try await network.resolveScannerIPv4Address(scannerAddress)
-            normalizedMAC = macAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? ""
-                : try ScannerConfig.normalizeMACAddress(macAddress)
+            normalizedIP = try await network.resolveScannerIPv4Address(scannerAddress)
         } catch is CancellationError {
             return .unavailable
         } catch let validationError as SettingsValidationError {
@@ -199,103 +199,27 @@ public actor ScanSnapSetupService: ScannerSetupServing {
             operationError = Self.message(for: error)
             return .manualNotFound
         }
-        let serial = serial.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedIP.isEmpty || !normalizedMAC.isEmpty else {
-            operationError = "enter a scanner IP address or Ethernet address"
-            return .manualInvalid
-        }
-
-        if normalizedIP.isEmpty {
-            do {
-                let device = try await device(withMACAddress: normalizedMAC)
-                guard isCurrent(revision) else { return .unavailable }
-                var record = SetupDeviceRecord(device)
-                if record.serial.isEmpty { record.serial = serial }
-                return await configure(record, revision: revision)
-            } catch is CancellationError {
-                return .unavailable
-            } catch {
-                guard isCurrent(revision) else { return .unavailable }
-                operationError = Self.message(for: error)
-                return .manualNotFound
-            }
-        }
 
         var record = SetupDeviceRecord(
             ipAddress: normalizedIP,
-            macAddress: normalizedMAC,
-            serial: serial,
+            macAddress: "",
+            serial: "",
             name: "ScanSnap"
         )
         do {
             if let found = try await directlyDiscover(scannerIPAddress: normalizedIP) {
                 guard isCurrent(revision) else { return .unavailable }
-                let discovered = SetupDeviceRecord(found)
-                if !normalizedMAC.isEmpty, !discovered.macAddress.isEmpty,
-                   discovered.macAddress != normalizedMAC {
-                    operationError = "the scanner at that address answered with a different Ethernet address"
-                    return .manualInvalid
-                }
-                record = discovered
-                if record.macAddress.isEmpty { record.macAddress = normalizedMAC }
-                if record.serial.isEmpty { record.serial = serial }
+                record = SetupDeviceRecord(found)
             }
         } catch is CancellationError {
             return .unavailable
         } catch {
             guard isCurrent(revision) else { return .unavailable }
-            // Compatibility requires an IP-only record when direct lookup cannot wake the scanner.
+            // The credential candidates still allow routed setup when UDP discovery is blocked.
         }
+
         guard isCurrent(revision) else { return .unavailable }
-        return await configure(record, revision: revision)
-    }
-
-    public func savePassword(_ password: String) async -> ScannerSetupOutcome {
-        let revision = beginInteractiveSetupOperation()
-        defer { endInteractiveSetupOperation() }
-        let storedConfig = await store.loadStored()
-        guard isCurrent(revision) else { return .unavailable }
-        guard var config = storedConfig, !config.scannerIP.isEmpty else {
-            return .setupRequired
-        }
-
-        var candidates: [(identity: ScanSnapIdentity, key: String, source: String)] = []
-        if let identity = try? ScanSnapIdentity.derive(fromPassword: password) {
-            candidates.append((identity, identity.value, "user-password"))
-        }
-        if !password.isEmpty, !candidates.contains(where: { $0.key == password }) {
-            candidates.append((ScanSnapIdentity(password), password, "provided-pairing-key"))
-        }
-
-        var lastMessage = "no password was provided"
-        for candidate in candidates {
-            do {
-                let result = try await testPairing(
-                    scannerIPAddress: config.scannerIP,
-                    identity: candidate.identity
-                )
-                guard isCurrent(revision) else { return .unavailable }
-                lastMessage = Self.pairingMessage(result.status)
-                guard result.accepted else { continue }
-                if let device = result.device {
-                    config = Self.merging(config, with: SetupDeviceRecord(device))
-                }
-                config.status = .configured
-                config.pairingKey = candidate.key
-                config.passwordSource = candidate.source
-                config.lastError = ""
-                return await save(config, success: .configured, revision: revision)
-            } catch is CancellationError {
-                return .unavailable
-            } catch {
-                guard isCurrent(revision) else { return .unavailable }
-                lastMessage = Self.message(for: error)
-            }
-        }
-
-        config.status = .needsPassword
-        config.lastError = "Password was rejected: \(lastMessage)."
-        return await save(config, success: .passwordFailed, revision: revision)
+        return await configure(record, credential: credential, revision: revision)
     }
 
     public func clear() async -> ScannerSetupOutcome {
@@ -474,26 +398,6 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         return devices.first(where: { $0.ipAddress == scannerIPAddress }) ?? devices.first
     }
 
-    private func device(withMACAddress macAddress: String) async throws -> ScanSnapDevice {
-        if let current = discoveredDevices.first(where: { $0.macAddress.lowercased() == macAddress }) {
-            return current
-        }
-        let configuration = try await makeDiscoveryConfiguration()
-        let devices = try await discovery.discover(configuration: configuration)
-        try Task.checkCancellation()
-        discoveredDevices = Self.deduplicatedAndSorted(
-            devices,
-            prefixes: environmentConfiguration?.macPrefixes ?? []
-        )
-        status = .done
-        guard let found = discoveredDevices.first(where: { $0.macAddress.lowercased() == macAddress }) else {
-            throw ScanSnapSetupConfigurationError.systemLookupFailed(
-                "no scanner with that Ethernet address was found"
-            )
-        }
-        return found
-    }
-
     private func configure(
         _ device: SetupDeviceRecord,
         revision: ScannerConfigSetupRevision,
@@ -547,6 +451,81 @@ public actor ScanSnapSetupService: ScannerSetupServing {
             config.lastError = "Default password \(password.debugDescription) was rejected: \(Self.message(for: error))."
             return await save(config, success: .passwordNeeded, revision: revision)
         }
+    }
+
+    private func configure(
+        _ device: SetupDeviceRecord,
+        credential: String,
+        revision: ScannerConfigSetupRevision
+    ) async -> ScannerSetupOutcome {
+        guard isCurrent(revision) else { return .unavailable }
+
+        var candidates: [UnifiedCredentialCandidate] = []
+        func appendCandidate(password: String, source: String, serialOnSuccess: String) {
+            guard let identity = try? ScanSnapIdentity.derive(fromPassword: password),
+                  !candidates.contains(where: { $0.identity == identity }) else {
+                return
+            }
+            candidates.append(UnifiedCredentialCandidate(
+                identity: identity,
+                source: source,
+                serialOnSuccess: serialOnSuccess
+            ))
+        }
+
+        if !device.serial.isEmpty {
+            appendCandidate(
+                password: ScannerConfig.password(fromSerial: device.serial),
+                source: "serial-default",
+                serialOnSuccess: device.serial
+            )
+        } else if credential.count > 4 {
+            appendCandidate(
+                password: ScannerConfig.password(fromSerial: credential),
+                source: "serial-default",
+                serialOnSuccess: Self.looksLikeProductSerial(credential) ? credential : ""
+            )
+        }
+        appendCandidate(password: credential, source: "user-password", serialOnSuccess: device.serial)
+
+        var lastMessage = "the supplied value could not be used as a scanner password"
+        var receivedPairingResult = false
+        for candidate in candidates {
+            do {
+                let result = try await testPairing(
+                    scannerIPAddress: device.ipAddress,
+                    identity: candidate.identity
+                )
+                guard isCurrent(revision) else { return .unavailable }
+                receivedPairingResult = true
+                lastMessage = Self.pairingMessage(result.status)
+                guard result.accepted else { continue }
+
+                var configuredDevice = result.device.map(SetupDeviceRecord.init) ?? device
+                if configuredDevice.serial.isEmpty {
+                    configuredDevice.serial = candidate.serialOnSuccess
+                }
+                var config = configuredDevice.config(status: .configured)
+                config.pairingKey = candidate.identity.value
+                config.status = .configured
+                config.passwordSource = candidate.source
+                config.lastError = ""
+                return await save(config, success: .configured, revision: revision)
+            } catch is CancellationError {
+                return .unavailable
+            } catch {
+                guard isCurrent(revision) else { return .unavailable }
+                lastMessage = Self.message(for: error)
+            }
+        }
+
+        var config = device.config(status: .needsPassword)
+        config.lastError = "Scanner password or product serial number was rejected: \(lastMessage)."
+        return await save(
+            config,
+            success: receivedPairingResult ? .passwordFailed : .unavailable,
+            revision: revision
+        )
     }
 
     private func testPairing(
@@ -707,15 +686,6 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         )
     }
 
-    private static func merging(_ config: ScannerConfig, with device: SetupDeviceRecord) -> ScannerConfig {
-        var config = config
-        config.scannerIP = device.ipAddress.isEmpty ? config.scannerIP : device.ipAddress
-        config.mac = device.macAddress.isEmpty ? config.mac : device.macAddress
-        config.serial = device.serial.isEmpty ? config.serial : device.serial
-        config.name = device.name.isEmpty ? config.name : device.name
-        return config
-    }
-
     private static func pairingMessage(_ status: ScanSnapPairingStatus) -> String {
         switch status {
         case .accepted: "pairing accepted"
@@ -726,6 +696,14 @@ public actor ScanSnapSetupService: ScannerSetupServing {
         case .missingSerialData: "scanner response did not include serial data"
         case .pairedToDifferentClientIP: "scanner is paired to a different client IP"
         case let .rejected(code): "pairing rejected with status \(code)"
+        }
+    }
+
+    private static func looksLikeProductSerial(_ value: String) -> Bool {
+        value.count == 10 && value.unicodeScalars.allSatisfy { scalar in
+            (48...57).contains(scalar.value)
+                || (65...90).contains(scalar.value)
+                || (97...122).contains(scalar.value)
         }
     }
 
@@ -784,4 +762,10 @@ private struct SetupDeviceRecord: Sendable {
             name: name
         )
     }
+}
+
+private struct UnifiedCredentialCandidate: Sendable {
+    let identity: ScanSnapIdentity
+    let source: String
+    let serialOnSuccess: String
 }

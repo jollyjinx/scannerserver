@@ -123,7 +123,10 @@ struct ScanSnapSetupServiceTests {
         await service.ensureDiscoveryStarted()
         #expect(await discovery.configurations.count == 1)
 
-        #expect(await service.savePassword("2468") == .configured)
+        #expect(await service.configureManually(
+            ipAddress: device.ipAddress,
+            credential: "2468"
+        ) == .configured)
         config = try #require(await store.loadStored())
         #expect(config.status == .configured)
         #expect(config.passwordSource == "user-password")
@@ -325,85 +328,6 @@ struct ScanSnapSetupServiceTests {
         await service.shutdown()
     }
 
-    @Test("Manual MAC and IP lookup preserve legacy outcomes")
-    func manualLookupOutcomes() async throws {
-        let found = setupDevice(serial: "")
-        let discovery = FakeScanSnapSetupDiscovery([
-            .devices([found]),
-            .devices([setupDevice(macAddress: "84:25:3f:aa:bb:cc")]),
-        ])
-        let (store, directory) = setupStore()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let service = ScanSnapSetupService(
-            environment: [:],
-            store: store,
-            network: FakeScanSnapSetupNetwork(
-                interfaces: [try ScanSnapSetupIPv4Interface(
-                    name: "eth0", ipAddress: "192.168.1.10", prefixLength: 24
-                )]
-            ),
-            discovery: discovery,
-            pairing: FakeScanSnapSetupPairing([acceptedPairing()]),
-            now: { fixedSetupDate }
-        )
-
-        #expect(await service.configureManually(
-            ipAddress: "",
-            macAddress: "84-25-3F-00-11-22",
-            serial: "AWRHC08122"
-        ) == .configured)
-        #expect(await service.configureManually(
-            ipAddress: "192.168.1.44",
-            macAddress: "84:25:3f:00:11:22",
-            serial: "AWRHC08122"
-        ) == .manualInvalid)
-        #expect(await service.configureManually(
-            ipAddress: "",
-            macAddress: "de:ad:be:ef:00:01",
-            serial: ""
-        ) == .manualNotFound)
-        #expect(await service.configureManually(
-            ipAddress: "not-an-ip",
-            macAddress: "",
-            serial: ""
-        ) == .manualInvalid)
-    }
-
-    @Test("Routed manual setup accepts a security key without device discovery")
-    func routedManualSetupWithSecurityKey() async throws {
-        let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
-        let pairing = FakeScanSnapSetupPairing([acceptedPairing()])
-        let (store, directory) = setupStore()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let service = ScanSnapSetupService(
-            environment: [:],
-            store: store,
-            network: FakeScanSnapSetupNetwork(routeIPAddress: "10.20.30.10"),
-            discovery: discovery,
-            pairing: pairing,
-            now: { fixedSetupDate }
-        )
-
-        #expect(await service.configureManually(
-            ipAddress: "192.0.2.44",
-            macAddress: "",
-            serial: "",
-            securityKey: "8122"
-        ) == .configured)
-
-        let config = try #require(await store.loadStored())
-        #expect(config.status == .configured)
-        #expect(config.scannerIP == "192.0.2.44")
-        #expect(config.pairingKey == "179130178176")
-        #expect(config.passwordSource == "user-password")
-        let discoveryConfiguration = try #require(await discovery.configurations.first)
-        #expect(discoveryConfiguration.routes.first?.targetIPAddresses == ["192.0.2.44"])
-        let pairingCall = try #require(await pairing.calls.first)
-        #expect(pairingCall.configuration.scannerIPAddress == "192.0.2.44")
-        #expect(pairingCall.configuration.clientIPAddress == "10.20.30.10")
-        #expect(pairingCall.configuration.identity.value == "179130178176")
-    }
-
     @Test("Manual setup resolves a scanner host name and persists its IPv4 address")
     func manualSetupWithHostName() async throws {
         let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
@@ -425,8 +349,7 @@ struct ScanSnapSetupServiceTests {
 
         #expect(await service.configureManually(
             ipAddress: " office-scanner.local ",
-            macAddress: "",
-            serial: "AWRHC08122"
+            credential: "AWRHC08122"
         ) == .configured)
 
         let config = try #require(await store.loadStored())
@@ -439,62 +362,101 @@ struct ScanSnapSetupServiceTests {
         #expect(pairingCall.configuration.scannerIPAddress == "192.0.2.44")
     }
 
-    @Test("Password candidates accept derived passwords or a provided pairing key")
-    func passwordAcceptanceAndPrecedence() async throws {
+    @Test("Unified manual credential derives the factory password from a serial number")
+    func unifiedManualSerialNumber() async throws {
+        let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
+        let pairing = FakeScanSnapSetupPairing([acceptedPairing()])
         let (store, directory) = setupStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await store.save(ScannerConfig(
-            status: .needsPassword,
-            scannerIP: "192.168.1.44",
-            serial: "AWRHC08122"
-        ))
-        let pairing = FakeScanSnapSetupPairing([
-            rejectedPairing(),
-            acceptedPairing(),
-        ])
         let service = ScanSnapSetupService(
             environment: [:],
             store: store,
-            network: FakeScanSnapSetupNetwork(),
-            discovery: FakeScanSnapSetupDiscovery([]),
+            network: FakeScanSnapSetupNetwork(routeIPAddress: "10.20.30.10"),
+            discovery: discovery,
             pairing: pairing,
             now: { fixedSetupDate }
         )
 
-        #expect(await service.savePassword("raw-pairing-key") == .configured)
+        #expect(await service.configureManually(
+            ipAddress: "192.0.2.44",
+            credential: "AWRHC08122"
+        ) == .configured)
+
         let config = try #require(await store.loadStored())
-        #expect(config.pairingKey == "raw-pairing-key")
-        #expect(config.passwordSource == "provided-pairing-key")
-        let calls = await pairing.calls
-        #expect(calls.count == 2)
-        #expect(calls[0].configuration.identity.value != "raw-pairing-key")
-        #expect(calls[1].configuration.identity.value == "raw-pairing-key")
+        #expect(config.serial == "AWRHC08122")
+        #expect(config.pairingKey == "179130178176")
+        #expect(config.passwordSource == "serial-default")
+        let call = try #require(await pairing.calls.first)
+        #expect(call.configuration.identity.value == "179130178176")
     }
 
-    @Test("Rejected passwords remain needs-password with the scanner status")
-    func passwordRejection() async throws {
+    @Test("Unified manual credential falls back from a serial-derived default to the full password")
+    func unifiedManualPassword() async throws {
+        let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
+        let pairing = FakeScanSnapSetupPairing([
+            rejectedPairing(.passwordRejected),
+            acceptedPairing(),
+        ])
         let (store, directory) = setupStore()
         defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await store.save(ScannerConfig(
-            status: .needsPassword,
-            scannerIP: "192.168.1.44"
-        ))
         let service = ScanSnapSetupService(
             environment: [:],
             store: store,
-            network: FakeScanSnapSetupNetwork(),
-            discovery: FakeScanSnapSetupDiscovery([]),
-            pairing: FakeScanSnapSetupPairing([
-                rejectedPairing(.passwordRejected),
-                rejectedPairing(.pairedToDifferentClientIP),
-            ]),
+            network: FakeScanSnapSetupNetwork(routeIPAddress: "10.20.30.10"),
+            discovery: discovery,
+            pairing: pairing,
             now: { fixedSetupDate }
         )
 
-        #expect(await service.savePassword("8122") == .passwordFailed)
+        #expect(await service.configureManually(
+            ipAddress: "192.0.2.44",
+            credential: "office-secret"
+        ) == .configured)
+
+        let expectedPasswordIdentity = try ScanSnapIdentity.derive(fromPassword: "office-secret").value
+        let expectedSerialSuffixIdentity = try ScanSnapIdentity.derive(fromPassword: "cret").value
+        let config = try #require(await store.loadStored())
+        #expect(config.serial.isEmpty)
+        #expect(config.pairingKey == expectedPasswordIdentity)
+        #expect(config.passwordSource == "user-password")
+        let calls = await pairing.calls
+        #expect(calls.map(\.configuration.identity.value) == [
+            expectedSerialSuffixIdentity,
+            expectedPasswordIdentity,
+        ])
+    }
+
+    @Test("Rejected unified credentials retain the target without persisting the raw credential")
+    func rejectedUnifiedManualCredential() async throws {
+        let discovery = FakeScanSnapSetupDiscovery([.failure(.discoveryFailed)])
+        let pairing = FakeScanSnapSetupPairing([
+            rejectedPairing(.passwordRejected),
+            rejectedPairing(.passwordRejected),
+        ])
+        let (store, directory) = setupStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = ScanSnapSetupService(
+            environment: [:],
+            store: store,
+            network: FakeScanSnapSetupNetwork(
+                routeIPAddress: "10.20.30.10",
+                resolvedScannerAddresses: ["scanner.example.net": "192.0.2.44"]
+            ),
+            discovery: discovery,
+            pairing: pairing,
+            now: { fixedSetupDate }
+        )
+
+        #expect(await service.configureManually(
+            ipAddress: "scanner.example.net",
+            credential: "wrong-password"
+        ) == .passwordFailed)
+
         let config = try #require(await store.loadStored())
         #expect(config.status == .needsPassword)
-        #expect(config.lastError == "Password was rejected: scanner is paired to a different client IP.")
+        #expect(config.scannerIP == "192.0.2.44")
+        #expect(config.serial.isEmpty)
+        #expect(config.pairingKey.isEmpty)
     }
 
     @Test("Clear removes stored setup but environment configuration keeps precedence")
@@ -591,8 +553,7 @@ struct ScanSnapSetupServiceTests {
         let manualSetup = Task {
             await service.configureManually(
                 ipAddress: "192.168.1.44",
-                macAddress: "84:25:3f:00:11:22",
-                serial: "AWRHC08122"
+                credential: "AWRHC08122"
             )
         }
         await pairing.waitUntilFirstCallIsSuspended()
@@ -625,8 +586,7 @@ struct ScanSnapSetupServiceTests {
         let manualSetup = Task {
             await service.configureManually(
                 ipAddress: "192.168.1.44",
-                macAddress: "84:25:3f:00:11:22",
-                serial: "AWRHC08122"
+                credential: "AWRHC08122"
             )
         }
         await pairing.waitUntilFirstCallIsSuspended()
@@ -634,33 +594,6 @@ struct ScanSnapSetupServiceTests {
         await pairing.resumeFirstCall()
 
         #expect(await manualSetup.value == .unavailable)
-        #expect(await store.loadStored() == nil)
-    }
-
-    @Test("Clear prevents suspended password pairing from restoring setup")
-    func clearInvalidatesSuspendedPasswordSetup() async throws {
-        let (store, directory) = setupStore()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await store.save(ScannerConfig(
-            status: .needsPassword,
-            scannerIP: "192.168.1.44"
-        ))
-        let pairing = SuspendedFirstScanSnapSetupPairing(firstResult: acceptedPairing())
-        let service = ScanSnapSetupService(
-            environment: [:],
-            store: store,
-            network: FakeScanSnapSetupNetwork(),
-            discovery: FakeScanSnapSetupDiscovery([]),
-            pairing: pairing,
-            now: { fixedSetupDate }
-        )
-
-        let passwordSetup = Task { await service.savePassword("8122") }
-        await pairing.waitUntilFirstCallIsSuspended()
-        #expect(await service.clear() == .cleared)
-        await pairing.resumeFirstCall()
-
-        #expect(await passwordSetup.value == .unavailable)
         #expect(await store.loadStored() == nil)
     }
 
@@ -692,16 +625,14 @@ struct ScanSnapSetupServiceTests {
         let olderSetup = Task {
             await service.configureManually(
                 ipAddress: "192.168.1.44",
-                macAddress: "84:25:3f:00:11:22",
-                serial: "AWRHC08122"
+                credential: "AWRHC08122"
             )
         }
         await pairing.waitUntilFirstCallIsSuspended()
 
         #expect(await service.configureManually(
             ipAddress: newerDevice.ipAddress,
-            macAddress: newerDevice.macAddress,
-            serial: newerDevice.serialNumber
+            credential: newerDevice.serialNumber
         ) == .configured)
         await pairing.resumeFirstCall()
 

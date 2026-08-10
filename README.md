@@ -80,19 +80,19 @@ The setup flow:
 
 1. Continuously discovers scanners on the local network using broadcast and ARP/neighbor entries while setup is open.
 2. Automatically chooses the scanner when exactly one iX500 is found; with multiple scanners, it shows them for manual selection.
-3. Keeps manual IPv4-address/host-name, serial-number, and Ethernet-address setup available while discovery runs.
+3. Keeps manual setup available while discovery runs, using an IPv4 address/host name and one field that accepts either the scanner password or product serial number.
 4. Reads the scanner serial number before pairing when the network permits it.
 5. Tries the factory-default password derived from the serial number.
-6. Stops discovery and asks for the scanner security key/password only when the default password is rejected or the serial number is unavailable.
+6. Tries the unified value as a serial-derived factory password and as the complete scanner password, retaining the entered form values in the browser when pairing fails.
 7. Saves the working scanner config in `/scans/.scannerserver-scanner.json`.
 
 It does not sweep every IP address in your subnet.
 
-For a scanner on another routed network, enter its IPv4 address or host name manually and provide
-its product serial number when available. Setup resolves host names to IPv4, tries the derived
-default first, then asks for the scanner security key/password if necessary. An Ethernet/MAC
-address cannot be used to calculate the security key and normally does not cross routers; it only
-helps discovery when the scanner is on the same local network.
+For a scanner on another routed network, enter its IPv4 address or host name and either its product
+serial number or scanner password. Setup resolves host names to IPv4 and first attempts targeted
+discovery. It derives the factory password from a discovered or entered serial number, then falls
+back to treating the complete entered value as the scanner password. The manual form does not ask
+for an Ethernet/MAC address or generated pairing key.
 
 ## Features
 

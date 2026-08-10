@@ -141,8 +141,7 @@ public protocol ScannerSetupServing: Sendable {
     func shutdown() async
     func discover() async -> ScannerSetupOutcome
     func select(deviceID: String) async -> ScannerSetupOutcome
-    func configureManually(ipAddress: String, macAddress: String, serial: String) async -> ScannerSetupOutcome
-    func savePassword(_ password: String) async -> ScannerSetupOutcome
+    func configureManually(ipAddress: String, credential: String) async -> ScannerSetupOutcome
     func clear() async -> ScannerSetupOutcome
 }
 
@@ -150,24 +149,6 @@ public extension ScannerSetupServing {
     func discoveryInProgress() async -> Bool { false }
     func ensureDiscoveryStarted() async {}
     func shutdown() async {}
-
-    func configureManually(
-        ipAddress: String,
-        macAddress: String,
-        serial: String,
-        securityKey: String
-    ) async -> ScannerSetupOutcome {
-        let outcome = await configureManually(
-            ipAddress: ipAddress,
-            macAddress: macAddress,
-            serial: serial
-        )
-        let securityKey = securityKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard outcome == .passwordNeeded, !securityKey.isEmpty else {
-            return outcome
-        }
-        return await savePassword(securityKey)
-    }
 }
 
 public actor StoredScannerSetupService: ScannerSetupServing {
@@ -196,10 +177,7 @@ public actor StoredScannerSetupService: ScannerSetupServing {
 
     public func discover() async -> ScannerSetupOutcome { .unavailable }
     public func select(deviceID: String) async -> ScannerSetupOutcome { .unavailable }
-    public func configureManually(ipAddress: String, macAddress: String, serial: String) async -> ScannerSetupOutcome {
-        .unavailable
-    }
-    public func savePassword(_ password: String) async -> ScannerSetupOutcome { .unavailable }
+    public func configureManually(ipAddress: String, credential: String) async -> ScannerSetupOutcome { .unavailable }
 
     public func clear() async -> ScannerSetupOutcome {
         do {
@@ -485,23 +463,17 @@ public enum ScannerServerApplication {
         router.post("/setup/scanners/manual") { request, context -> Response in
             let form = try await decodeForm(ScannerManualForm.self, request: request, context: context)
             let ipAddress = form.scannerIP ?? ""
-            let macAddress = form.scannerMAC ?? ""
-            guard !ipAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || !macAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let credential = form.scannerCredential ?? ""
+            guard !ipAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return Response.redirect(to: "/?setup=manual-missing")
             }
             return redirect(
                 setup: await dependencies.scannerSetup.configureManually(
                     ipAddress: ipAddress,
-                    macAddress: macAddress,
-                    serial: form.scannerSerial ?? "",
-                    securityKey: form.scannerSecurityKey ?? ""
+                    credential: credential
                 )
             )
-        }
-        router.post("/setup/scanners/password") { request, context -> Response in
-            let form = try await decodeForm(ScannerPasswordForm.self, request: request, context: context)
-            return redirect(setup: await dependencies.scannerSetup.savePassword(form.scannerPassword ?? ""))
         }
         router.post("/setup/scanners/clear") { _, _ -> Response in
             redirect(setup: await dependencies.scannerSetup.clear())
@@ -609,20 +581,11 @@ private struct ScannerSelectForm: Decodable {
 
 private struct ScannerManualForm: Decodable {
     let scannerIP: String?
-    let scannerMAC: String?
-    let scannerSerial: String?
-    let scannerSecurityKey: String?
+    let scannerCredential: String?
     enum CodingKeys: String, CodingKey {
         case scannerIP = "scanner_ip"
-        case scannerMAC = "scanner_mac"
-        case scannerSerial = "scanner_serial"
-        case scannerSecurityKey = "scanner_security_key"
+        case scannerCredential = "scanner_credential"
     }
-}
-
-private struct ScannerPasswordForm: Decodable {
-    let scannerPassword: String?
-    enum CodingKeys: String, CodingKey { case scannerPassword = "scanner_password" }
 }
 
 private func decodeForm<Form: Decodable>(
@@ -893,22 +856,17 @@ private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
     let errorHidden = setup.lastError.isEmpty ? " hidden" : ""
     html += "<pre data-scanner-setup-error\(errorHidden)>\(htmlEscape(setup.lastError))</pre>"
     if setup.needsPassword {
-        html += "<p class=\"muted\" data-scanner-discovery-status>Automatic discovery is paused while setup waits for the scanner password.</p>"
+        html += "<p class=\"muted\" data-scanner-discovery-status>Automatic discovery is paused. Correct the scanner password or product serial number and try again.</p>"
     } else if !setup.configured {
         html += "<p class=\"muted\" data-scanner-discovery-status>Looking for scanners automatically…</p>"
     }
     html += "<div class=\"setup-controls\"><form method=\"post\" action=\"/setup/scanners/discover\"><button>Discover scanners</button></form>"
     html += "<div data-scanner-devices>\(renderScannerDevices(setup.devices))</div>"
-    html += "<form method=\"post\" action=\"/setup/scanners/manual\">"
-    html += "<label>Scanner IPv4 address or host name<input name=\"scanner_ip\" value=\"\(htmlEscape(setup.ipAddress))\"></label>"
-    html += "<p class=\"muted\">For a scanner on another network, enter its IPv4 address or host name and product serial number. Host names are resolved to IPv4 during setup. If its default password was changed, setup will ask for the password after trying the serial-derived default.</p>"
-    html += "<label>Product serial number<input name=\"scanner_serial\"></label>"
-    html += "<label>Ethernet address (same network only)<input name=\"scanner_mac\"></label>"
-    html += "<p class=\"muted\">The security key cannot be derived from the Ethernet address. The address only helps discovery on the same local network.</p>"
+    html += "<form method=\"post\" action=\"/setup/scanners/manual\" data-scanner-manual-form>"
+    html += "<label>Scanner IPv4 address or host name<input name=\"scanner_ip\" value=\"\(htmlEscape(setup.ipAddress))\" required></label>"
+    html += "<label>Scanner password or product serial number<input type=\"text\" name=\"scanner_credential\" required></label>"
+    html += "<p class=\"muted\">If you never changed the scanner password, enter the product serial number printed on the scanner. The factory password will be derived automatically.</p>"
     html += "<button>Connect scanner</button></form>"
-    if setup.needsPassword {
-        html += "<form method=\"post\" action=\"/setup/scanners/password\"><label>Security key or scanner password<input type=\"text\" name=\"scanner_password\" autofocus></label><button>Try password</button></form>"
-    }
     html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div>"
     return html
 }
@@ -1186,11 +1144,11 @@ private func setupMessage(_ code: String?) -> String? {
     switch code {
     case "discovery-started": "Scanner discovery started."
     case "no-device": "Choose a discovered scanner."
-    case "manual-missing": "Enter a scanner IPv4 address, host name, or Ethernet address."
+    case "manual-missing": "Enter the scanner IPv4 address or host name and its password or product serial number."
     case "manual-not-found": "No scanner matching those details was found."
     case "manual-invalid": "The scanner details are invalid."
-    case "password-needed": "Enter the scanner security key or password to finish setup."
-    case "password-failed": "The scanner security key or password was rejected."
+    case "password-needed": "Enter the scanner password or product serial number to finish setup."
+    case "password-failed": "The scanner password or product serial number was rejected."
     case "configured": "Scanner configured."
     case "cleared": "Scanner setup cleared."
     case "setup-required": "Choose a Wi-Fi scanner before starting a scan."
