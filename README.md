@@ -100,7 +100,8 @@ helps discovery when the scanner is on the same local network.
 - Web scan button and physical iX500 button support.
 - Saved scan modes for duplex/simplex, PDF/PNG, OCR, autocrop, and blank-page removal.
 - Scan list grouped by day with previews and download/delete controls.
-- Background OCR with OCRmyPDF and Tesseract.
+- CPU-budgeted background OCR with OCRmyPDF and Tesseract, including automatic container CPU
+  detection, per-page concurrency, configurable caps, and reduced-priority nice mode.
 - Runs as a non-root user while still binding the web UI to port `80`.
 
 ## Updating

@@ -4,14 +4,14 @@ import Testing
 
 @Suite("OCR queue actor")
 struct OCRQueueActorTests {
-    @Test("Jobs execute in FIFO order on one worker")
+    @Test("Multipage jobs execute in FIFO order within one CPU budget")
     func fifo() async {
         let executor = FakeProcessExecutor(stubs: [
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/three.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor)
+        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -60,7 +60,8 @@ struct OCRQueueActorTests {
         let queue = OCRQueueActor(
             executor: executor,
             documentExecutor: executor,
-            workspaceSuffixProvider: { "test" }
+            workspaceSuffixProvider: { "test" },
+            configuration: serialOCRConfiguration
         )
 
         await queue.enqueue(
@@ -98,7 +99,7 @@ struct OCRQueueActorTests {
         let output = root.appendingPathComponent("scan.ocr.pdf")
         try Data().write(to: output)
         let executor = FakeProcessExecutor(stubs: [])
-        let queue = OCRQueueActor(executor: executor)
+        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue(root.appendingPathComponent("scan.png").path)
         await queue.enqueue(input.path)
@@ -115,7 +116,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 73, standardError: "already exists\n")),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor)
+        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -132,7 +133,7 @@ struct OCRQueueActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0)),
         ])
-        let queue = OCRQueueActor(executor: executor)
+        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -152,7 +153,7 @@ struct OCRQueueActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor)
+        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -171,7 +172,7 @@ struct OCRQueueActorTests {
         let executor = FakeProcessExecutor(stubs: [
             .suspended(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor)
+        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await executor.waitForRequestCount(1)
@@ -185,7 +186,48 @@ struct OCRQueueActorTests {
         #expect(await queue.state.input == "/scans/one.pdf")
         #expect(await queue.state.queued == 0)
     }
+
+    @Test("Single-page jobs use one OCR process per available CPU")
+    func singlePageConcurrency() async {
+        let executor = FakeProcessExecutor(stubs: [
+            .suspended(ProcessResult(exitStatus: 0)),
+            .suspended(ProcessResult(exitStatus: 0)),
+            .suspended(ProcessResult(exitStatus: 0)),
+            .suspended(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 3, niceLevel: 10)
+        )
+        let environment = ["SCAN_PAGE_MODE": "single"]
+
+        await queue.enqueue("/scans/one.pdf", environment: environment)
+        await queue.enqueue("/scans/two.pdf", environment: environment)
+        await queue.enqueue("/scans/three.pdf", environment: environment)
+        await queue.enqueue("/scans/four.pdf", environment: environment)
+        await executor.waitForRequestCount(3)
+
+        #expect(await queue.state.running == 3)
+        #expect(await queue.state.queued == 1)
+        let firstRequests = await executor.requests()
+        #expect(firstRequests.allSatisfy {
+            $0.executable == "nice"
+                && Array($0.arguments.prefix(3)) == ["-n", "10", "ocrmypdf"]
+                && argumentValue("--jobs", in: $0.arguments) == "1"
+        })
+
+        await executor.resumeNextSuspendedExecution()
+        await executor.waitForRequestCount(4)
+        #expect(await queue.state.running == 3)
+        #expect(await queue.state.queued == 0)
+
+        await queue.cancelAll()
+        #expect(await queue.state.running == 0)
+        #expect(await queue.state.queued == 0)
+    }
 }
+
+private let serialOCRConfiguration = OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
 
 private func ocrArguments(
     input: String,
@@ -198,7 +240,15 @@ private func ocrArguments(
         "--rotate-pages-threshold", "2.0",
         "--deskew",
         "--optimize", "1",
+        "--jobs", "1",
         input,
         output,
     ]
+}
+
+private func argumentValue(_ name: String, in arguments: [String]) -> String? {
+    guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else {
+        return nil
+    }
+    return arguments[index + 1]
 }

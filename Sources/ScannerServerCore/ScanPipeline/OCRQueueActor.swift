@@ -21,6 +21,9 @@ public struct OCRQueueState: Equatable, Sendable {
     public var input: String
     public var output: String
     public var error: String
+    public var cpuLimit: Int
+    public var niceLevel: Int?
+    public var running: Int
     public var queued: Int
     public var recentJobs: [OCRJobTiming]
 
@@ -31,6 +34,9 @@ public struct OCRQueueState: Equatable, Sendable {
         input: String = "",
         output: String = "",
         error: String = "",
+        cpuLimit: Int = 1,
+        niceLevel: Int? = nil,
+        running: Int = 0,
         queued: Int = 0,
         recentJobs: [OCRJobTiming] = []
     ) {
@@ -40,6 +46,9 @@ public struct OCRQueueState: Equatable, Sendable {
         self.input = input
         self.output = output
         self.error = error
+        self.cpuLimit = cpuLimit
+        self.niceLevel = niceLevel
+        self.running = running
         self.queued = queued
         self.recentJobs = recentJobs
     }
@@ -57,23 +66,47 @@ public actor OCRQueueActor {
         let cropPages: Bool
     }
 
+    private struct ActiveJob: Sendable {
+        let job: Job
+        let started: Date
+        let reservedCPUs: Int
+        let task: Task<Void, Never>
+    }
+
+    private struct JobCompletion: Sendable {
+        let finished: Date
+        let status: String
+        let output: String
+        let error: String
+        let publishedOutputPath: String
+    }
+
     private let executor: any ProcessExecutor
     private let documentExecutor: any ProcessExecutor
     private let workspaceSuffixProvider: WorkspaceSuffixProvider
+    private let configuration: OCRQueueConfiguration
     private var queue: [Job] = []
-    private var worker: Task<Void, Never>?
-    private var queueState = OCRQueueState()
+    private var activeJobs: [UUID: ActiveJob] = [:]
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var isCancellingAll = false
+    private var queueState: OCRQueueState
 
     public init(
         executor: any ProcessExecutor,
         documentExecutor: (any ProcessExecutor)? = nil,
         workspaceSuffixProvider: @escaping WorkspaceSuffixProvider = { UUID().uuidString },
+        configuration: OCRQueueConfiguration = OCRQueueConfiguration(),
         webUpdates: WebUpdateNotifier = WebUpdateNotifier()
     ) {
         self.executor = executor
         self.documentExecutor = documentExecutor ?? NativeDocumentToolExecutor(executor: executor)
         self.workspaceSuffixProvider = workspaceSuffixProvider
+        self.configuration = configuration
         self.webUpdates = webUpdates
+        self.queueState = OCRQueueState(
+            cpuLimit: configuration.cpuLimit,
+            niceLevel: configuration.niceLevel
+        )
     }
 
     public var state: OCRQueueState { queueState }
@@ -92,27 +125,26 @@ public actor OCRQueueActor {
             removeBlankPages: removeBlankPages,
             cropPages: cropPages
         ))
-        queueState.queued = queue.count
-        if queueState.status == "idle" {
-            queueState.status = "queued"
-        }
-        await webUpdates.notify()
-
-        guard worker == nil else { return }
-        worker = Task { await runWorker() }
+        scheduleAvailableJobs()
+        await publishQueueState()
     }
 
     public func waitUntilIdle() async {
-        let currentWorker = worker
-        await currentWorker?.value
+        guard !queue.isEmpty || !activeJobs.isEmpty else { return }
+        await withCheckedContinuation { continuation in
+            idleWaiters.append(continuation)
+        }
     }
 
     public func cancelAll() async {
         queue.removeAll()
-        queueState.queued = 0
-        let currentWorker = worker
-        currentWorker?.cancel()
-        await currentWorker?.value
+        isCancellingAll = true
+        let tasks = activeJobs.values.map(\.task)
+        for task in tasks { task.cancel() }
+        for task in tasks { await task.value }
+        isCancellingAll = false
+        scheduleAvailableJobs()
+        await publishQueueState()
     }
 
     public func cancelJobs(referencing path: String) async {
@@ -121,102 +153,161 @@ public actor OCRQueueActor {
         let removedQueuedJob = queue.count != queuedCount
         queueState.queued = queue.count
 
-        guard queueState.status == "running",
-              jobReferencesPath(queueState.input, path: path)
-        else {
-            if removedQueuedJob {
-                await webUpdates.notify()
-            }
-            return
+        let matchingTasks = activeJobs.values
+            .filter { jobReferencesPath($0.job.inputPath, path: path) }
+            .map(\.task)
+        for task in matchingTasks { task.cancel() }
+        for task in matchingTasks { await task.value }
+
+        if removedQueuedJob || !matchingTasks.isEmpty {
+            scheduleAvailableJobs()
+            await publishQueueState()
+        }
+    }
+
+    private func scheduleAvailableJobs() {
+        guard !isCancellingAll else { return }
+        var availableCPUs = configuration.cpuLimit
+            - activeJobs.values.reduce(0) { $0 + $1.reservedCPUs }
+
+        while let job = queue.first {
+            let reservedCPUs = cpuReservation(for: job)
+            guard reservedCPUs <= availableCPUs else { break }
+            queue.removeFirst()
+            availableCPUs -= reservedCPUs
+            start(job: job, reservedCPUs: reservedCPUs)
         }
 
-        let currentWorker = worker
-        currentWorker?.cancel()
-        await currentWorker?.value
-
-        if worker == nil, !queue.isEmpty {
+        queueState.running = activeJobs.count
+        queueState.queued = queue.count
+        if !activeJobs.isEmpty {
+            queueState.status = "running"
+        } else if !queue.isEmpty {
             queueState.status = "queued"
-            worker = Task { await runWorker() }
         }
     }
 
-    private func runWorker() async {
-        while !Task.isCancelled, !queue.isEmpty {
-            let job = queue.removeFirst()
-            queueState = OCRQueueState(
-                started: Date(),
-                status: "running",
-                input: job.inputPath,
-                queued: queue.count,
-                recentJobs: queueState.recentJobs
+    private func start(job: Job, reservedCPUs: Int) {
+        let identifier = UUID()
+        let started = Date()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let completion = await self.run(job: job, jobs: reservedCPUs)
+            await self.finish(identifier: identifier, completion: completion)
+        }
+        activeJobs[identifier] = ActiveJob(
+            job: job,
+            started: started,
+            reservedCPUs: reservedCPUs,
+            task: task
+        )
+        queueState.started = started
+        queueState.finished = nil
+        queueState.input = job.inputPath
+        queueState.output = ""
+        queueState.error = ""
+    }
+
+    private func run(job: Job, jobs: Int) async -> JobCompletion {
+        guard let outputPath = OCRInputPath.outputPath(for: job.inputPath) else {
+            return JobCompletion(
+                finished: Date(),
+                status: "failed (64)",
+                output: "",
+                error: "Raw PDF must end in .pdf and must not already be an OCR PDF: \(job.inputPath)",
+                publishedOutputPath: ""
             )
-            await webUpdates.notify()
-
-            guard let outputPath = OCRInputPath.outputPath(for: job.inputPath) else {
-                queueState.finished = Date()
-                queueState.status = "failed (64)"
-                queueState.error = "Raw PDF must end in .pdf and must not already be an OCR PDF: \(job.inputPath)"
-                recordCurrentJob()
-                await webUpdates.notify()
-                continue
-            }
-            guard !FileManager.default.fileExists(atPath: outputPath) else {
-                queueState.finished = Date()
-                queueState.status = "failed (73)"
-                queueState.error = "OCR output file already exists: \(outputPath)"
-                recordCurrentJob(output: outputPath)
-                await webUpdates.notify()
-                continue
-            }
-
-            do {
-                let result = try await execute(job: job, outputPath: outputPath)
-                queueState.finished = Date()
-                queueState.status = result.succeeded ? "done" : "failed (\(result.exitStatus))"
-                let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-                queueState.output = result.succeeded && processOutput.isEmpty ? outputPath : processOutput
-                queueState.error = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
-                queueState.queued = queue.count
-                recordCurrentJob(output: result.succeeded ? outputPath : "")
-                await webUpdates.notify()
-            } catch is CancellationError {
-                queueState.finished = Date()
-                queueState.status = "cancelled"
-                queueState.queued = queue.count
-                recordCurrentJob()
-                await webUpdates.notify()
-                break
-            } catch {
-                queueState.finished = Date()
-                queueState.status = "failed"
-                queueState.error = error.localizedDescription
-                queueState.queued = queue.count
-                recordCurrentJob()
-                await webUpdates.notify()
-            }
+        }
+        guard !FileManager.default.fileExists(atPath: outputPath) else {
+            return JobCompletion(
+                finished: Date(),
+                status: "failed (73)",
+                output: "",
+                error: "OCR output file already exists: \(outputPath)",
+                publishedOutputPath: outputPath
+            )
         }
 
-        if queueState.status == "queued" {
-            queueState.status = "idle"
-            await webUpdates.notify()
+        do {
+            let result = try await execute(job: job, outputPath: outputPath, jobs: jobs)
+            let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            return JobCompletion(
+                finished: Date(),
+                status: result.succeeded ? "done" : "failed (\(result.exitStatus))",
+                output: result.succeeded && processOutput.isEmpty ? outputPath : processOutput,
+                error: result.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
+                publishedOutputPath: result.succeeded ? outputPath : ""
+            )
+        } catch is CancellationError {
+            return JobCompletion(
+                finished: Date(),
+                status: "cancelled",
+                output: "",
+                error: "",
+                publishedOutputPath: ""
+            )
+        } catch {
+            return JobCompletion(
+                finished: Date(),
+                status: "failed",
+                output: "",
+                error: error.localizedDescription,
+                publishedOutputPath: ""
+            )
         }
-        worker = nil
     }
 
-    private func recordCurrentJob(output: String = "") {
-        guard let started = queueState.started, let finished = queueState.finished else { return }
+    private func finish(identifier: UUID, completion: JobCompletion) async {
+        guard let activeJob = activeJobs.removeValue(forKey: identifier) else { return }
+        record(
+            job: activeJob.job,
+            started: activeJob.started,
+            completion: completion
+        )
+        queueState.finished = completion.finished
+        queueState.input = activeJob.job.inputPath
+        queueState.output = completion.output
+        queueState.error = completion.error
+        scheduleAvailableJobs()
+        if activeJobs.isEmpty, queue.isEmpty {
+            queueState.status = completion.status
+            resumeIdleWaiters()
+        }
+        await publishQueueState()
+    }
+
+    private func record(job: Job, started: Date, completion: JobCompletion) {
         queueState.recentJobs.insert(
             OCRJobTiming(
-                input: queueState.input,
-                output: output,
-                status: queueState.status,
-                duration: max(0, finished.timeIntervalSince(started))
+                input: job.inputPath,
+                output: completion.publishedOutputPath,
+                status: completion.status,
+                duration: max(0, completion.finished.timeIntervalSince(started))
             ),
             at: 0
         )
         if queueState.recentJobs.count > 20 {
             queueState.recentJobs.removeLast(queueState.recentJobs.count - 20)
         }
+    }
+
+    private func cpuReservation(for job: Job) -> Int {
+        let pageMode = job.environment?["SCAN_PAGE_MODE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return pageMode == "single" ? 1 : configuration.cpuLimit
+    }
+
+    private func publishQueueState() async {
+        queueState.running = activeJobs.count
+        queueState.queued = queue.count
+        await webUpdates.notify()
+    }
+
+    private func resumeIdleWaiters() {
+        let waiters = idleWaiters
+        idleWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
     private func jobReferencesPath(_ inputPath: String, path: String) -> Bool {
@@ -234,13 +325,15 @@ public actor OCRQueueActor {
             .path
     }
 
-    private func execute(job: Job, outputPath: String) async throws -> ProcessResult {
+    private func execute(job: Job, outputPath: String, jobs: Int) async throws -> ProcessResult {
         guard job.removeBlankPages || job.cropPages else {
             return try await executor.execute(ScanPipelineCommands.ocr(
                 inputPath: job.inputPath,
                 outputPath: outputPath,
                 environment: job.environment,
-                workingDirectory: job.workingDirectory
+                workingDirectory: job.workingDirectory,
+                jobs: jobs,
+                niceLevel: configuration.niceLevel
             ))
         }
 
@@ -284,7 +377,9 @@ public actor OCRQueueActor {
             inputPath: stagedInput.path,
             outputPath: outputPath,
             environment: job.environment,
-            workingDirectory: workspace
+            workingDirectory: workspace,
+            jobs: jobs,
+            niceLevel: configuration.niceLevel
         ))
     }
 

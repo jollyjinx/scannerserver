@@ -58,7 +58,9 @@ persisted stores, reachability, and physical-button session state.
 
 - Hummingbird and SwiftNIO provide the HTTP service.
 - `ScanJobActor` enforces single-flight acquisition and publishes scan lifecycle events.
-- `OCRQueueActor` serializes background OCR work and exposes cancellation and recent-job state.
+- `OCRQueueActor` schedules background OCR against one cgroup-aware CPU budget. Multipage PDFs
+  give that budget to OCRmyPDF's page workers, while single-page PDFs run concurrently with one
+  worker each. It exposes aggregate running/queued state, targeted cancellation, and recent jobs.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for

@@ -270,7 +270,10 @@ public struct ScannerServerDependencies: Sendable {
         self.scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
         self.scanJobs = scanJobs
         self.scanSnapAcquisitionSessions = scanSnapAcquisitionSessions
-        self.ocrQueue = ocrQueue ?? OCRQueueActor(executor: FoundationProcessExecutor())
+        self.ocrQueue = ocrQueue ?? OCRQueueActor(
+            executor: FoundationProcessExecutor(),
+            configuration: OCRQueueConfiguration(environment: environment)
+        )
         self.outputPathResolver = outputPathResolver
         self.scannerSetup = scannerSetup
         self.previewProvider = previewProvider
@@ -291,7 +294,11 @@ public struct ScannerServerDependencies: Sendable {
         let processExecutor = FoundationProcessExecutor()
         let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
         let webUpdates = WebUpdateNotifier()
-        let ocrQueue = OCRQueueActor(executor: processExecutor, webUpdates: webUpdates)
+        let ocrQueue = OCRQueueActor(
+            executor: processExecutor,
+            configuration: OCRQueueConfiguration(environment: environment),
+            webUpdates: webUpdates
+        )
         let settingsStore = ScanSettingsStore(environment: environment)
         let scannerStore = ScannerConfigStore(environment: environment)
         let buttonConfigurationChanges = ScanSnapButtonConfigurationChangeCoordinator()
@@ -1052,7 +1059,15 @@ private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     if !job.error.isEmpty { html += "<pre>\(htmlEscape(job.error))</pre>" }
 
     html += "<h2>OCR</h2><p><span class=\"status\">\(htmlEscape(ocr.status))</span>"
+    if ocr.running > 1 { html += " \(ocr.running) jobs active" }
     if ocr.queued > 0 { html += " \(ocr.queued) queued" }
+    html += "</p>"
+    html += "<p>CPU budget: \(ocr.cpuLimit); priority: "
+    if let niceLevel = ocr.niceLevel {
+        html += "nice +\(niceLevel)"
+    } else {
+        html += "normal"
+    }
     html += "</p>"
     if ocr.status == "running" || ocr.status == "queued" || ocr.queued > 0 {
         html += "<form method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel OCR</button></form>"

@@ -62,7 +62,8 @@ struct ScanJobActorTests {
         let ocrQueue = OCRQueueActor(
             executor: executor,
             documentExecutor: executor,
-            workspaceSuffixProvider: { "test" }
+            workspaceSuffixProvider: { "test" },
+            configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
         )
         let scanner = FakeNativeScanner(result: ProcessResult(
             exitStatus: 0,

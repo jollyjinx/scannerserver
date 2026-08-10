@@ -60,6 +60,9 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_FORMAT` | `pdf` | `pdf` or `png` |
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
+| `SCAN_OCR_CPU_LIMIT` | detected CPU allowance | Optional positive cap on CPUs reserved for OCR; values above the detected allowance are clamped |
+| `SCAN_OCR_NICE` | `true` | Run OCRmyPDF and its child processes with reduced CPU scheduling priority |
+| `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
 | `SCAN_CROP_PAGES` | `true` | Crop PDF pages to the detected paper or content bounds before OCR |
 | `SCAN_CROP_MARGIN_POINTS` | `1` | Extra margin around content-classified autocrops, in PDF points (1 point = 1/72 inch) |
 | `SCANNER_IP` | empty | Optional scanner IP override; web setup can persist this instead |
@@ -89,6 +92,35 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 
 `SCANSNAP_BUTTON_REGISTRATION_INTERVAL_SECONDS` remains accepted as a compatibility alias for
 `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` when the current variable is absent.
+
+## OCR CPU Scheduling And Priority
+
+OCR automatically uses the CPU allowance visible to the service. The detector considers the
+process's active processor count plus Linux cgroup CPU quota and cpuset restrictions, so Docker
+CPU limits are honored. `SCAN_OCR_CPU_LIMIT` can lower that detected allowance but cannot raise it.
+
+The queue treats the resulting value as one shared CPU budget:
+
+- A multipage PDF reserves the full budget and passes it to OCRmyPDF with `--jobs` so its pages
+  are processed in parallel.
+- Single-page PDF mode starts one OCRmyPDF process per page, up to the budget, and gives each
+  process `--jobs 1`.
+- Multipage and single-page work do not oversubscribe each other. FIFO ordering is preserved when
+  the next document needs more CPU slots than are currently free.
+
+OCR runs through `nice` at level `+10` by default. This lets interactive and service work take CPU
+precedence while still allowing OCR to use otherwise-idle cores. To use at most four CPUs and a
+lower-priority nice level of `+15`:
+
+```yaml
+environment:
+  SCAN_OCR_CPU_LIMIT: "4"
+  SCAN_OCR_NICE: "true"
+  SCAN_OCR_NICE_LEVEL: "15"
+```
+
+Set `SCAN_OCR_NICE` to `false` to use normal process priority. The status page reports the active
+CPU budget, nice priority, running OCR job count, and queued job count.
 
 ## Scan Directory Access Check
 
