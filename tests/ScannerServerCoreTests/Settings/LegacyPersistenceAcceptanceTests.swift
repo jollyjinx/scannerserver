@@ -99,7 +99,7 @@ struct LegacyPersistenceAcceptanceTests {
         #expect(modes.allSatisfy { Set($0.keys) == ["id", "name", "settings"] })
         let expectedSettingKeys = Set(
             ModeSettings.EnvironmentKey.allCases
-                .filter { $0 != .cropMarginPoints && $0 != .ocrCPULimit }
+                .filter { $0 != .cropMarginPoints && $0 != .ocrCPULimit && $0 != .ocrNice }
                 .map(\.rawValue)
         )
         for mode in modes {

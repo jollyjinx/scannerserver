@@ -274,6 +274,7 @@ struct ScannerServerApplicationTests {
                 "SCAN_MODE=Gray",
                 "SCAN_LANGUAGE=eng",
                 "SCAN_OCR_CPU_LIMIT=4",
+                "SCAN_OCR_NICE=true",
                 "SCAN_CROP_MARGIN_POINTS=2.5",
                 "SCAN_OCR_ENABLED=on",
                 "SCAN_CROP_PAGES=on",
@@ -293,6 +294,7 @@ struct ScannerServerApplicationTests {
             #expect(mode.settings.pageMode == "single")
             #expect(mode.settings.ocrEnabled)
             #expect(mode.settings.ocrCPULimit == 4)
+            #expect(mode.settings.ocrNice)
             #expect(!mode.settings.removeBlankPages)
             #expect(mode.settings.cropPages)
             #expect(mode.settings.cropMarginPoints == 2.5)
@@ -310,6 +312,8 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#"<select name="SCAN_OCR_CPU_LIMIT">"#))
                 #expect(body.contains(#"<option value="4" selected>"#))
                 #expect(body.contains("Automatic uses the container CPU allowance."))
+                #expect(body.contains(#"<select name="SCAN_OCR_NICE">"#))
+                #expect(body.contains(#"<option value="true" selected>Niced (reduced)</option>"#))
                 #expect(body.contains(#"name="SCAN_CROP_MARGIN_POINTS" value="2.5" min="0" step="0.1""#))
                 #expect(body.contains(#"class="mode-load-form""#))
                 #expect(body.contains(#"class="mode-editor-form""#))

@@ -4,7 +4,7 @@ public struct OCRQueueConfiguration: Equatable, Sendable {
     public let cpuLimit: Int
     public let niceLevel: Int?
 
-    public init(cpuLimit: Int, niceLevel: Int? = 10) {
+    public init(cpuLimit: Int, niceLevel: Int? = nil) {
         self.cpuLimit = max(1, cpuLimit)
         self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
     }
@@ -27,7 +27,7 @@ public struct OCRQueueConfiguration: Equatable, Sendable {
             cpuLimit = detectedProcessorCount
         }
 
-        let niceEnabled = environment["SCAN_OCR_NICE"].map(Self.isTruthy) ?? true
+        let niceEnabled = environment["SCAN_OCR_NICE"].map(Self.isTruthy) ?? false
         if niceEnabled {
             let configuredLevel = Self.nonEmpty(environment["SCAN_OCR_NICE_LEVEL"])
                 .flatMap(Int.init) ?? 10
@@ -35,6 +35,17 @@ public struct OCRQueueConfiguration: Equatable, Sendable {
         } else {
             niceLevel = nil
         }
+    }
+
+    func niceLevel(for environment: [String: String]?) -> Int? {
+        guard let requestedMode = environment?["SCAN_OCR_NICE"] else {
+            return niceLevel
+        }
+        guard Self.isTruthy(requestedMode) else { return nil }
+
+        let requestedLevel = Self.nonEmpty(environment?["SCAN_OCR_NICE_LEVEL"])
+            .flatMap(Int.init) ?? niceLevel ?? 10
+        return min(max(requestedLevel, 1), 19)
     }
 
     private static func isTruthy(_ value: String) -> Bool {

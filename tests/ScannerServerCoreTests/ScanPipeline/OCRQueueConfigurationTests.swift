@@ -12,7 +12,7 @@ struct OCRQueueConfigurationTests {
         )
 
         #expect(configuration.cpuLimit == 10)
-        #expect(configuration.niceLevel == 10)
+        #expect(configuration.niceLevel == nil)
     }
 
     @Test("Configured CPU limit can lower but not exceed the detected allowance")
@@ -30,15 +30,19 @@ struct OCRQueueConfigurationTests {
     @Test("Nice mode can be disabled or assigned a safe positive level")
     func niceConfiguration() {
         #expect(OCRQueueConfiguration(
+            environment: ["SCAN_OCR_NICE": "true"],
+            detectedProcessorCount: 10
+        ).niceLevel == 10)
+        #expect(OCRQueueConfiguration(
             environment: ["SCAN_OCR_NICE": "false"],
             detectedProcessorCount: 10
         ).niceLevel == nil)
         #expect(OCRQueueConfiguration(
-            environment: ["SCAN_OCR_NICE_LEVEL": "15"],
+            environment: ["SCAN_OCR_NICE": "true", "SCAN_OCR_NICE_LEVEL": "15"],
             detectedProcessorCount: 10
         ).niceLevel == 15)
         #expect(OCRQueueConfiguration(
-            environment: ["SCAN_OCR_NICE_LEVEL": "99"],
+            environment: ["SCAN_OCR_NICE": "true", "SCAN_OCR_NICE_LEVEL": "99"],
             detectedProcessorCount: 10
         ).niceLevel == 19)
     }

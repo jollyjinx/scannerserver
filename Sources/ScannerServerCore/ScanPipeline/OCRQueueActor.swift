@@ -209,6 +209,7 @@ public actor OCRQueueActor {
         queueState.input = job.inputPath
         queueState.output = ""
         queueState.error = ""
+        queueState.niceLevel = configuration.niceLevel(for: job.environment)
     }
 
     private func run(job: Job, jobs: Int) async -> JobCompletion {
@@ -356,7 +357,7 @@ public actor OCRQueueActor {
                 environment: job.environment,
                 workingDirectory: job.workingDirectory,
                 jobs: jobs,
-                niceLevel: configuration.niceLevel
+                niceLevel: configuration.niceLevel(for: job.environment)
             ))
         }
 
@@ -402,7 +403,7 @@ public actor OCRQueueActor {
             environment: job.environment,
             workingDirectory: workspace,
             jobs: jobs,
-            niceLevel: configuration.niceLevel
+            niceLevel: configuration.niceLevel(for: job.environment)
         ))
     }
 

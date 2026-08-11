@@ -17,6 +17,7 @@ struct ModeSettingsTests {
         #expect(settings.pageMode == "multi")
         #expect(settings.ocrEnabled)
         #expect(settings.ocrCPULimit == nil)
+        #expect(!settings.ocrNice)
         #expect(settings.removeBlankPages)
         #expect(settings.cropPages)
         #expect(settings.cropMarginPoints == 1.0)
@@ -44,6 +45,7 @@ struct ModeSettingsTests {
             "SCAN_PAGE_MODE": "SINGLE",
             "SCAN_OCR_ENABLED": "off",
             "SCAN_OCR_CPU_LIMIT": "4",
+            "SCAN_OCR_NICE": "yes",
             "SCAN_REMOVE_BLANK_PAGES": "1",
             "SCAN_CROP_PAGES": "false",
             "SCAN_CROP_MARGIN_POINTS": "2.5",
@@ -58,6 +60,7 @@ struct ModeSettingsTests {
         #expect(settings.pageMode == "single")
         #expect(!settings.ocrEnabled)
         #expect(settings.ocrCPULimit == 4)
+        #expect(settings.ocrNice)
         #expect(settings.removeBlankPages)
         #expect(!settings.cropPages)
         #expect(settings.cropMarginPoints == 2.5)
@@ -73,6 +76,7 @@ struct ModeSettingsTests {
         #expect(object["SCAN_SIMPLEX"] == "true")
         #expect(object["SCAN_OCR_ENABLED"] == "false")
         #expect(object["SCAN_OCR_CPU_LIMIT"] == "")
+        #expect(object["SCAN_OCR_NICE"] == "false")
         #expect(object["SCAN_REMOVE_BLANK_PAGES"] == "true")
         #expect(object["SCAN_CROP_MARGIN_POINTS"] == "1")
     }
@@ -87,6 +91,7 @@ struct ModeSettingsTests {
         #expect(settings.format == "png")
         #expect(settings.language == "deu+eng")
         #expect(settings.ocrCPULimit == nil)
+        #expect(!settings.ocrNice)
         #expect(settings.cropMarginPoints == 0.5)
     }
 

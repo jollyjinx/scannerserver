@@ -535,6 +535,7 @@ private struct ModeSaveForm: Decodable {
     let pageMode: String?
     let ocrEnabled: String?
     let ocrCPULimit: String?
+    let ocrNice: String?
     let removeBlankPages: String?
     let cropPages: String?
     let cropMarginPoints: String?
@@ -552,6 +553,7 @@ private struct ModeSaveForm: Decodable {
         case pageMode = "SCAN_PAGE_MODE"
         case ocrEnabled = "SCAN_OCR_ENABLED"
         case ocrCPULimit = "SCAN_OCR_CPU_LIMIT"
+        case ocrNice = "SCAN_OCR_NICE"
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
         case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
@@ -570,6 +572,7 @@ private struct ModeSaveForm: Decodable {
             "SCAN_PAGE_MODE": pageMode ?? "multi",
             "SCAN_OCR_ENABLED": ocrEnabled == nil ? "false" : "true",
             "SCAN_OCR_CPU_LIMIT": ocrCPULimit ?? "",
+            "SCAN_OCR_NICE": ocrNice ?? "false",
             "SCAN_REMOVE_BLANK_PAGES": removeBlankPages == nil ? "false" : "true",
             "SCAN_CROP_PAGES": cropPages == nil ? "false" : "true",
             "SCAN_CROP_MARGIN_POINTS": cropMarginPoints ?? "",
@@ -986,6 +989,13 @@ private func renderModes(
         values: cpuChoices,
         selected: selectedMode.settings.ocrCPULimitText,
         help: "Automatic uses the container CPU allowance. Choose a lower limit to leave more CPU capacity free."
+    )
+    html += select(
+        name: "SCAN_OCR_NICE",
+        label: "OCR priority",
+        values: [("false", "Normal"), ("true", "Niced (reduced)")],
+        selected: selectedMode.settings.ocrNiceText,
+        help: "Niced OCR yields CPU time to other work on the service host."
     )
     html += "</div><div class=\"setting-card\">"
     html += checkbox(

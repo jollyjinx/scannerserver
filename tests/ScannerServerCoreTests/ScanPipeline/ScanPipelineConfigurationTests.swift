@@ -15,6 +15,7 @@ struct ScanPipelineConfigurationTests {
         #expect(configuration.format == "pdf")
         #expect(configuration.pageMode == "multi")
         #expect(configuration.ocrEnabled)
+        #expect(!configuration.ocrNice)
         #expect(configuration.removeBlankPages)
         #expect(configuration.cropPages)
     }
@@ -42,6 +43,7 @@ struct ScanPipelineConfigurationTests {
                 "SCAN_FORMAT": "Images",
                 "SCAN_PAGE_MODE": "booklet",
                 "SCAN_OCR_ENABLED": "off",
+                "SCAN_OCR_NICE": "on",
                 "SCAN_TRIGGER": "button",
             ]
         )
@@ -49,9 +51,11 @@ struct ScanPipelineConfigurationTests {
         #expect(configuration.format == "png")
         #expect(configuration.pageMode == "multi")
         #expect(!configuration.ocrEnabled)
+        #expect(configuration.ocrNice)
         #expect(configuration.environment["SCAN_FORMAT"] == "png")
         #expect(configuration.environment["SCAN_PAGE_MODE"] == "multi")
         #expect(configuration.environment["SCAN_OCR_ENABLED"] == "false")
+        #expect(configuration.environment["SCAN_OCR_NICE"] == "true")
         #expect(configuration.environment["SCANNER_IP"] == "192.0.2.10")
         #expect(configuration.environment["SCAN_TRIGGER"] == "button")
     }

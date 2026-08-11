@@ -46,7 +46,7 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with default 
 
 Use **Advanced settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button.
 
-With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the OCR CPU limit, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers an **OCR CPUs** dropdown: **Automatic** uses the container-aware allowance, while a number lowers the limit for that mode. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
+With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the OCR CPU limit and process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers an **OCR CPUs** dropdown: **Automatic** uses the container-aware allowance, while a number lowers the limit for that mode. **OCR priority** selects normal or reduced (`nice`) process priority for each mode. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
 
 ## Common Environment Variables
 
@@ -61,7 +61,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
 | `SCAN_OCR_CPU_LIMIT` | detected CPU allowance | Optional positive cap on CPUs reserved for OCR; values above the detected allowance are clamped |
-| `SCAN_OCR_NICE` | `true` | Run OCRmyPDF and its child processes with reduced CPU scheduling priority |
+| `SCAN_OCR_NICE` | `false` | Run OCRmyPDF and its child processes with reduced CPU scheduling priority |
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
 | `SCAN_CROP_PAGES` | `true` | Crop PDF pages to the detected paper or content bounds before OCR |
 | `SCAN_CROP_MARGIN_POINTS` | `1` | Extra margin around content-classified autocrops, in PDF points (1 point = 1/72 inch) |
@@ -108,9 +108,10 @@ The queue treats the resulting value as one shared CPU budget:
 - Multipage and single-page work do not oversubscribe each other. FIFO ordering is preserved when
   the next document needs more CPU slots than are currently free.
 
-OCR runs through `nice` at level `+10` by default. This lets interactive and service work take CPU
-precedence while still allowing OCR to use otherwise-idle cores. To use at most four CPUs and a
-lower-priority nice level of `+15`:
+OCR runs at normal process priority by default so a busy service host cannot starve background OCR.
+Reduced-priority mode remains available as an explicit opt-in, globally through the environment or
+per scan mode through **OCR priority** in the web UI. The global nice level controls the increment
+used by niced modes. To use at most four CPUs and a nice level of `+15`:
 
 ```yaml
 environment:
@@ -119,8 +120,8 @@ environment:
   SCAN_OCR_NICE_LEVEL: "15"
 ```
 
-Set `SCAN_OCR_NICE` to `false` to use normal process priority. The status page reports the active
-CPU budget, nice priority, running OCR job count, and queued job count.
+The status page reports the active CPU budget, process priority, running OCR job count, and queued
+job count.
 
 ## Scan Directory Access Check
 

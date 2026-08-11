@@ -247,6 +247,47 @@ struct OCRQueueActorTests {
         #expect(argumentValue("--jobs", in: request?.arguments ?? []) == "3")
     }
 
+    @Test("A saved OCR priority overrides the queue default", arguments: [
+        (
+            queueNiceLevel: Optional(10),
+            modeNice: "false",
+            expectedNiceLevel: Optional<Int>.none,
+            expectedExecutable: "ocrmypdf"
+        ),
+        (
+            queueNiceLevel: Optional<Int>.none,
+            modeNice: "true",
+            expectedNiceLevel: Optional(15),
+            expectedExecutable: "nice"
+        ),
+    ])
+    func savedPriority(
+        queueNiceLevel: Int?,
+        modeNice: String,
+        expectedNiceLevel: Int?,
+        expectedExecutable: String
+    ) async {
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: queueNiceLevel)
+        )
+
+        var environment = ["SCAN_OCR_NICE": modeNice]
+        environment["SCAN_OCR_NICE_LEVEL"] = "15"
+        await queue.enqueue("/scans/one.pdf", environment: environment)
+        await queue.waitUntilIdle()
+
+        let request = await executor.requests().first
+        #expect(request?.executable == expectedExecutable)
+        #expect(await queue.state.niceLevel == expectedNiceLevel)
+        if modeNice == "true" {
+            #expect(Array(request?.arguments.prefix(3) ?? []) == ["-n", "15", "ocrmypdf"])
+        }
+    }
+
     @Test("A saved CPU limit caps parallel pages from one scan")
     func singlePageBatchCPULimit() async {
         let executor = FakeProcessExecutor(stubs: [

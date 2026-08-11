@@ -11,6 +11,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         "SCAN_PAGE_MODE",
         "SCAN_OCR_ENABLED",
         "SCAN_OCR_CPU_LIMIT",
+        "SCAN_OCR_NICE",
         "SCAN_REMOVE_BLANK_PAGES",
         "SCAN_CROP_PAGES",
         "SCAN_CROP_MARGIN_POINTS",
@@ -24,6 +25,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
     public let format: String
     public let pageMode: String
     public let ocrEnabled: Bool
+    public let ocrNice: Bool
     public let removeBlankPages: Bool
     public let cropPages: Bool
     public let environment: [String: String]
@@ -67,6 +69,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         source = string("SCAN_SOURCE", default: "ADF Duplex")
         simplex = boolean("SCAN_SIMPLEX", default: false)
         ocrEnabled = boolean("SCAN_OCR_ENABLED", default: true)
+        ocrNice = boolean("SCAN_OCR_NICE", default: false)
         removeBlankPages = boolean("SCAN_REMOVE_BLANK_PAGES", default: true)
         cropPages = boolean("SCAN_CROP_PAGES", default: true)
 
@@ -93,6 +96,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         processEnvironment["SCAN_FORMAT"] = format
         processEnvironment["SCAN_PAGE_MODE"] = pageMode
         processEnvironment["SCAN_OCR_ENABLED"] = Self.boolText(ocrEnabled)
+        processEnvironment["SCAN_OCR_NICE"] = Self.boolText(ocrNice)
         processEnvironment["SCAN_REMOVE_BLANK_PAGES"] = Self.boolText(removeBlankPages)
         processEnvironment["SCAN_CROP_PAGES"] = Self.boolText(cropPages)
         self.environment = processEnvironment
