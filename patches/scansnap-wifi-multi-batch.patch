@@ -1,0 +1,107 @@
+--- a/scansnap.c
++++ b/scansnap.c
+@@ -868,1 +868,20 @@
++static bool scan_response_is_error(const uint8_t *response, size_t len,
++                                   int32_t *error_code) {
++    if (len < 12 || memcmp(response + 4, "VENS", 4) != 0) return false;
++    int32_t code = (int32_t)get_be32(response + 8);
++    if (code == 0) return false;
++    if (error_code) *error_code = code;
++    return true;
++}
++
++static bool scan_response_reports_feeder_empty(const uint8_t *response, size_t len) {
++    static const uint8_t empty_status[12] = {
++        0x00, 0x0a, 0x00, 0x00, 0x00, 0x00,
++        0x80, 0x03, 0x00, 0x00, 0x00, 0x00,
++    };
++    return len >= sizeof(empty_status)
++        && memcmp(response + len - sizeof(empty_status),
++                  empty_status, sizeof(empty_status)) == 0;
++}
++
+ static int recv_jpeg(int fd, uint8_t *prepend, size_t prepend_len,
+@@ -931,3 +950,4 @@
+ static int do_scan(uint32_t scanner_ip, const uint8_t mac[6],
+-                   struct page *pages, int *page_count) {
++                   struct page *pages, int *page_count, bool *feeder_empty) {
++    *feeder_empty = false;
+     fprintf(stderr, "Scanning...\n");
+@@ -978,5 +998,6 @@
+-    if (n >= 12 && memcmp(initial + 4, "VENS", 4) == 0 && get_be32(initial + 8) != 0) {
+-        int32_t ec = (int32_t)get_be32(initial + 8);
++    int32_t initial_error = 0;
++    if (scan_response_is_error(initial, (size_t)n, &initial_error)) {
+         do_cleanup(fd, scanner_ip, mac);
+-        fprintf(stderr, "Error: scanner error %d — is there paper in the feeder?\n", ec);
++        fprintf(stderr, "Error: scanner error %d — is there paper in the feeder?\n",
++                initial_error);
+         return -1;
+@@ -1036,8 +1057,11 @@
+             if (rlen < 0) break;
+-            if (rlen >= 12) {
+-                bool done = false;
+-                for (int i = rlen - 12; i < rlen; i++)
+-                    if (resp[i] != 0) { done = true; break; }
+-                if (done) break;
++            if (g_debug && rlen >= 12) {
++                char tail_hex[25];
++                hex_encode(resp + rlen - 12, 12, tail_hex);
++                fprintf(stderr, "  sheet %d status tail %s\n", pg / 2 + 1, tail_hex);
+             }
++            if (scan_response_reports_feeder_empty(resp, (size_t)rlen)) {
++                *feeder_empty = true;
++                break;
++            }
+         } else {
+@@ -1056,2 +1080,8 @@
+         if (an <= 0) break;
++        int32_t page_error = 0;
++        if (scan_response_is_error(ack, (size_t)an, &page_error)) {
++            fprintf(stderr, "  scan ended before side %u with scanner status %d\n",
++                    (unsigned int)pg + 1, page_error);
++            break;
++        }
+         prepend = calloc(1, (size_t)an);
+@@ -1659,4 +1689,39 @@
+-    struct page all_pages[MAX_PAGES];
++    struct page all_pages[MAX_PAGES] = {0};
+     int total = 0;
+-    if (do_scan(scanner_ip, mac, all_pages, &total) < 0) return 1;
++    bool first_batch = true;
++    for (;;) {
++        if (!first_batch) {
++            fprintf(stderr, "Continuing scan in a new WiFi transfer batch...\n");
++            g_scanner_ip = scanner_ip;
++            if (do_register(scanner_ip, local_ip, mac) < 0
++                || do_handshake_conn1(scanner_ip, local_ip, mac) < 0
++                || do_init_session(scanner_ip, mac) < 0) {
++                if (total == 0) return 1;
++                break;
++            }
++            do_re_register(scanner_ip, local_ip, mac);
++        }
++
++        struct page batch_pages[MAX_PAGES] = {0};
++        int batch_count = 0;
++        bool feeder_empty = false;
++        int scan_result = do_scan(
++            scanner_ip, mac, batch_pages, &batch_count, &feeder_empty
++        );
++        if (scan_result < 0) {
++            if (total == 0) return 1;
++            break;
++        }
++        if (batch_count == 0) break;
++
++        int available = MAX_PAGES - total;
++        int accepted = batch_count < available ? batch_count : available;
++        for (int i = 0; i < accepted; i++)
++            all_pages[total + i] = batch_pages[i];
++        total += accepted;
++        for (int i = accepted; i < batch_count; i++) free(batch_pages[i].data);
++
++        if (feeder_empty || total >= MAX_PAGES) break;
++        first_batch = false;
++    }
+     if (total == 0) { fprintf(stderr, "No pages scanned\n"); return 1; }

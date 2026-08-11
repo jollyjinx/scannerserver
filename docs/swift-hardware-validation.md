@@ -61,6 +61,11 @@ credentials to the repository or ordinary test fixtures.
 ## Scan And OCR
 
 - Run a duplex PDF scan from the web UI and confirm exactly one scan job starts.
+- Load at least 25 duplex sheets, scan them as one job, and confirm the log reports continuation in
+  a new Wi-Fi transfer batch. Verify the resulting single PDF has the expected page count and passes
+  `qpdf --check`; no sheets may remain in the feeder after the job completes.
+- Confirm the terminal empty-feeder response ends that multi-batch job without opening another
+  transfer, leaving the scanner ready rather than blinking orange.
 - Attempt a second scan while the first is running and confirm it is ignored without interrupting the active scan.
 - Verify source naming follows `YYYY-MM-DD.HHMMSS.pdf` and the file opens successfully.
 - Confirm the source PDF remains downloadable while blank removal, crop, and OCR run on a copy.

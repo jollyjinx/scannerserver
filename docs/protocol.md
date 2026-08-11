@@ -150,6 +150,28 @@ the full-width 128-byte frame is rejected. Successful probes finish their tempor
 sequence with D6 before returning; the scanner may retain that client's ownership claim briefly.
 Never commit the hardware password or a generated pairing identity.
 
+## Wi-Fi Image Transfer Batches
+
+The iX500 can finish one Wi-Fi image-transfer connection while sheets still remain in the feeder.
+In real-hardware validation with duplex documents, one transfer ended after 18 physical sheets (36
+JPEG sides and approximately 23 MB of image data). The scanner accepted a fresh protocol session
+immediately and delivered the remaining sheets. This is a transfer boundary, not the scanner's
+document or PDF page limit; the exact boundary can depend on the captured image data.
+
+The patched `scansnap-wifi` client therefore retains the sides already received, finalizes the
+current command sequence, establishes a fresh registration/handshake/init sequence, and appends the
+next transfer batch to the same output. It repeats until either 256 captured sides have been
+collected or the iX500 reports the terminal feeder-empty status observed on the wire:
+
+```text
+00 0a 00 00 00 00 80 03 00 00 00 00
+```
+
+Do not infer end-of-document merely because one of the final status bytes is non-zero. That former
+heuristic could stop a scan at an ordinary intermediate response. An all-zero status after a sheet
+also does not mean the feeder is empty. Debug logging prints the final 12 response bytes so new
+firmware behavior can be compared without logging pairing credentials or document data.
+
 ## Physical Button Support
 
 Button "arming" is a volatile client registration inside the scanner; it is not a local boolean

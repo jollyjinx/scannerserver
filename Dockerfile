@@ -14,11 +14,20 @@ RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
 
 WORKDIR /src
 COPY patches/scansnap-wifi-long-pairing-key.patch /tmp/scansnap-wifi-long-pairing-key.patch
+COPY patches/scansnap-wifi-multi-batch.patch /tmp/scansnap-wifi-multi-batch.patch
+COPY tests/NativeScanSnapTests/scansnap_wifi_response_tests.c /tmp/scansnap_wifi_response_tests.c
 RUN mkdir -p /out \
     && git clone https://github.com/bramheerink/scansnap.git . \
     && git checkout "${SCANSNAP_WIFI_REF}" \
     && git apply --check /tmp/scansnap-wifi-long-pairing-key.patch \
     && git apply /tmp/scansnap-wifi-long-pairing-key.patch \
+    && git apply --check /tmp/scansnap-wifi-multi-batch.patch \
+    && git apply /tmp/scansnap-wifi-multi-batch.patch \
+    && gcc -std=c17 -Wall -Wextra -Wpedantic -Wformat-security \
+        -fstack-protector-strong -O2 -D_GNU_SOURCE \
+        -Wno-error=unused-result -I/src \
+        -o /tmp/scansnap_wifi_response_tests /tmp/scansnap_wifi_response_tests.c -lpthread \
+    && /tmp/scansnap_wifi_response_tests \
     && gcc -std=c17 -Wall -Wextra -Wpedantic -Wformat-security \
         -fstack-protector-strong -O2 -D_GNU_SOURCE \
         -Wno-error=unused-result \
