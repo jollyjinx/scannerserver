@@ -39,7 +39,7 @@ Read `docs/architecture.md` before broad source changes. It is the normative des
 
 Use `docs/architecture.md` for current package boundaries, dependency strategy, compatibility contracts, and validation requirements.
 
-Use `docs/history/swift-migration.md` only when historical migration evidence is relevant. The migration milestones are complete. The service intentionally retains SANE, Tesseract, OCRmyPDF, qpdf, Poppler, and the ScanSnap acquisition utility; replacing them is separate follow-up work.
+Use `docs/history/swift-migration.md` only when historical migration evidence is relevant. The migration milestones are complete. ScanSnap Wi-Fi acquisition and PDF assembly are native Swift. The service intentionally retains SANE, Tesseract, OCRmyPDF, qpdf, Poppler, libvips, ExifTool, and `img2pdf` for optional-backend, OCR, and document-processing work; replacing them is separate follow-up work.
 
 ## Validation
 

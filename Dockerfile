@@ -1,38 +1,5 @@
 # syntax=docker/dockerfile:1
 
-FROM ubuntu:24.04 AS scansnap_wifi_build
-
-ARG SCANSNAP_WIFI_REF=814c0987c9c294f27b18f1835c3c69174889de11
-
-RUN sed -i 's/ noble-backports//g' /etc/apt/sources.list.d/ubuntu.sources \
-    && apt-get -o Acquire::Retries=5 update \
-    && apt-get -o Acquire::Retries=5 install -y --no-upgrade --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        git \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /src
-COPY patches/scansnap-wifi-long-pairing-key.patch /tmp/scansnap-wifi-long-pairing-key.patch
-COPY patches/scansnap-wifi-multi-batch.patch /tmp/scansnap-wifi-multi-batch.patch
-COPY tests/NativeScanSnapTests/scansnap_wifi_response_tests.c /tmp/scansnap_wifi_response_tests.c
-RUN mkdir -p /out \
-    && git clone https://github.com/bramheerink/scansnap.git . \
-    && git checkout "${SCANSNAP_WIFI_REF}" \
-    && git apply --check /tmp/scansnap-wifi-long-pairing-key.patch \
-    && git apply /tmp/scansnap-wifi-long-pairing-key.patch \
-    && git apply --check /tmp/scansnap-wifi-multi-batch.patch \
-    && git apply /tmp/scansnap-wifi-multi-batch.patch \
-    && gcc -std=c17 -Wall -Wextra -Wpedantic -Wformat-security \
-        -fstack-protector-strong -O2 -D_GNU_SOURCE \
-        -Wno-error=unused-result -I/src \
-        -o /tmp/scansnap_wifi_response_tests /tmp/scansnap_wifi_response_tests.c -lpthread \
-    && /tmp/scansnap_wifi_response_tests \
-    && gcc -std=c17 -Wall -Wextra -Wpedantic -Wformat-security \
-        -fstack-protector-strong -O2 -D_GNU_SOURCE \
-        -Wno-error=unused-result \
-        -o /out/scansnap-wifi scansnap.c -lpthread
-
 FROM swift:6.3.2-noble AS swift_build
 
 WORKDIR /swift
@@ -100,7 +67,6 @@ RUN mkdir -p /app/sane.d /opt/scannerserver /scans /home/scansnap \
     && cp -a /etc/sane.d/. /app/sane.d/ \
     && chown -R "${APP_UID}:${APP_GID}" /app /scans /home/scansnap
 
-COPY --from=scansnap_wifi_build /out/scansnap-wifi /usr/local/bin/scansnap-wifi
 COPY --from=swift_build /out/scannerserver /opt/scannerserver/scannerserver
 COPY --from=swift_build /out/ScannerServer_ScannerServerCore.resources /opt/scannerserver/ScannerServer_ScannerServerCore.resources
 COPY scripts/entrypoint.sh /usr/local/bin/scansnap-entrypoint

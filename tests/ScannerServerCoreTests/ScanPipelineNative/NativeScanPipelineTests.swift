@@ -67,13 +67,15 @@ struct NativeScanPipelineTests {
         let timestamp = "2026-07-10.142305"
         let finalPDF = fixture.output.appendingPathComponent("\(timestamp).pdf")
         let executor = FakeNativeScanProcessExecutor(stubs: [
-            .materialize(
-                files: [fixture.rawPDF.path: Data("multipage-pdf".utf8)],
-                result: ProcessResult(exitStatus: 0)
-            ),
             .result(ProcessResult(exitStatus: 0)),
         ])
-        let pipeline = fixture.pipeline(executor: executor)
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .materialize(
+                Data("multipage-pdf".utf8),
+                ScanSnapWiFiAcquisitionResult(pageCount: 2)
+            ),
+        ])
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let configuration = fixture.configuration([
             "SCAN_BACKEND": "wifi",
             "SCAN_TIMESTAMP": timestamp,
@@ -89,9 +91,7 @@ struct NativeScanPipelineTests {
         let result = try await pipeline.scan(configuration: configuration)
 
         #expect(result == ProcessResult(exitStatus: 0, standardOutput: "\(finalPDF.path)\n"))
-        #expect(await executor.requests().map(\.executable) == [
-            "scansnap-wifi", "set-pdf-creator",
-        ])
+        #expect(await executor.requests().map(\.executable) == ["set-pdf-creator"])
         #expect(try Data(contentsOf: finalPDF) == Data("multipage-pdf".utf8))
     }
 
@@ -103,10 +103,6 @@ struct NativeScanPipelineTests {
         let firstPage = fixture.output.appendingPathComponent("\(timestamp)-page-0001.pdf")
         let secondPage = fixture.output.appendingPathComponent("\(timestamp)-page-0002.pdf")
         let executor = FakeNativeScanProcessExecutor(stubs: [
-            .materialize(
-                files: [fixture.rawPDF.path: Data("raw".utf8)],
-                result: ProcessResult(exitStatus: 0)
-            ),
             .result(ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0)),
@@ -121,7 +117,8 @@ struct NativeScanPipelineTests {
                 )
             ),
         ])
-        let pipeline = fixture.pipeline(executor: executor)
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer()
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let configuration = fixture.configuration([
             "SCAN_BACKEND": "wifi",
             "SCAN_TIMESTAMP": timestamp,
@@ -151,33 +148,32 @@ struct NativeScanPipelineTests {
 
         let result = try await pipeline.scan(configuration: configuration)
         let requests = await executor.requests()
+        let acquisition = try #require(await wifiAcquirer.requests().first)
 
         #expect(result.exitStatus == 0)
         #expect(result.standardOutput == "\(firstPage.path)\n\(secondPage.path)\n")
+        #expect(acquisition.scannerIPAddress == "192.0.2.20")
+        #expect(acquisition.identity == ScanSnapIdentity("primary-key"))
+        #expect(acquisition.clientIPAddress == "192.0.2.30")
+        #expect(acquisition.clientMACAddress == [0x02, 0x11, 0x22, 0x33, 0x44, 0x55])
+        #expect(acquisition.simplex)
+        #expect(acquisition.debug)
+        #expect(!acquisition.reusesArmedSession)
+        #expect(acquisition.outputURL == fixture.rawPDF)
         #expect(requests.map(\.executable) == [
-            "scansnap-wifi",
             "remove-blank-pages",
             "crop-pdf-pages",
             "set-pdf-creator",
             "split-pdf-pages",
         ])
         #expect(requests[0].arguments == [
-            "-s", "192.0.2.20",
-            "-k", "primary-key",
-            "-o", fixture.rawPDF.path,
-            "--client-ip", "192.0.2.30",
-            "--client-mac", "02:11:22:33:44:55",
-            "-1",
-            "-d",
-        ])
-        #expect(requests[1].arguments == [
             fixture.rawPDF.path,
             "--white-threshold", "240",
             "--content-ratio-threshold", "0.01",
             "--mean-threshold", "247.5",
             "--debug",
         ])
-        #expect(requests[2].arguments == [
+        #expect(requests[1].arguments == [
             fixture.rawPDF.path,
             "--background-delta", "9",
             "--border-px", "50",
@@ -188,8 +184,8 @@ struct NativeScanPipelineTests {
             "--keep-original-boxes",
             "--debug",
         ])
-        #expect(requests[3].arguments == [fixture.rawPDF.path, "--creator", "ScannerServer"])
-        #expect(requests[4].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp])
+        #expect(requests[2].arguments == [fixture.rawPDF.path, "--creator", "ScannerServer"])
+        #expect(requests[3].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp])
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
@@ -199,11 +195,13 @@ struct NativeScanPipelineTests {
         defer { fixture.remove() }
         let sessions = ScanSnapAcquisitionSessionCoordinator()
         await sessions.prepareForAcquisition(reusingArmedSession: true)
-        let executor = FakeNativeScanProcessExecutor(stubs: [
-            .result(ProcessResult(exitStatus: 1, standardError: "expected test stop")),
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .failure(.scannerRejected(status: -7)),
         ])
         let pipeline = fixture.pipeline(
             executor: executor,
+            wifiAcquirer: wifiAcquirer,
             acquisitionSessions: sessions
         )
 
@@ -214,9 +212,8 @@ struct NativeScanPipelineTests {
             "SCAN_PAIRING_KEY": "pairing-key",
         ]))
 
-        let request = try #require(await executor.requests().first)
-        #expect(request.executable == "scansnap-wifi")
-        #expect(request.arguments.contains("--reuse-session"))
+        let request = try #require(await wifiAcquirer.requests().first)
+        #expect(request.reusesArmedSession)
         #expect(await sessions.consumeForAcquisition() == .registerFresh)
     }
 
@@ -227,10 +224,6 @@ struct NativeScanPipelineTests {
         let timestamp = try ScanTimestamp(rawValue: "2026-07-10.142307")
         let image = fixture.output.appendingPathComponent("\(timestamp.rawValue)-page-0001.png")
         let executor = FakeNativeScanProcessExecutor(stubs: [
-            .materialize(
-                files: [fixture.rawPDF.path: Data("raw".utf8)],
-                result: ProcessResult(exitStatus: 0)
-            ),
             .result(ProcessResult(exitStatus: 0)),
             .materialize(
                 files: [image.path: Data("png".utf8)],
@@ -253,10 +246,8 @@ struct NativeScanPipelineTests {
 
         #expect(configuration.format == "png")
         #expect(result == ProcessResult(exitStatus: 0, standardOutput: "\(image.path)\n"))
-        #expect(requests.map(\.executable) == [
-            "scansnap-wifi", "set-pdf-creator", "export-scan-images",
-        ])
-        #expect(requests[2].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp.rawValue])
+        #expect(requests.map(\.executable) == ["set-pdf-creator", "export-scan-images"])
+        #expect(requests[1].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp.rawValue])
     }
 
     @Test("SANE success without page files returns status 2")
@@ -266,7 +257,10 @@ struct NativeScanPipelineTests {
         let executor = FakeNativeScanProcessExecutor(stubs: [
             .result(ProcessResult(exitStatus: 0)),
         ])
-        let pipeline = fixture.pipeline(executor: executor)
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .result(ScanSnapWiFiAcquisitionResult(pageCount: 1)),
+        ])
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let configuration = fixture.configuration([
             "SCAN_BACKEND": "sane",
             "SCAN_TIMESTAMP": "2026-07-10.142308",
@@ -288,7 +282,10 @@ struct NativeScanPipelineTests {
         let executor = FakeNativeScanProcessExecutor(stubs: [
             .result(ProcessResult(exitStatus: 0)),
         ])
-        let pipeline = fixture.pipeline(executor: executor)
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .result(ScanSnapWiFiAcquisitionResult(pageCount: 1)),
+        ])
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let result = try await pipeline.scan(configuration: fixture.configuration([
             "SCAN_BACKEND": "wifi",
             "SCAN_TIMESTAMP": "2026-07-10.142309",
@@ -301,17 +298,15 @@ struct NativeScanPipelineTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
-    @Test("Wi-Fi acquisition failure preserves diagnostics written to stdout")
+    @Test("Wi-Fi acquisition failure preserves signed scanner diagnostics")
     func wifiFailurePreservesStandardOutputDiagnostics() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let executor = FakeNativeScanProcessExecutor(stubs: [
-            .result(ProcessResult(
-                exitStatus: 1,
-                standardOutput: "Error: scanner rejected registration (error -7)\n"
-            )),
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .failure(.scannerRejected(status: -7)),
         ])
-        let pipeline = fixture.pipeline(executor: executor)
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
 
         let result = try await pipeline.scan(configuration: fixture.configuration([
             "SCAN_BACKEND": "wifi",
@@ -321,7 +316,7 @@ struct NativeScanPipelineTests {
         ]))
 
         #expect(result.exitStatus == 1)
-        #expect(result.standardError.contains("scanner rejected registration (error -7)"))
+        #expect(result.standardError.contains("status -7"))
     }
 
     @Test("Missing merged Wi-Fi configuration returns status 64")
@@ -351,13 +346,12 @@ struct NativeScanPipelineTests {
         try FileManager.default.createDirectory(at: fixture.output, withIntermediateDirectories: true)
         try Data("existing".utf8).write(to: finalPDF)
         let executor = FakeNativeScanProcessExecutor(stubs: [
-            .materialize(
-                files: [fixture.rawPDF.path: Data("new".utf8)],
-                result: ProcessResult(exitStatus: 0)
-            ),
             .result(ProcessResult(exitStatus: 0)),
         ])
-        let pipeline = fixture.pipeline(executor: executor)
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .materialize(Data("new".utf8), ScanSnapWiFiAcquisitionResult(pageCount: 1)),
+        ])
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let result = try await pipeline.scan(configuration: fixture.configuration([
             "SCAN_BACKEND": "wifi",
             "SCAN_TIMESTAMP": timestamp,
@@ -378,10 +372,6 @@ struct NativeScanPipelineTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let executor = FakeNativeScanProcessExecutor(stubs: [
-            .materialize(
-                files: [fixture.rawPDF.path: Data("raw".utf8)],
-                result: ProcessResult(exitStatus: 0)
-            ),
             .result(ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 1, standardError: "FileExistsError: page already exists")),
         ])
@@ -402,12 +392,13 @@ struct NativeScanPipelineTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
-    @Test("Cancellation reaches ProcessExecutor and removes the work directory")
+    @Test("Cancellation reaches native Wi-Fi acquisition and removes the work directory")
     func cancellationCleanup() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let executor = FakeNativeScanProcessExecutor(stubs: [.suspended])
-        let pipeline = fixture.pipeline(executor: executor)
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [.suspended])
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let configuration = fixture.configuration([
             "SCAN_BACKEND": "wifi",
             "SCAN_TIMESTAMP": "2026-07-10.142313",
@@ -416,7 +407,7 @@ struct NativeScanPipelineTests {
         ])
         let task = Task { try await pipeline.scan(configuration: configuration) }
 
-        await executor.waitForRequestCount(1)
+        await wifiAcquirer.waitForRequest()
         #expect(FileManager.default.fileExists(atPath: fixture.work.path))
         task.cancel()
 
@@ -450,11 +441,13 @@ private struct Fixture {
 
     func pipeline(
         executor: any ProcessExecutor,
+        wifiAcquirer: any ScanSnapWiFiAcquiring = FakeScanSnapWiFiAcquirer(),
         timestamp: ScanTimestamp? = nil,
         acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator()
     ) -> NativeScanPipeline {
         NativeScanPipeline(
             executor: executor,
+            wifiAcquirer: wifiAcquirer,
             acquisitionSessions: acquisitionSessions,
             fileSystem: FoundationNativeScanFileSystem(),
             timestampProvider: { timestamp ?? ScanTimestamp(date: Date(timeIntervalSince1970: 0)) },

@@ -42,6 +42,7 @@ Sources/
     Runtime/              service lifecycle and composition
     HTTP/                 Hummingbird routes and web resources
     ScanSnap/             discovery, pairing, transport, setup, and button protocol
+      Acquisition/        native JPEG transfer state machine and PDF assembly
     ScanPipeline/         single-flight scans, acquisition, subprocesses, and OCR queue
     Documents/            PDF/image processing, previews, naming, and grouping
     Settings/             persisted scanner and mode configuration
@@ -72,10 +73,11 @@ persisted stores, reachability, and physical-button session state.
 
 ## External Tool Boundary
 
-The always-running service, protocol handling, orchestration, settings, and document-processing
-decisions are Swift. SANE, Tesseract/OCRmyPDF, qpdf, Poppler, libvips, ExifTool, `img2pdf`, and the
-`scansnap-wifi` acquisition binary remain external tools because they preserve established output
-and hardware behavior. Replacing one is a separate compatibility project.
+The always-running service, complete ScanSnap Wi-Fi protocol, JPEG acquisition, PDF assembly,
+orchestration, settings, and document-processing decisions are Swift. SANE, Tesseract/OCRmyPDF,
+qpdf, Poppler, libvips, ExifTool, and `img2pdf` remain external tools because they preserve
+established optional-backend, OCR, and document-processing behavior. Replacing one is a separate
+compatibility project.
 
 ## Compatibility Contracts
 

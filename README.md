@@ -4,7 +4,10 @@
 
 It runs on a Raspberry Pi or other Linux host, finds the iX500 on your local network, and lets you scan from a web page or by pressing the scanner's physical button. Scans are written to a host directory as PDFs, with OCR running in the background.
 
-The service is implemented as a Swift 6.3 package. Its long-running process is native Swift; OCRmyPDF, Tesseract, qpdf, Poppler, libvips, ExifTool, SANE, and the ScanSnap acquisition utility remain external command-line tools invoked only for scan processing.
+The service is implemented as a Swift 6.3 package, including ScanSnap discovery, pairing, button
+sessions, JPEG acquisition, and PDF assembly. OCRmyPDF, Tesseract, qpdf, Poppler, libvips,
+ExifTool, and the optional SANE backend remain external command-line tools used for document
+processing and compatibility.
 
 ## Quick Start
 
@@ -172,6 +175,6 @@ container is not required.
 
 ## References
 
-- [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) implements the reverse-engineered ScanSnap iX500 Wi-Fi protocol used by this image.
+- [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) was an important reference for the reverse-engineered ScanSnap iX500 Wi-Fi protocol now implemented natively in Swift.
 - [OCRmyPDF](https://ocrmypdf.readthedocs.io/) creates searchable PDFs.
 - [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) provides OCR language support.

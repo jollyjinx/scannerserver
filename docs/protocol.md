@@ -10,7 +10,10 @@ status: current
 
 ## Why This Uses The ScanSnap Wi-Fi Protocol
 
-The iX500 does not behave like a normal eSCL/AirScan scanner in this setup. This project uses the reverse-engineered ScanSnap Wi-Fi protocol implemented by [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap), built into the image as `scansnap-wifi`.
+The iX500 does not behave like a normal eSCL/AirScan scanner in this setup. This project implements
+the reverse-engineered ScanSnap Wi-Fi protocol directly in Swift. The earlier C client from
+[`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) remains protocol provenance, but
+is no longer cloned, patched, compiled, packaged, or launched by scannerserver.
 
 Important ports and packet directions:
 
@@ -131,9 +134,9 @@ rejected the identity truncated to 16 bytes with status `-1` and accepted the co
 identity with status `0`. The larger 384-byte reservation variant was consequently not required
 for that scanner.
 
-Both the Swift VENS packet builder and the container's patched `scansnap-wifi` binary populate
-the complete 48-byte identity field. The `scansnap-wifi --getkey` capture path also reads all 48
-bytes so identities captured from official software are not truncated.
+The Swift VENS packet builder populates the complete 48-byte identity field. Scanner setup derives
+that identity from the entered password or product serial number, so acquisition does not need a
+separate key-capture executable.
 
 Run the opt-in diagnostic with credentials supplied only through the process environment:
 
@@ -158,9 +161,9 @@ JPEG sides and approximately 23 MB of image data). The scanner accepted a fresh 
 immediately and delivered the remaining sheets. This is a transfer boundary, not the scanner's
 document or PDF page limit; the exact boundary can depend on the captured image data.
 
-The patched `scansnap-wifi` client therefore retains the sides already received, finalizes the
-current command sequence, establishes a fresh registration/handshake/init sequence, and appends the
-next transfer batch to a dynamically growing page collection. Each protocol transfer remains
+The Swift acquisition client therefore retains the sides already received, finalizes the current
+command sequence, establishes a fresh registration/handshake/init sequence, and appends the next
+transfer batch to a dynamically growing page collection. Each protocol transfer remains
 bounded to 256 captured sides because its page number is one byte, but the complete scan no longer
 has that limit. In simplex mode, backsides are released as each transfer batch arrives instead of
 counting toward the final document. Transfers repeat until the iX500 reports the terminal
@@ -216,22 +219,22 @@ Every scan start now performs an explicit one-shot session handoff:
 1. Stop the 500 ms heartbeat while acquisition owns the scanner.
 2. Send D6 on TCP `53218`, consume the complete 40-byte VENS acknowledgement, half-close the client
    write side, and wait for the scanner to close its side.
-3. Launch `scansnap-wifi --reuse-session`. This skips its UDP registration, first pairing handshake,
-   and initialization sequence, then continues with the acquisition re-registration and scan
-   commands using the same client IP and MAC.
+3. Start the Swift acquisition state machine in retained-session mode. It skips UDP registration,
+   the first pairing handshake, and initialization sequence, then continues with the acquisition
+   re-registration and scan commands using the same client IP and MAC.
 4. After successful acquisition and source publication, resume the heartbeat for the retained
    session without registering again. Blank removal, crop, and OCR continue independently in the
    background queue.
 
-The native client's scan cleanup also finishes its TCP command sequence with D6. D6 should
+The Swift acquisition client's scan cleanup also finishes its TCP command sequence with D6. D6 should
 therefore be understood as command-sequence finalization, not proof that scanner-side ownership has
 been cleared. An opt-in periodic safety refresh still finalizes the retained command sequence before
 attempting a genuinely fresh arm, but `SCANSNAP_BUTTON_ARM_INTERVAL_SECONDS` defaults to `0` because
 hardware testing showed that replacing a healthy session can itself create a temporary `-7` loop.
 
-The native Wi-Fi client may write a failed-registration diagnostic to stdout instead of stderr.
-Acquisition failures therefore retain both streams as job diagnostics; the current failure appears
-in the web status and the service log rather than only as a generic exit status.
+The Swift acquisition client reports protocol failures directly to the scan job. The current
+failure appears in the web status and service log with the signed scanner status when one was
+available on the wire.
 
 Successful scans from either the physical button or web UI resume the handed-off notification
 session. They do not immediately perform a fresh arm. Failed and cancelled scans cannot safely

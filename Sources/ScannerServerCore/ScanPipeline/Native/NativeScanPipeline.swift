@@ -9,6 +9,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
     public typealias WorkDirectorySuffixProvider = @Sendable () -> String
 
     private let executor: any ProcessExecutor
+    private let wifiAcquirer: any ScanSnapWiFiAcquiring
     private let acquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     private let fileSystem: any NativeScanFileSystem
     private let timestampProvider: TimestampProvider
@@ -16,12 +17,14 @@ public actor NativeScanPipeline: NativeScanExecuting {
 
     public init(
         executor: any ProcessExecutor,
+        wifiAcquirer: any ScanSnapWiFiAcquiring = ScanSnapWiFiAcquisitionClient(),
         acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         fileSystem: any NativeScanFileSystem = FoundationNativeScanFileSystem(),
         timestampProvider: @escaping TimestampProvider = { ScanTimestamp(date: Date()) },
         workDirectorySuffixProvider: @escaping WorkDirectorySuffixProvider = { UUID().uuidString }
     ) {
         self.executor = executor
+        self.wifiAcquirer = wifiAcquirer
         self.acquisitionSessions = acquisitionSessions
         self.fileSystem = fileSystem
         self.timestampProvider = timestampProvider
@@ -229,33 +232,49 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 )
             }
 
-            var arguments = ["-s", scannerIP, "-k", pairingKey, "-o", rawPDF.path]
-            if acquisitionSessionMode == .reuseArmed {
-                arguments.append("--reuse-session")
+            let clientIPAddress: String?
+            if let configured = nonEmpty(environment["SCANSNAP_CLIENT_IP"]) {
+                do {
+                    clientIPAddress = try ScannerConfig.normalizeIPv4Address(configured)
+                } catch {
+                    throw NativeScanConfigurationError.message(
+                        "Invalid SCANSNAP_CLIENT_IP: \(configured)"
+                    )
+                }
+            } else {
+                clientIPAddress = nil
             }
-            if let clientIP = nonEmpty(environment["SCANSNAP_CLIENT_IP"]) {
-                arguments += ["--client-ip", clientIP]
+            let clientMACAddress: [UInt8]?
+            if let configured = nonEmpty(environment["SCANSNAP_CLIENT_MAC"]) {
+                do {
+                    clientMACAddress = try ScanSnapSetupEnvironmentConfiguration.macBytes(configured)
+                } catch {
+                    throw NativeScanConfigurationError.message(
+                        "Invalid SCANSNAP_CLIENT_MAC: \(configured)"
+                    )
+                }
+            } else {
+                clientMACAddress = nil
             }
-            if let clientMAC = nonEmpty(environment["SCANSNAP_CLIENT_MAC"]) {
-                arguments += ["--client-mac", clientMAC]
-            }
-            if configuration.simplex
+            let simplex = configuration.simplex
                 || configuration.source.contains("Simplex")
                 || configuration.source.contains("simplex")
-            {
-                arguments.append("-1")
-            }
-            if environment["SCAN_WIFI_DEBUG"] == "true" {
-                arguments.append("-d")
-            }
-
-            let result = try await executor.execute(ProcessRequest(
-                executable: "scansnap-wifi",
-                arguments: arguments,
-                environment: environment,
-                workingDirectory: workDirectory
+            let buttonConfiguration = ScanSnapButtonConfiguration(environment: environment)
+            let result = try await wifiAcquirer.acquire(ScanSnapWiFiAcquisitionRequest(
+                scannerIPAddress: scannerIP,
+                identity: ScanSnapIdentity(pairingKey),
+                clientIPAddress: clientIPAddress,
+                clientMACAddress: clientMACAddress,
+                clientInterface: nonEmpty(environment["SCANSNAP_CLIENT_INTERFACE"]) ?? "eth0",
+                simplex: simplex,
+                reusesArmedSession: acquisitionSessionMode == .reuseArmed,
+                debug: environment["SCAN_WIFI_DEBUG"] == "true",
+                outputURL: rawPDF,
+                registrationSourcePort: buttonConfiguration.registrationSourcePort,
+                registrationPort: buttonConfiguration.registrationPort
             ))
-            return result.succeeded ? nil : result
+            await executor.recordDiagnostic(result.diagnostics)
+            return nil
 
         case let backend:
             throw NativeScanConfigurationError.message("Unsupported SCAN_BACKEND: \(backend)")
@@ -546,5 +565,10 @@ private actor NativeScanCapturingExecutor: ProcessExecutor {
             diagnostics.append("\(request.executable): \(error)")
         }
         return result
+    }
+
+    func recordDiagnostic(_ message: String) {
+        let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !detail.isEmpty { diagnostics.append("ScanSnap: \(detail)") }
     }
 }

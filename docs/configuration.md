@@ -287,5 +287,5 @@ Expected recovery behavior:
 `scanner rejected registration (error -7)` immediately after a button notice means the scanner
 still considers a session owner active. If `ScanSnap button client armed` appeared first, the scan
 must reuse that armed session; a second UDP registration is a protocol error, not a recovery step.
-Confirm the image includes session handoff support and that `scansnap-wifi` is launched with
-`--reuse-session`. Also confirm the lifecycle and native client derive the same client IP and MAC.
+Confirm the image includes native session handoff support and that the lifecycle and Swift
+acquisition client derive the same client IP and MAC.

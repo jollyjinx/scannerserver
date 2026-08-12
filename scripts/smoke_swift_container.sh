@@ -150,9 +150,10 @@ fi
 "${runtime}" exec "${container_name}" sh -c 'touch /scans/.container-smoke && test -w /scans/.container-smoke'
 "${runtime}" exec "${container_name}" sh -c '
   set -eu
-  for command in scannerserver scansnap-wifi img2pdf ocrmypdf nice qpdf pdfimages pdfinfo vips exiftool; do
+  for command in scannerserver img2pdf ocrmypdf nice qpdf pdfimages pdfinfo vips exiftool; do
     command -v "$command" >/dev/null
   done
+  ! command -v scansnap-wifi >/dev/null
   test -x /usr/bin/scanimage
 '
 
