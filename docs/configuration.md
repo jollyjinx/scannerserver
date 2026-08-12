@@ -17,6 +17,9 @@ YYYY-MM-DD.HHMMSS.pdf
 YYYY-MM-DD.HHMMSS.ocr.pdf
 ```
 
+The date and time prefix uses the service's `TZ` setting, including daylight-saving changes. The
+web status timestamps and file-list day headings use the same time zone.
+
 The acquisition lifecycle finishes as soon as the source PDF is published. The web scan control
 and physical button can therefore accept another scan while blank-page removal, crop, or OCR is
 still running. Without OCR, the background queue processes an isolated copy and atomically replaces
@@ -57,6 +60,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `TZ` | `Europe/Berlin` | Local IANA time zone used for scan filenames, file grouping, and status timestamps |
 | `SCAN_OUTPUT_DIR` | `/scans` | Output directory inside the container |
 | `SCAN_SETTINGS_PATH` | `/scans/.scanner-settings.json` | Saved scan modes and button-default mode |
 | `SCANNER_CONFIG_PATH` | `/scans/.scannerserver-scanner.json` | Saved Wi-Fi scanner IP and derived pairing identity |

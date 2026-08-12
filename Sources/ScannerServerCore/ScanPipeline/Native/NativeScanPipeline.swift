@@ -12,7 +12,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
     private let wifiAcquirer: any ScanSnapWiFiAcquiring
     private let acquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     private let fileSystem: any NativeScanFileSystem
-    private let timestampProvider: TimestampProvider
+    private let timestampProvider: TimestampProvider?
     private let workDirectorySuffixProvider: WorkDirectorySuffixProvider
 
     public init(
@@ -20,7 +20,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
         wifiAcquirer: any ScanSnapWiFiAcquiring = ScanSnapWiFiAcquisitionClient(),
         acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         fileSystem: any NativeScanFileSystem = FoundationNativeScanFileSystem(),
-        timestampProvider: @escaping TimestampProvider = { ScanTimestamp(date: Date()) },
+        timestampProvider: TimestampProvider? = nil,
         workDirectorySuffixProvider: @escaping WorkDirectorySuffixProvider = { UUID().uuidString }
     ) {
         self.executor = executor
@@ -373,7 +373,10 @@ public actor NativeScanPipeline: NativeScanExecuting {
 
     private func scanTimestamp(environment: [String: String]) throws -> ScanTimestamp {
         guard let configuredTimestamp = nonEmpty(environment["SCAN_TIMESTAMP"]) else {
-            return timestampProvider()
+            if let timestampProvider {
+                return timestampProvider()
+            }
+            return ScannerServerLocalTime(environment: environment).scanTimestamp(for: Date())
         }
         do {
             return try ScanTimestamp(rawValue: configuredTimestamp)

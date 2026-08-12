@@ -8,5 +8,6 @@ services:
     network_mode: host
     environment:
       WEB_PORT: "80"
+      TZ: "${TZ:-Europe/Berlin}"
     volumes:
       - ./scans:/scans

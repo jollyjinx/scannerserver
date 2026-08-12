@@ -58,9 +58,13 @@ docker run -d \
   --network host \
   --user "$(id -u):$(id -g)" \
   -e WEB_PORT=80 \
+  -e TZ="${TZ:-Europe/Berlin}" \
   -v "$PWD/scans:/scans" \
   ghcr.io/jollyjinx/scannerserver:latest
 ```
+
+The image defaults to `Europe/Berlin`. Set `TZ` to another IANA time-zone name on hosts in a
+different region; that value controls both scan filenames and times shown in the web UI.
 
 Using only `-p 8080:8080` puts the container on a bridge network. The web UI is reachable that way, but ScanSnap UDP discovery usually searches the container network instead of the scanner LAN.
 

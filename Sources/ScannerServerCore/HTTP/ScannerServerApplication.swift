@@ -730,9 +730,13 @@ private func indexResponse(
     let ocr = await dependencies.ocrQueue.state
     let setup = await dependencies.scannerSetup.state()
     let scannerIsReachable = await dependencies.scannerReachability.isReachable
+    let localTime = ScannerServerLocalTime(environment: dependencies.environment)
     let query = queryValues(request.uri.query)
     let webRevision = await dependencies.webUpdates.currentRevision
-    let groups = scanFileGroups(outputDirectory: dependencies.outputPathResolver.outputDirectory)
+    let groups = scanFileGroups(
+        outputDirectory: dependencies.outputPathResolver.outputDirectory,
+        timeZone: localTime.timeZone
+    )
     let content = renderIndexContent(
         settings: settings,
         editModeID: query["edit_mode"],
@@ -742,7 +746,8 @@ private func indexResponse(
         wifiBackend: wifiBackend,
         job: job,
         ocr: ocr,
-        groups: groups
+        groups: groups,
+        localTime: localTime
     )
     let html = template
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
@@ -755,7 +760,7 @@ private func indexResponse(
     return dataResponse(Data(html.utf8), contentType: "text/html; charset=utf-8")
 }
 
-private func scanFileGroups(outputDirectory: URL) -> [ScanDayGroup] {
+private func scanFileGroups(outputDirectory: URL, timeZone: TimeZone) -> [ScanDayGroup] {
     guard let urls = try? FileManager.default.contentsOfDirectory(
         at: outputDirectory,
         includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
@@ -768,7 +773,7 @@ private func scanFileGroups(outputDirectory: URL) -> [ScanDayGroup] {
               values.isRegularFile == true else { return nil }
         return ScanFile(name: name, modificationDate: values.contentModificationDate ?? .distantPast)
     }
-    return ScanFileGrouping.groups(for: files)
+    return ScanFileGrouping.groups(for: files, timeZone: timeZone)
 }
 
 private func renderIndexContent(
@@ -780,7 +785,8 @@ private func renderIndexContent(
     wifiBackend: Bool,
     job: ScanJobState,
     ocr: OCRQueueState,
-    groups: [ScanDayGroup]
+    groups: [ScanDayGroup],
+    localTime: ScannerServerLocalTime
 ) -> String {
     let selectedMode: ScanMode
     if editModeID == "new" {
@@ -822,7 +828,7 @@ private func renderIndexContent(
             scannerSetup: wifiBackend ? setup : nil,
             open: editModeID != nil
         )
-        html += renderStatus(job: job, ocr: ocr)
+        html += renderStatus(job: job, ocr: ocr, localTime: localTime)
         html += renderFiles(groups)
     }
     return html
@@ -1040,10 +1046,18 @@ private func renderModes(
     return html
 }
 
-private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
+private func renderStatus(
+    job: ScanJobState,
+    ocr: OCRQueueState,
+    localTime: ScannerServerLocalTime
+) -> String {
     var html = "<section><h2>Status</h2><p><span class=\"status\">\(htmlEscape(job.status))</span></p>"
-    if let started = job.started { html += "<p>Started: \(htmlEscape(timestamp(started)))</p>" }
-    if let finished = job.finished { html += "<p>Finished: \(htmlEscape(timestamp(finished)))</p>" }
+    if let started = job.started {
+        html += "<p>Started: \(htmlEscape(localTime.statusTimestamp(for: started)))</p>"
+    }
+    if let finished = job.finished {
+        html += "<p>Finished: \(htmlEscape(localTime.statusTimestamp(for: finished)))</p>"
+    }
     if !job.output.isEmpty { html += "<pre>\(htmlEscape(job.output))</pre>" }
     if !job.error.isEmpty { html += "<pre>\(htmlEscape(job.error))</pre>" }
 
@@ -1061,8 +1075,12 @@ private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     if ocr.status == "running" || ocr.status == "queued" || ocr.queued > 0 {
         html += "<form method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel processing</button></form>"
     }
-    if let started = ocr.started { html += "<p>Started: \(htmlEscape(timestamp(started)))</p>" }
-    if let finished = ocr.finished { html += "<p>Finished: \(htmlEscape(timestamp(finished)))</p>" }
+    if let started = ocr.started {
+        html += "<p>Started: \(htmlEscape(localTime.statusTimestamp(for: started)))</p>"
+    }
+    if let finished = ocr.finished {
+        html += "<p>Finished: \(htmlEscape(localTime.statusTimestamp(for: finished)))</p>"
+    }
     if !ocr.input.isEmpty { html += "<p>Input: \(htmlEscape(ocr.input))</p>" }
     if !ocr.output.isEmpty { html += "<pre>\(htmlEscape(ocr.output))</pre>" }
     if !ocr.error.isEmpty { html += "<pre>\(htmlEscape(ocr.error))</pre>" }
@@ -1220,12 +1238,6 @@ private func urlQueryValue(_ value: String) -> String {
     var allowed = CharacterSet.urlQueryAllowed
     allowed.remove(charactersIn: "&=+#")
     return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
-}
-
-private func timestamp(_ date: Date) -> String {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime]
-    return formatter.string(from: date)
 }
 
 private func loadIndexHTML() throws -> String {

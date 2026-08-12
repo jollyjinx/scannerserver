@@ -31,6 +31,7 @@ LABEL org.opencontainers.image.title="scannerserver" \
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/scansnap \
     SANE_CONFIG_DIR=/app/sane.d \
+    TZ=Europe/Berlin \
     SCANNERSERVER_VERSION=${SCANNERSERVER_VERSION} \
     SCANNERSERVER_REVISION=${VCS_REF}
 
