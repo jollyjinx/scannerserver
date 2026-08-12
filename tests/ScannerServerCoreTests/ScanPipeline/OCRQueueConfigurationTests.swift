@@ -4,14 +4,14 @@ import Testing
 
 @Suite("OCR queue configuration")
 struct OCRQueueConfigurationTests {
-    @Test("CPU limit defaults to the detected container allowance")
+    @Test("CPU limit reserves one detected processor for acquisition and HTTP")
     func automaticCPUCount() {
         let configuration = OCRQueueConfiguration(
             environment: [:],
             detectedProcessorCount: 10
         )
 
-        #expect(configuration.cpuLimit == 10)
+        #expect(configuration.cpuLimit == 9)
         #expect(configuration.niceLevel == nil)
     }
 
@@ -24,7 +24,11 @@ struct OCRQueueConfigurationTests {
         #expect(OCRQueueConfiguration(
             environment: ["SCAN_OCR_CPU_LIMIT": "20"],
             detectedProcessorCount: 10
-        ).cpuLimit == 10)
+        ).cpuLimit == 9)
+        #expect(OCRQueueConfiguration(
+            environment: [:],
+            detectedProcessorCount: 1
+        ).cpuLimit == 1)
     }
 
     @Test("Nice mode can be disabled or assigned a safe positive level")

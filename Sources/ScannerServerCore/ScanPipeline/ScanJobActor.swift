@@ -138,11 +138,19 @@ public actor ScanJobActor {
             let preprocessMultipagePDF = configuration.format == "pdf"
                 && configuration.pageMode == "multi"
             let batchID = UUID()
-            for path in paths where ScanOutputPaths.shouldEnqueueOCR(path: path, configuration: configuration) {
+            for path in paths {
+                let shouldOCR = ScanOutputPaths.shouldEnqueueOCR(
+                    path: path,
+                    configuration: configuration
+                )
+                let shouldPreprocess = preprocessMultipagePDF
+                    && (configuration.removeBlankPages || configuration.cropPages)
+                guard shouldOCR || shouldPreprocess else { continue }
                 await ocrQueue.enqueue(
                     path,
                     batchID: batchID,
                     environment: configuration.environment,
+                    ocrEnabled: shouldOCR,
                     removeBlankPages: preprocessMultipagePDF && configuration.removeBlankPages,
                     cropPages: preprocessMultipagePDF && configuration.cropPages
                 )

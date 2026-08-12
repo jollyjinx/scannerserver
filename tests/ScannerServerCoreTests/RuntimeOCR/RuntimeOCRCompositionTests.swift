@@ -61,7 +61,7 @@ struct RuntimeOCRCompositionTests {
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(response.status == .ok)
-                #expect(body.contains("<h2>OCR</h2>"))
+                #expect(body.contains("<h2>Background processing</h2>"))
                 #expect(body.contains("<span class=\"status\">running</span> 1 queued"))
                 #expect(body.contains("CPU budget: 3; priority: nice +10"))
                 #expect(body.contains("Input: /scans/&lt;first&gt;&amp;.pdf"))

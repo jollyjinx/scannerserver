@@ -10,15 +10,20 @@ status: current
 
 ## Output Files
 
-PDF scans produce a source PDF immediately and an OCR PDF later if OCR is enabled:
+Multipage PDF scans produce a source PDF immediately and an OCR PDF later if OCR is enabled:
 
 ```text
 YYYY-MM-DD.HHMMSS.pdf
 YYYY-MM-DD.HHMMSS.ocr.pdf
 ```
 
-Deleting a source scan while OCR is active cancels that document's OCR process before removing
-the file. Matching queued OCR work is removed as well, while OCR jobs for other scans continue.
+The acquisition lifecycle finishes as soon as the source PDF is published. The web scan control
+and physical button can therefore accept another scan while blank-page removal, crop, or OCR is
+still running. Without OCR, the background queue processes an isolated copy and atomically replaces
+the source PDF. With OCR, it leaves the source unchanged and publishes the processed `.ocr.pdf`.
+
+Deleting a source scan while processing is active cancels that document's work before removing the
+file. Matching queued work is removed as well, while jobs for other scans continue.
 
 Single-page PDF modes use:
 
@@ -46,7 +51,7 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with default 
 
 Use **Advanced settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button.
 
-With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the OCR CPU limit and process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers an **OCR CPUs** dropdown: **Automatic** uses the container-aware allowance, while a number lowers the limit for that mode. **OCR priority** selects normal or reduced (`nice`) process priority for each mode. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
+With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the background CPU limit and OCR process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers a **Processing CPUs** dropdown: **Automatic** uses the container-aware background allowance, while a number lowers the limit for that mode. **OCR priority** selects normal or reduced (`nice`) OCR process priority for each mode. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
 
 ## Common Environment Variables
 
@@ -60,10 +65,10 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_FORMAT` | `pdf` | `pdf` or `png` |
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
-| `SCAN_OCR_CPU_LIMIT` | detected CPU allowance | Optional positive cap on CPUs reserved for OCR; values above the detected allowance are clamped |
+| `SCAN_OCR_CPU_LIMIT` | detected CPUs minus one | Optional positive cap on CPUs used by background page processing and OCR; values above the background allowance are clamped |
 | `SCAN_OCR_NICE` | `false` | Run OCRmyPDF and its child processes with reduced CPU scheduling priority |
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
-| `SCAN_CROP_PAGES` | `true` | Crop PDF pages to the detected paper or content bounds before OCR |
+| `SCAN_CROP_PAGES` | `true` | Crop PDF pages to the detected paper or content bounds in background processing |
 | `SCAN_CROP_MARGIN_POINTS` | `1` | Extra margin around content-classified autocrops, in PDF points (1 point = 1/72 inch) |
 | `SCANNER_IP` | empty | Optional scanner IP override; web setup can persist this instead |
 | `SCANSNAP_PAIRING_KEY` | empty | Optional pairing identity override; web setup can derive and persist this instead |
@@ -95,11 +100,17 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 
 ## OCR CPU Scheduling And Priority
 
-OCR automatically uses the CPU allowance visible to the service. The detector considers the
+Background page processing and OCR automatically use the CPU allowance visible to the service. The detector considers the
 process's active processor count plus Linux cgroup CPU quota and cpuset restrictions, so Docker
-CPU limits are honored. `SCAN_OCR_CPU_LIMIT` can lower that detected allowance but cannot raise it. It can be configured globally in the container environment or per scan mode with the web UI. A mode set to **Automatic** inherits the global container-aware allowance.
+CPU limits are honored. One detected processor is reserved for acquisition, button handling, and
+HTTP work (a one-CPU container still gets one worker). `SCAN_OCR_CPU_LIMIT` can lower the remaining
+allowance but cannot raise it. It can be configured globally in the container environment or per
+scan mode with the web UI. A mode set to **Automatic** inherits this container-aware allowance.
 
 The queue treats the resulting value as one shared CPU budget:
+
+- Multipage blank detection and crop analysis process several pages concurrently, bounded by the
+  shared budget; operations within each page remain ordered.
 
 - A multipage PDF reserves the full budget and passes it to OCRmyPDF with `--jobs` so its pages
   are processed in parallel.
@@ -120,8 +131,8 @@ environment:
   SCAN_OCR_NICE_LEVEL: "15"
 ```
 
-The status page reports the active CPU budget, process priority, running OCR job count, and queued
-job count.
+The status page reports the active CPU budget, process priority, running background job count, and
+queued job count.
 
 ## Scan Directory Access Check
 

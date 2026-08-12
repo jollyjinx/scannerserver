@@ -18,13 +18,14 @@ public struct OCRQueueConfiguration: Equatable, Sendable {
 
     init(environment: [String: String], detectedProcessorCount: Int) {
         let detectedProcessorCount = max(1, detectedProcessorCount)
+        let backgroundProcessorCount = max(1, detectedProcessorCount - 1)
         if let text = Self.nonEmpty(environment["SCAN_OCR_CPU_LIMIT"]),
            let configuredLimit = Int(text),
            configuredLimit > 0
         {
-            cpuLimit = min(configuredLimit, detectedProcessorCount)
+            cpuLimit = min(configuredLimit, backgroundProcessorCount)
         } else {
-            cpuLimit = detectedProcessorCount
+            cpuLimit = backgroundProcessorCount
         }
 
         let niceEnabled = environment["SCAN_OCR_NICE"].map(Self.isTruthy) ?? false

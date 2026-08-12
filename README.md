@@ -53,9 +53,11 @@ waiting for a periodic refresh. See [ScanSnap protocol notes](docs/protocol.md#p
 for packet directions and [configuration](docs/configuration.md#physical-button-troubleshooting)
 for firewall and log checks.
 
-Raw PDFs appear immediately in `./scans` after acquisition. For OCR-enabled multipage scans,
-blank-page removal and autocrop run on an isolated copy before the searchable `.ocr.pdf` is
-published; the original PDF remains unchanged and available throughout processing.
+Raw multipage PDFs appear immediately in `./scans` after acquisition, and the scanner button is
+rearmed before document processing begins. Blank-page removal and autocrop run in the bounded
+background queue on an isolated copy. Without OCR, that processed copy atomically replaces the raw
+PDF. With OCR, the original remains unchanged and the processed searchable `.ocr.pdf` is published
+beside it.
 
 ## Compose
 
@@ -100,8 +102,8 @@ for an Ethernet/MAC address or generated pairing key.
 - Web scan button and physical iX500 button support.
 - Saved scan modes for duplex/simplex, PDF/PNG, OCR CPU count and priority, autocrop, and blank-page removal.
 - Scan list grouped by day with previews and download/delete controls.
-- CPU-budgeted background OCR with OCRmyPDF and Tesseract, including automatic container CPU
-  detection, per-page concurrency, configurable caps, and optional reduced-priority nice mode.
+- CPU-budgeted background blank-page removal, autocrop, and OCR, including automatic container CPU
+  detection, bounded per-page concurrency, configurable caps, and optional reduced-priority nice mode.
 - Runs as a non-root user while still binding the web UI to port `80`.
 
 ## Updating

@@ -9,6 +9,45 @@ static void require_true(bool condition, const char *message) {
     }
 }
 
+static void test_dynamic_simplex_collection(void) {
+    struct page *pages = NULL;
+    size_t count = 0;
+    size_t capacity = 0;
+    size_t side_number = 0;
+
+    for (int batch_number = 0; batch_number < 3; batch_number++) {
+        struct page batch[MAX_PAGES] = {0};
+        int batch_count = batch_number < 2 ? MAX_PAGES : 88;
+        for (int index = 0; index < batch_count; index++) {
+            batch[index].data = malloc(1);
+            require_true(batch[index].data != NULL, "test page allocation must succeed");
+            batch[index].len = side_number + 1;
+            side_number++;
+        }
+
+        require_true(
+            append_batch_pages(
+                &pages, &count, &capacity, batch, batch_count, true
+            ) == 0,
+            "simplex pages must append across dynamic transfer batches"
+        );
+        for (int index = 0; index < batch_count; index++) {
+            require_true(batch[index].data == NULL,
+                         "the dynamic collector must take or release every batch side");
+        }
+    }
+
+    require_true(count == 300,
+                 "600 transferred sides must yield 300 simplex pages without a 128-page cap");
+    require_true(capacity >= count,
+                 "the dynamic page array must grow beyond one protocol batch");
+    for (size_t index = 0; index < count; index++) {
+        require_true(pages[index].len == index * 2 + 1,
+                     "simplex fronts must remain in scanner order");
+    }
+    free_pages(pages, count);
+}
+
 int main(void) {
     uint8_t response[64] = {0};
     static const uint8_t feeder_empty_tail[12] = {
@@ -49,6 +88,8 @@ int main(void) {
                  "non-VENS image data must not be treated as an error response");
     require_true(!scan_response_is_error(response, 11, &error_code),
                  "a short response must not be parsed as VENS");
+
+    test_dynamic_simplex_collection();
 
     puts("ScanSnap response tests passed");
     return 0;

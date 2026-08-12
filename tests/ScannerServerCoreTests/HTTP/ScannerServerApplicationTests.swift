@@ -311,7 +311,7 @@ struct ScannerServerApplicationTests {
                 #expect(!body.contains(#"<input name="SCAN_LANGUAGE""#))
                 #expect(body.contains(#"<select name="SCAN_OCR_CPU_LIMIT">"#))
                 #expect(body.contains(#"<option value="4" selected>"#))
-                #expect(body.contains("Automatic uses the container CPU allowance."))
+                #expect(body.contains("Automatic uses the background CPU allowance while reserving one processor"))
                 #expect(body.contains(#"<select name="SCAN_OCR_NICE">"#))
                 #expect(body.contains(#"<option value="true" selected>Niced (reduced)</option>"#))
                 #expect(body.contains(#"name="SCAN_CROP_MARGIN_POINTS" value="2.5" min="0" step="0.1""#))
@@ -416,7 +416,7 @@ struct ScannerServerApplicationTests {
             }
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains("Recent OCR jobs"))
+                #expect(body.contains("Recent processing jobs"))
                 #expect(body.contains("page-0001.pdf"))
                 #expect(body.contains("cancelled in "))
             }

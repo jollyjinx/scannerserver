@@ -5,9 +5,21 @@ private enum NativePageProcessingFailure: Error {
     case diagnostic(String)
 }
 
-private struct NativeExtractedPageImage {
+private struct NativeExtractedPageImage: Sendable {
     let url: URL
     let dimensions: NativeDocumentImageDimensions
+}
+
+private struct NativeBlankPageInspection: Sendable {
+    let decision: NativeBlankPageDecision
+    let diagnostics: String
+}
+
+private struct NativeCropPageInspection: Sendable {
+    let cropBox: NativePDFBox?
+    let status: String
+    let detail: String
+    let diagnostics: String
 }
 
 extension NativeDocumentToolExecutor {
@@ -42,45 +54,51 @@ extension NativeDocumentToolExecutor {
             )
             defer { try? fileSystem.removeItemIfPresent(at: stagingDirectory) }
 
-            var diagnostics = jsonResult.standardError
-            var decisions: [NativeBlankPageDecision] = []
-            if !document.pageReferences.isEmpty {
-                for index in document.pageReferences.indices {
-                    let page = index + 1
-                    try Task.checkCancellation()
-                    let extraction = try await extractLargestPageImage(
-                        page: page,
-                        pdfPath: options.pdfPath,
-                        allowedReferences: try document.directImageReferences(
-                            forPageAt: index
-                        ),
-                        prefix: "blank-page-\(paddedPageNumber(page))",
-                        stagingDirectory: stagingDirectory,
-                        request: request
+            let allowedReferences = try document.pageReferences.indices.map {
+                try document.directImageReferences(forPageAt: $0)
+            }
+            let inspections = try await processPagesConcurrently(
+                count: document.pageReferences.count,
+                workerLimit: pageProcessingWorkerLimit(request: request)
+            ) { index in
+                let page = index + 1
+                let extraction = try await extractLargestPageImage(
+                    page: page,
+                    pdfPath: options.pdfPath,
+                    allowedReferences: allowedReferences[index],
+                    prefix: "blank-page-\(paddedPageNumber(page))",
+                    stagingDirectory: stagingDirectory,
+                    request: request
+                )
+                guard let image = extraction.image else {
+                    return NativeBlankPageInspection(
+                        decision: NativeBlankPageDecision(isBlank: false, detail: "no image"),
+                        diagnostics: extraction.diagnostics
                     )
-                    diagnostics = joinedDiagnostics(diagnostics, extraction.diagnostics)
-                    guard let image = extraction.image else {
-                        decisions.append(NativeBlankPageDecision(
-                            isBlank: false,
-                            detail: "no image"
-                        ))
-                        continue
-                    }
+                }
 
-                    let statistics = try await blankStatistics(
-                        image: image,
-                        page: page,
-                        whiteThreshold: options.whiteThreshold,
-                        stagingDirectory: stagingDirectory,
-                        request: request
-                    )
-                    diagnostics = joinedDiagnostics(diagnostics, statistics.diagnostics)
-                    decisions.append(NativeBlankPageDecision.evaluate(
+                let statistics = try await blankStatistics(
+                    image: image,
+                    page: page,
+                    whiteThreshold: options.whiteThreshold,
+                    stagingDirectory: stagingDirectory,
+                    request: request
+                )
+                return NativeBlankPageInspection(
+                    decision: NativeBlankPageDecision.evaluate(
                         nonwhiteRatio: statistics.nonwhiteRatio,
                         mean: statistics.mean,
                         options: options
-                    ))
-                }
+                    ),
+                    diagnostics: joinedDiagnostics(
+                        extraction.diagnostics,
+                        statistics.diagnostics
+                    )
+                )
+            }
+            let decisions = inspections.map(\.decision)
+            var diagnostics = inspections.reduce(jsonResult.standardError) {
+                joinedDiagnostics($0, $1.diagnostics)
             }
 
             var keptPages = decisions.indices.filter { !decisions[$0].isBlank }.map { $0 + 1 }
@@ -180,26 +198,32 @@ extension NativeDocumentToolExecutor {
             )
             defer { try? fileSystem.removeItemIfPresent(at: stagingDirectory) }
 
-            var diagnostics = jsonResult.standardError
-            var cropBoxes: [Int: NativePDFBox] = [:]
-            var details: [(status: String, detail: String)] = []
-            for index in document.pageReferences.indices {
-                try Task.checkCancellation()
+            let allowedReferences = try document.pageReferences.indices.map {
+                try document.directImageReferences(forPageAt: $0)
+            }
+            let mediaBoxes = try document.pageReferences.indices.map {
+                try document.mediaBox(forPageAt: $0)
+            }
+            let inspections = try await processPagesConcurrently(
+                count: document.pageReferences.count,
+                workerLimit: pageProcessingWorkerLimit(request: request)
+            ) { index in
                 let page = index + 1
                 let extraction = try await extractLargestPageImage(
                     page: page,
                     pdfPath: options.pdfPath,
-                    allowedReferences: try document.directImageReferences(
-                        forPageAt: index
-                    ),
+                    allowedReferences: allowedReferences[index],
                     prefix: "crop-page-\(paddedPageNumber(page))",
                     stagingDirectory: stagingDirectory,
                     request: request
                 )
-                diagnostics = joinedDiagnostics(diagnostics, extraction.diagnostics)
                 guard let image = extraction.image else {
-                    details.append(("skipped", "no page image"))
-                    continue
+                    return NativeCropPageInspection(
+                        cropBox: nil,
+                        status: "skipped",
+                        detail: "no page image",
+                        diagnostics: extraction.diagnostics
+                    )
                 }
 
                 let content = try await cropContentAnalysis(
@@ -209,13 +233,17 @@ extension NativeDocumentToolExecutor {
                     stagingDirectory: stagingDirectory,
                     request: request
                 )
-                diagnostics = joinedDiagnostics(diagnostics, content.diagnostics)
+                let diagnostics = joinedDiagnostics(
+                    extraction.diagnostics,
+                    content.diagnostics
+                )
                 guard let boundingBox = content.boundingBox else {
-                    details.append((
-                        "skipped",
-                        "no content background=\(content.background)"
-                    ))
-                    continue
+                    return NativeCropPageInspection(
+                        cropBox: nil,
+                        status: "skipped",
+                        detail: "no content background=\(content.background)",
+                        diagnostics: diagnostics
+                    )
                 }
 
                 let decision = NativeCropPageDecision.evaluate(
@@ -231,28 +259,39 @@ extension NativeDocumentToolExecutor {
                 detail += formatted("height_ratio=%.3f ", decision.heightRatio)
                 detail += formatted("density=%.3f ", content.density)
                 detail += "background=\(content.background) "
-                let detection = content.boundingBoxKind == .pageEdges
-                    ? "page-edges"
-                    : "content"
-                detail += "detection=\(detection)"
+                detail += "detection=\(content.boundingBoxKind == .pageEdges ? "page-edges" : "content")"
                 guard decision.shouldCrop else {
-                    details.append(("kept", detail))
-                    continue
+                    return NativeCropPageInspection(
+                        cropBox: nil,
+                        status: "kept",
+                        detail: detail,
+                        diagnostics: diagnostics
+                    )
                 }
 
-                let mediaBox = try document.mediaBox(forPageAt: index)
                 let cropBox = NativeCropPageDecision.cropBox(
-                    mediaBox: mediaBox,
+                    mediaBox: mediaBoxes[index],
                     image: image.dimensions,
                     boundingBox: boundingBox,
                     marginPoints: content.boundingBoxKind == .pageEdges
                         ? 0
                         : options.marginPoints
                 )
-                cropBoxes[index] = cropBox
                 detail += " crop_box=\(formatPDFBox(cropBox))"
-                details.append(("cropped", detail))
+                return NativeCropPageInspection(
+                    cropBox: cropBox,
+                    status: "cropped",
+                    detail: detail,
+                    diagnostics: diagnostics
+                )
             }
+            var diagnostics = inspections.reduce(jsonResult.standardError) {
+                joinedDiagnostics($0, $1.diagnostics)
+            }
+            let cropBoxes = Dictionary(uniqueKeysWithValues: inspections.enumerated().compactMap {
+                index, inspection in inspection.cropBox.map { (index, $0) }
+            })
+            let details = inspections.map { (status: $0.status, detail: $0.detail) }
 
             if !cropBoxes.isEmpty {
                 try Task.checkCancellation()
@@ -746,6 +785,48 @@ extension NativeDocumentToolExecutor {
         }
         try Task.checkCancellation()
         return result
+    }
+
+    private func pageProcessingWorkerLimit(request: ProcessRequest) -> Int {
+        let detected = max(1, OCRSystemProcessorCount.detect() - 1)
+        for key in ["SCAN_PROCESSING_CPU_LIMIT", "SCAN_OCR_CPU_LIMIT"] {
+            guard let rawValue = request.environment?[key]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                let requested = Int(rawValue),
+                requested > 0
+            else { continue }
+            return min(requested, detected)
+        }
+        return detected
+    }
+
+    private func processPagesConcurrently<Result: Sendable>(
+        count: Int,
+        workerLimit: Int,
+        operation: @escaping @Sendable (Int) async throws -> Result
+    ) async throws -> [Result] {
+        guard count > 0 else { return [] }
+        let limit = min(count, max(1, workerLimit))
+        return try await withThrowingTaskGroup(of: (Int, Result).self) { group in
+            var nextIndex = 0
+            var results = [Result?](repeating: nil, count: count)
+
+            while nextIndex < limit {
+                let index = nextIndex
+                nextIndex += 1
+                group.addTask { (index, try await operation(index)) }
+            }
+
+            while let (index, result) = try await group.next() {
+                results[index] = result
+                if nextIndex < count {
+                    let index = nextIndex
+                    nextIndex += 1
+                    group.addTask { (index, try await operation(index)) }
+                }
+            }
+            return results.map { $0! }
+        }
     }
 
     private func pageSelection(_ pages: [Int]) -> String {

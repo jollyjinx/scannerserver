@@ -1,6 +1,61 @@
 --- a/scansnap.c
 +++ b/scansnap.c
-@@ -868,1 +868,20 @@
+@@ -30,6 +30,7 @@
+ #include <fcntl.h>
+ #include <ifaddrs.h>
+ #include <getopt.h>
++#include <limits.h>
+ #include <net/if.h>
+ #ifdef __APPLE__
+ #include <net/if_dl.h>
+@@ -81,6 +82,43 @@ static size_t g_handshake_patch_count = 0;
+ 
+ struct page { uint8_t *data; size_t len; };
+ 
++static void free_pages(struct page *pages, size_t count) {
++    if (!pages) return;
++    for (size_t i = 0; i < count; i++) free(pages[i].data);
++    free(pages);
++}
++
++static int append_batch_pages(struct page **pages, size_t *count,
++                              size_t *capacity, struct page *batch,
++                              int batch_count, bool simplex) {
++    for (int i = 0; i < batch_count; i++) {
++        if (simplex && i % 2 == 1) {
++            free(batch[i].data);
++            batch[i].data = NULL;
++            batch[i].len = 0;
++            continue;
++        }
++
++        if (*count == *capacity) {
++            size_t new_capacity = *capacity == 0 ? MAX_PAGES : *capacity * 2;
++            if (new_capacity < *capacity
++                || new_capacity > SIZE_MAX / sizeof(struct page)) return -1;
++            struct page *grown = realloc(*pages, new_capacity * sizeof(struct page));
++            if (!grown) return -1;
++            memset(grown + *capacity, 0,
++                   (new_capacity - *capacity) * sizeof(struct page));
++            *pages = grown;
++            *capacity = new_capacity;
++        }
++
++        (*pages)[*count] = batch[i];
++        (*count)++;
++        batch[i].data = NULL;
++        batch[i].len = 0;
++    }
++    return 0;
++}
++
+ /* ── Config ──────────────────────────────────────────────────────────── */
+ 
+ static void config_path(char *buf, size_t len) {
+@@ -865,6 +903,25 @@ static void build_done_query(uint8_t page, uint8_t *cmd) {
+     cmd[26] = page;
+ }
+ 
 +static bool scan_response_is_error(const uint8_t *response, size_t len,
 +                                   int32_t *error_code) {
 +    if (len < 12 || memcmp(response + 4, "VENS", 4) != 0) return false;
@@ -21,13 +76,22 @@
 +}
 +
  static int recv_jpeg(int fd, uint8_t *prepend, size_t prepend_len,
-@@ -931,3 +950,4 @@
+                      uint8_t **out, size_t *out_len,
+                      uint8_t **leftover, size_t *leftover_len) {
+@@ -929,7 +986,8 @@ static void do_cleanup(int fd, uint32_t scanner_ip, const uint8_t mac[6]) {
+ }
+ 
  static int do_scan(uint32_t scanner_ip, const uint8_t mac[6],
 -                   struct page *pages, int *page_count) {
 +                   struct page *pages, int *page_count, bool *feeder_empty) {
 +    *feeder_empty = false;
      fprintf(stderr, "Scanning...\n");
-@@ -978,5 +998,6 @@
+     int fd = connect_tcp(scanner_ip, 53218, 10);
+     if (fd < 0) return -1;
+@@ -975,10 +1033,11 @@ static int do_scan(uint32_t scanner_ip, const uint8_t mac[6],
+      * treat an initial VENS packet as an error when its status field is
+      * non-zero; otherwise pass it to recv_jpeg() as prepend data.
+      */
 -    if (n >= 12 && memcmp(initial + 4, "VENS", 4) == 0 && get_be32(initial + 8) != 0) {
 -        int32_t ec = (int32_t)get_be32(initial + 8);
 +    int32_t initial_error = 0;
@@ -37,7 +101,11 @@
 +        fprintf(stderr, "Error: scanner error %d — is there paper in the feeder?\n",
 +                initial_error);
          return -1;
-@@ -1036,8 +1057,11 @@
+     }
+ 
+@@ -1034,11 +1093,14 @@ static int do_scan(uint32_t scanner_ip, const uint8_t mac[6],
+             if (send_cmd(fd, mac, "00000006000000000000000000000000e0000000000000000000000000000000", resp, sizeof(resp)) < 0) break;
+             int rlen = send_cmd(fd, mac, "0000000600000012000000000000000003000000120000000000000000000000", resp, sizeof(resp));
              if (rlen < 0) break;
 -            if (rlen >= 12) {
 -                bool done = false;
@@ -48,13 +116,16 @@
 +                char tail_hex[25];
 +                hex_encode(resp + rlen - 12, 12, tail_hex);
 +                fprintf(stderr, "  sheet %d status tail %s\n", pg / 2 + 1, tail_hex);
-             }
++            }
 +            if (scan_response_reports_feeder_empty(resp, (size_t)rlen)) {
 +                *feeder_empty = true;
 +                break;
-+            }
+             }
          } else {
-@@ -1056,2 +1080,8 @@
+             /* Front side done — request back */
+@@ -1054,6 +1116,12 @@ static int do_scan(uint32_t scanner_ip, const uint8_t mac[6],
+         uint8_t ack[4096];
+         ssize_t an = read(fd, ack, sizeof(ack));
          if (an <= 0) break;
 +        int32_t page_error = 0;
 +        if (scan_response_is_error(ack, (size_t)an, &page_error)) {
@@ -63,11 +134,17 @@
 +            break;
 +        }
          prepend = calloc(1, (size_t)an);
-@@ -1659,4 +1689,39 @@
+         if (!prepend) break;
+         memcpy(prepend, ack, (size_t)an);
+@@ -1656,22 +1724,56 @@ int main(int argc, char *argv[]) {
+             || do_init_session(scanner_ip, mac) < 0)) return 1;
+     do_re_register(scanner_ip, local_ip, mac);
+ 
 -    struct page all_pages[MAX_PAGES];
-+    struct page all_pages[MAX_PAGES] = {0};
-     int total = 0;
+-    int total = 0;
 -    if (do_scan(scanner_ip, mac, all_pages, &total) < 0) return 1;
++    struct page *all_pages = NULL;
++    size_t total = 0, capacity = 0;
 +    bool first_batch = true;
 +    for (;;) {
 +        if (!first_batch) {
@@ -76,7 +153,7 @@
 +            if (do_register(scanner_ip, local_ip, mac) < 0
 +                || do_handshake_conn1(scanner_ip, local_ip, mac) < 0
 +                || do_init_session(scanner_ip, mac) < 0) {
-+                if (total == 0) return 1;
++                if (total == 0) { free(all_pages); return 1; }
 +                break;
 +            }
 +            do_re_register(scanner_ip, local_ip, mac);
@@ -89,19 +166,52 @@
 +            scanner_ip, mac, batch_pages, &batch_count, &feeder_empty
 +        );
 +        if (scan_result < 0) {
-+            if (total == 0) return 1;
++            for (int i = 0; i < batch_count; i++) free(batch_pages[i].data);
++            if (total == 0) { free(all_pages); return 1; }
 +            break;
 +        }
 +        if (batch_count == 0) break;
++        if (append_batch_pages(
++                &all_pages, &total, &capacity,
++                batch_pages, batch_count, simplex
++            ) < 0) {
++            for (int i = 0; i < batch_count; i++) free(batch_pages[i].data);
++            free_pages(all_pages, total);
++            fprintf(stderr, "Error: out of memory while collecting scan pages\n");
++            return 1;
++        }
 +
-+        int available = MAX_PAGES - total;
-+        int accepted = batch_count < available ? batch_count : available;
-+        for (int i = 0; i < accepted; i++)
-+            all_pages[total + i] = batch_pages[i];
-+        total += accepted;
-+        for (int i = accepted; i < batch_count; i++) free(batch_pages[i].data);
-+
-+        if (feeder_empty || total >= MAX_PAGES) break;
++        if (feeder_empty) break;
 +        first_batch = false;
 +    }
      if (total == 0) { fprintf(stderr, "No pages scanned\n"); return 1; }
++    if (total > (size_t)INT_MAX) {
++        free_pages(all_pages, total);
++        fprintf(stderr, "Error: too many pages for PDF output\n");
++        return 1;
++    }
+ 
+-    /* Filter simplex (front pages only) */
+     struct page *out = all_pages;
+-    int out_n = total;
+-    struct page *simplex_buf = NULL;
+-    if (simplex) {
+-        simplex_buf = calloc((size_t)total, sizeof(struct page));
+-        if (!simplex_buf) { fprintf(stderr, "Error: out of memory\n"); return 1; }
+-        out_n = 0;
+-        for (int i = 0; i < total; i += 2) simplex_buf[out_n++] = all_pages[i];
+-        out = simplex_buf;
+-    }
++    int out_n = (int)total;
+ 
+     char default_name[64];
+     if (!output) {
+@@ -1710,7 +1812,6 @@ int main(int argc, char *argv[]) {
+         }
+     }
+ 
+-    for (int i = 0; i < total; i++) free(all_pages[i].data);
+-    free(simplex_buf);
++    free_pages(all_pages, total);
+     return rc;
+ }

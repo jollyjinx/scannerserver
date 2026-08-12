@@ -63,6 +63,7 @@ public actor OCRQueueActor {
         let batchID: UUID
         let environment: [String: String]?
         let workingDirectory: URL?
+        let ocrEnabled: Bool
         let removeBlankPages: Bool
         let cropPages: Bool
     }
@@ -117,6 +118,7 @@ public actor OCRQueueActor {
         batchID: UUID = UUID(),
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil,
+        ocrEnabled: Bool = true,
         removeBlankPages: Bool = false,
         cropPages: Bool = false
     ) async {
@@ -125,6 +127,7 @@ public actor OCRQueueActor {
             batchID: batchID,
             environment: environment,
             workingDirectory: workingDirectory,
+            ocrEnabled: ocrEnabled,
             removeBlankPages: removeBlankPages,
             cropPages: cropPages
         ))
@@ -213,7 +216,9 @@ public actor OCRQueueActor {
     }
 
     private func run(job: Job, jobs: Int) async -> JobCompletion {
-        guard let outputPath = OCRInputPath.outputPath(for: job.inputPath) else {
+        guard job.inputPath.lowercased().hasSuffix(".pdf"),
+              !job.inputPath.lowercased().hasSuffix(".ocr.pdf")
+        else {
             return JobCompletion(
                 finished: Date(),
                 status: "failed (64)",
@@ -222,7 +227,10 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         }
-        guard !FileManager.default.fileExists(atPath: outputPath) else {
+        let outputPath = job.ocrEnabled
+            ? OCRInputPath.outputPath(for: job.inputPath)!
+            : job.inputPath
+        guard !job.ocrEnabled || !FileManager.default.fileExists(atPath: outputPath) else {
             return JobCompletion(
                 finished: Date(),
                 status: "failed (73)",
@@ -351,6 +359,9 @@ public actor OCRQueueActor {
 
     private func execute(job: Job, outputPath: String, jobs: Int) async throws -> ProcessResult {
         guard job.removeBlankPages || job.cropPages else {
+            guard job.ocrEnabled else {
+                return ProcessResult(exitStatus: 0, standardOutput: job.inputPath + "\n")
+            }
             return try await executor.execute(ScanPipelineCommands.ocr(
                 inputPath: job.inputPath,
                 outputPath: outputPath,
@@ -397,14 +408,23 @@ public actor OCRQueueActor {
             guard result.succeeded else { return result }
         }
 
-        return try await executor.execute(ScanPipelineCommands.ocr(
-            inputPath: stagedInput.path,
-            outputPath: outputPath,
-            environment: job.environment,
-            workingDirectory: workspace,
-            jobs: jobs,
-            niceLevel: configuration.niceLevel(for: job.environment)
-        ))
+        if job.ocrEnabled {
+            return try await executor.execute(ScanPipelineCommands.ocr(
+                inputPath: stagedInput.path,
+                outputPath: outputPath,
+                environment: job.environment,
+                workingDirectory: workspace,
+                jobs: jobs,
+                niceLevel: configuration.niceLevel(for: job.environment)
+            ))
+        }
+
+        try Task.checkCancellation()
+        try FoundationNativeDocumentFileSystem().replaceFileAtomically(
+            at: inputURL,
+            with: stagedInput
+        )
+        return ProcessResult(exitStatus: 0, standardOutput: outputPath + "\n")
     }
 
     private func isValidPathComponent(_ value: String) -> Bool {

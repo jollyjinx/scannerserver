@@ -985,10 +985,10 @@ private func renderModes(
     }
     html += select(
         name: "SCAN_OCR_CPU_LIMIT",
-        label: "OCR CPUs",
+        label: "Processing CPUs",
         values: cpuChoices,
         selected: selectedMode.settings.ocrCPULimitText,
-        help: "Automatic uses the container CPU allowance. Choose a lower limit to leave more CPU capacity free."
+        help: "Automatic uses the background CPU allowance while reserving one processor for scanning and the web service."
     )
     html += select(
         name: "SCAN_OCR_NICE",
@@ -1002,7 +1002,7 @@ private func renderModes(
         name: "SCAN_CROP_PAGES",
         label: "Autocrop",
         checked: selectedMode.settings.cropPages,
-        help: "Trim scanner-bed borders around detected paper before OCR."
+        help: "Trim scanner-bed borders around detected paper during background processing."
     )
     html += numberInput(
         name: "SCAN_CROP_MARGIN_POINTS",
@@ -1017,7 +1017,7 @@ private func renderModes(
         name: "SCAN_REMOVE_BLANK_PAGES",
         label: "Remove blanks",
         checked: selectedMode.settings.removeBlankPages,
-        help: "Discard pages detected as blank before OCR for PDF output."
+        help: "Discard pages detected as blank during background PDF processing."
     )
     html += "</div></div></fieldset>"
     html += "<fieldset class=\"setting-group\"><legend>Physical button</legend>"
@@ -1047,7 +1047,7 @@ private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     if !job.output.isEmpty { html += "<pre>\(htmlEscape(job.output))</pre>" }
     if !job.error.isEmpty { html += "<pre>\(htmlEscape(job.error))</pre>" }
 
-    html += "<h2>OCR</h2><p><span class=\"status\">\(htmlEscape(ocr.status))</span>"
+    html += "<h2>Background processing</h2><p><span class=\"status\">\(htmlEscape(ocr.status))</span>"
     if ocr.running > 1 { html += " \(ocr.running) jobs active" }
     if ocr.queued > 0 { html += " \(ocr.queued) queued" }
     html += "</p>"
@@ -1059,7 +1059,7 @@ private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     }
     html += "</p>"
     if ocr.status == "running" || ocr.status == "queued" || ocr.queued > 0 {
-        html += "<form method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel OCR</button></form>"
+        html += "<form method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel processing</button></form>"
     }
     if let started = ocr.started { html += "<p>Started: \(htmlEscape(timestamp(started)))</p>" }
     if let finished = ocr.finished { html += "<p>Finished: \(htmlEscape(timestamp(finished)))</p>" }
@@ -1067,7 +1067,7 @@ private func renderStatus(job: ScanJobState, ocr: OCRQueueState) -> String {
     if !ocr.output.isEmpty { html += "<pre>\(htmlEscape(ocr.output))</pre>" }
     if !ocr.error.isEmpty { html += "<pre>\(htmlEscape(ocr.error))</pre>" }
     if !ocr.recentJobs.isEmpty {
-        html += "<h3>Recent OCR jobs</h3><ul class=\"ocr-history\">"
+        html += "<h3>Recent processing jobs</h3><ul class=\"ocr-history\">"
         for recent in ocr.recentJobs {
             let name = URL(fileURLWithPath: recent.input).lastPathComponent
             html += "<li><span class=\"file-name\">\(htmlEscape(name))</span>: "

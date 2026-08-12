@@ -160,8 +160,11 @@ document or PDF page limit; the exact boundary can depend on the captured image 
 
 The patched `scansnap-wifi` client therefore retains the sides already received, finalizes the
 current command sequence, establishes a fresh registration/handshake/init sequence, and appends the
-next transfer batch to the same output. It repeats until either 256 captured sides have been
-collected or the iX500 reports the terminal feeder-empty status observed on the wire:
+next transfer batch to a dynamically growing page collection. Each protocol transfer remains
+bounded to 256 captured sides because its page number is one byte, but the complete scan no longer
+has that limit. In simplex mode, backsides are released as each transfer batch arrives instead of
+counting toward the final document. Transfers repeat until the iX500 reports the terminal
+feeder-empty status observed on the wire:
 
 ```text
 00 0a 00 00 00 00 80 03 00 00 00 00
@@ -216,8 +219,9 @@ Every scan start now performs an explicit one-shot session handoff:
 3. Launch `scansnap-wifi --reuse-session`. This skips its UDP registration, first pairing handshake,
    and initialization sequence, then continues with the acquisition re-registration and scan
    commands using the same client IP and MAC.
-4. After successful acquisition and document publication, resume the heartbeat for the retained
-   session without registering again.
+4. After successful acquisition and source publication, resume the heartbeat for the retained
+   session without registering again. Blank removal, crop, and OCR continue independently in the
+   background queue.
 
 The native client's scan cleanup also finishes its TCP command sequence with D6. D6 should
 therefore be understood as command-sequence finalization, not proof that scanner-side ownership has

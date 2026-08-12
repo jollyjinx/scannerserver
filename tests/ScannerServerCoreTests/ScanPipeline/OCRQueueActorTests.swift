@@ -90,6 +90,47 @@ struct OCRQueueActorTests {
         #expect(await queue.state.output == output.path)
     }
 
+    @Test("Processing-only jobs replace the source without launching OCR")
+    func processingOnly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "processing-queue-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let input = root.appendingPathComponent("scan.pdf")
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            workspaceSuffixProvider: { "processing-test" },
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(
+            input.path,
+            ocrEnabled: false,
+            removeBlankPages: true,
+            cropPages: true
+        )
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "remove-blank-pages", "crop-pdf-pages",
+        ])
+        #expect(await queue.state.status == "done")
+        #expect(await queue.state.output == input.path)
+        #expect(try Data(contentsOf: input) == Data("raw source".utf8))
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent(".ocr-work.processing-test").path
+        ))
+    }
+
     @Test("Invalid and conflicting paths fail without launching OCR")
     func invalidAndConflictingPaths() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

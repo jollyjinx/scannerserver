@@ -66,13 +66,18 @@ credentials to the repository or ordinary test fixtures.
   `qpdf --check`; no sheets may remain in the feeder after the job completes.
 - Confirm the terminal empty-feeder response ends that multi-batch job without opening another
   transfer, leaving the scanner ready rather than blinking orange.
+- Scan more than 128 simplex sheets as one continuously reloaded job. Confirm the final PDF contains
+  every front in order, no backs, and no 128-page or 256-side cutoff.
 - Attempt a second scan while the first is running and confirm it is ignored without interrupting the active scan.
 - Verify source naming follows `YYYY-MM-DD.HHMMSS.pdf` and the file opens successfully.
 - Confirm the source PDF remains downloadable while blank removal, crop, and OCR run on a copy.
+- While blank removal or crop is still running, confirm the web scan control is enabled and the
+  physical button session has resumed. Start another scan and confirm it is acquired while the
+  first document remains queued or processing.
 - While `pdfimages` or OCR is actively consuming CPU, repeatedly refresh the index and verify HTTP
   responses remain immediate; background native-tool pipe reads and process waits must not starve
   the physical-button or HTTP actors.
-- With OCR enabled, wait for the serial OCR queue and verify the matching `.ocr.pdf` is searchable.
+- With OCR enabled, wait for the background queue and verify the matching `.ocr.pdf` is searchable.
 - Test simplex, single-page PDF, and PNG modes; verify page numbers use four digits.
 - Enable blank-page removal and crop with the existing fixture document and compare the result with a known-good legacy image.
 - Confirm creator metadata, previews, inline view, download, selected deletion, and preview-cache deletion.

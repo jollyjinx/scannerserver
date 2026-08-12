@@ -271,24 +271,6 @@ public actor NativeScanPipeline: NativeScanExecuting {
         workDirectory: URL,
         executor: NativeScanCapturingExecutor
     ) async throws {
-        if configuration.removeBlankPages && !configuration.ocrEnabled {
-            try await executeDocumentStep(
-                .removeBlankPages,
-                command: options.removeBlankPagesRequest(pdfPath: rawPDF.path).command,
-                environment: configuration.environment,
-                workingDirectory: workDirectory,
-                executor: executor
-            )
-        }
-        if configuration.cropPages && !configuration.ocrEnabled {
-            try await executeDocumentStep(
-                .cropPages,
-                command: options.cropPagesRequest(pdfPath: rawPDF.path).command,
-                environment: configuration.environment,
-                workingDirectory: workDirectory,
-                executor: executor
-            )
-        }
         try await executeDocumentStep(
             .setCreatorMetadata,
             command: SetPDFCreatorRequest(pdfPath: rawPDF.path, creator: options.creator).command,

@@ -60,6 +60,41 @@ struct NativeScanPipelineTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
+    @Test("Non-OCR multipage source is also published before blank removal and crop")
+    func nonOCRMultipagePDFPublishesImmediately() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let timestamp = "2026-07-10.142305"
+        let finalPDF = fixture.output.appendingPathComponent("\(timestamp).pdf")
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .materialize(
+                files: [fixture.rawPDF.path: Data("multipage-pdf".utf8)],
+                result: ProcessResult(exitStatus: 0)
+            ),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let pipeline = fixture.pipeline(executor: executor)
+        let configuration = fixture.configuration([
+            "SCAN_BACKEND": "wifi",
+            "SCAN_TIMESTAMP": timestamp,
+            "SCANNER_IP": "192.0.2.20",
+            "SCAN_PAIRING_KEY": "pairing-key",
+            "SCAN_OCR_ENABLED": "false",
+            "SCAN_PAGE_MODE": "multi",
+            "SCAN_FORMAT": "pdf",
+            "SCAN_REMOVE_BLANK_PAGES": "true",
+            "SCAN_CROP_PAGES": "true",
+        ])
+
+        let result = try await pipeline.scan(configuration: configuration)
+
+        #expect(result == ProcessResult(exitStatus: 0, standardOutput: "\(finalPDF.path)\n"))
+        #expect(await executor.requests().map(\.executable) == [
+            "scansnap-wifi", "set-pdf-creator",
+        ])
+        #expect(try Data(contentsOf: finalPDF) == Data("multipage-pdf".utf8))
+    }
+
     @Test("Wi-Fi options and processing arguments produce single-page PDFs")
     func wifiSinglePagePDF() async throws {
         let fixture = try Fixture()

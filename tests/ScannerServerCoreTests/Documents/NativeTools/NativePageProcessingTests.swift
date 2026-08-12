@@ -243,6 +243,41 @@ struct NativePageProcessingTests {
         ])
     }
 
+    @Test("Blank-page inspection uses the configured page worker budget")
+    func blankPageConcurrency() async throws {
+        let underlying = FakeNativeDocumentProcessExecutor(stubs: [
+            .result(ProcessResult(
+                exitStatus: 0,
+                standardOutput: String(decoding: try twoPagePDFJSON(), as: UTF8.self)
+            )),
+            .suspended,
+            .suspended,
+        ])
+        let fileSystem = FakeNativeDocumentFileSystem()
+        let executor = NativeDocumentToolExecutor(executor: underlying, fileSystem: fileSystem)
+        let task = Task {
+            try await executor.execute(ProcessRequest(
+                executable: "remove-blank-pages",
+                arguments: ["/work/raw.pdf"],
+                environment: ["SCAN_PROCESSING_CPU_LIMIT": "2"],
+                workingDirectory: URL(fileURLWithPath: "/work", isDirectory: true)
+            ))
+        }
+
+        await underlying.waitForRequestCount(3)
+        let pageRequests = await underlying.requests().dropFirst()
+        #expect(pageRequests.allSatisfy { $0.executable == "pdfimages" })
+        #expect(Set(pageRequests.compactMap { request in
+            guard let marker = request.arguments.firstIndex(of: "-f"),
+                  request.arguments.indices.contains(marker + 1)
+            else { return nil }
+            return request.arguments[marker + 1]
+        }) == Set(["1", "2"]))
+
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
     @Test("Failed atomic replacement leaves the destination intact")
     func replacementRollback() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -290,6 +325,30 @@ struct NativePageProcessingTests {
                 "calledgetallpages": true,
                 "pushedinheritedpageresources": false,
                 "maxobjectid": 12,
+            ], objects],
+        ])
+    }
+
+    private func twoPagePDFJSON() throws -> Data {
+        let objects: [String: Any] = [
+            "trailer": ["value": ["/Root": "1 0 R"]],
+            "obj:1 0 R": ["value": ["/Type": "/Catalog", "/Pages": "3 0 R"]],
+            "obj:3 0 R": ["value": [
+                "/Type": "/Pages", "/Kids": ["4 0 R", "5 0 R"], "/Count": 2,
+                "/MediaBox": [0, 0, 612, 792], "/Resources": "8 0 R",
+            ]],
+            "obj:4 0 R": ["value": ["/Type": "/Page", "/Parent": "3 0 R"]],
+            "obj:5 0 R": ["value": ["/Type": "/Page", "/Parent": "3 0 R"]],
+            "obj:8 0 R": ["value": ["/XObject": ["/Scan": "10 0 R"]]],
+            "obj:10 0 R": ["stream": ["dict": ["/Subtype": "/Image"]]],
+        ]
+        return try JSONSerialization.data(withJSONObject: [
+            "qpdf": [[
+                "jsonversion": 2,
+                "pdfversion": "1.7",
+                "calledgetallpages": true,
+                "pushedinheritedpageresources": false,
+                "maxobjectid": 10,
             ], objects],
         ])
     }
