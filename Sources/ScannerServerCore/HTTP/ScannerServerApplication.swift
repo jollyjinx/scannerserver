@@ -927,6 +927,9 @@ private func renderScan(settings: ScanSettings, job: ScanJobState) -> String {
     let scanDisabled = job.status == "running" ? " disabled" : ""
     html += "<button class=\"primary-action\"\(scanDisabled)>Start scan</button>"
     html += "</form>"
+    if let message = emptyFeederMessage(for: job) {
+        html += "<p class=\"warning\" role=\"alert\">\(htmlEscape(message))</p>"
+    }
     if job.status == "running" {
         html += "<form class=\"inline-form\" method=\"post\" action=\"/scan/cancel\"><button class=\"danger-button\" data-confirm=\"Cancel the current scan?\">Cancel scan</button></form>"
     }
@@ -934,6 +937,17 @@ private func renderScan(settings: ScanSettings, job: ScanJobState) -> String {
     html += "<strong>\(htmlEscape(buttonMode.name))</strong><a href=\"/presets?edit_mode=\(urlQueryValue(buttonMode.id))\">Manage</a>"
     html += "</div></section>"
     return html
+}
+
+private func emptyFeederMessage(for job: ScanJobState) -> String? {
+    guard job.status.hasPrefix("failed") else { return nil }
+    let diagnostic = "\(job.output)\n\(job.error)".lowercased()
+    let emptyFeederDiagnostics = [
+        "no pages were scanned",
+        "no document in scanner",
+    ]
+    guard emptyFeederDiagnostics.contains(where: diagnostic.contains) else { return nil }
+    return "No paper was detected in the feeder. Load paper, then start a new scan."
 }
 
 private func renderScannerReachabilitySummary(

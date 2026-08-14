@@ -375,6 +375,35 @@ struct ScannerServerApplicationTests {
         await fixture.scanJobs.cancel()
     }
 
+    @Test("An empty feeder is shown as an actionable scan notice")
+    func emptyFeederNotice() async throws {
+        let executor = SlowCapturingExecutor(result: ProcessResult(
+            exitStatus: 2,
+            standardError: "No pages were scanned. Check that paper is loaded.\n"
+        ))
+        let fixture = try HTTPFixture(
+            environment: ["SCAN_BACKEND": "sane"],
+            executor: executor
+        )
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await postForm(client, uri: "/scan", body: "mode_id=duplex-pdf-ocr") { response in
+                expectRedirect(response, to: "/")
+            }
+            await fixture.scanJobs.waitUntilIdle()
+
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("No paper was detected in the feeder. Load paper, then start a new scan."))
+                #expect(body.contains("role=\"alert\""))
+                #expect(body.contains("Technical details"))
+            }
+        }
+    }
+
     @Test("Wi-Fi scans require truthful setup state")
     func scanRequiresSetup() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
@@ -720,9 +749,11 @@ private actor CapturingManualSetupService: ScannerSetupServing {
 private actor SlowCapturingExecutor: ProcessExecutor {
     private(set) var requests: [ProcessRequest] = []
     private let delay: Duration
+    private let result: ProcessResult
 
-    init(delay: Duration = .seconds(30)) {
+    init(delay: Duration = .seconds(30), result: ProcessResult = ProcessResult(exitStatus: 0)) {
         self.delay = delay
+        self.result = result
     }
 
     func execute(_ request: ProcessRequest) async throws -> ProcessResult {
@@ -730,7 +761,7 @@ private actor SlowCapturingExecutor: ProcessExecutor {
         if delay > .zero {
             try await Task.sleep(for: delay)
         }
-        return ProcessResult(exitStatus: 0)
+        return result
     }
 }
 
