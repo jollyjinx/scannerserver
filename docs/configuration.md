@@ -59,7 +59,7 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with default 
 - `Duplex PDF`
 - `Single Page PDFs + OCR`
 
-Use **Advanced settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button.
+Use **Presets** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button. The **Scanner** page only selects a preset and starts a scan; **Settings** contains scanner connection management.
 
 With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the background CPU limit and post-scan process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers a **Processing CPUs** dropdown: **Automatic** uses the container-aware background allowance, while a number lowers the limit for that mode. **Post-scan priority** selects normal or reduced (`nice`) priority for every external tool launched by background processing. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
 

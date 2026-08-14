@@ -342,33 +342,41 @@ public enum ScannerServerApplication {
         let buildInformation = ScannerServerBuildInformation(environment: dependencies.environment)
         let router = Router()
 
-        router.get("/") { request, _ -> Response in
-            if let issue = ScanDirectoryAccessIssue.check(
-                directory: dependencies.outputPathResolver.outputDirectory
-            ) {
-                return scanDirectoryErrorResponse(
-                    template: indexTemplate,
-                    issue: issue,
-                    buildInformation: buildInformation
-                )
-            }
-            do {
-                return try await indexResponse(
-                    request: request,
-                    template: indexTemplate,
-                    dependencies: dependencies,
-                    buildInformation: buildInformation
-                )
-            } catch {
-                return scanDirectoryErrorResponse(
-                    template: indexTemplate,
-                    issue: ScanDirectoryAccessIssue(
-                        directoryPath: dependencies.outputPathResolver.outputDirectory.path,
-                        details: error.localizedDescription
-                    ),
-                    buildInformation: buildInformation
-                )
-            }
+        router.get("/") { request, _ in
+            await webPageResponse(
+                request: request,
+                page: .scan,
+                template: indexTemplate,
+                dependencies: dependencies,
+                buildInformation: buildInformation
+            )
+        }
+        router.get("/documents") { request, _ in
+            await webPageResponse(
+                request: request,
+                page: .documents,
+                template: indexTemplate,
+                dependencies: dependencies,
+                buildInformation: buildInformation
+            )
+        }
+        router.get("/presets") { request, _ in
+            await webPageResponse(
+                request: request,
+                page: .presets,
+                template: indexTemplate,
+                dependencies: dependencies,
+                buildInformation: buildInformation
+            )
+        }
+        router.get("/settings") { request, _ in
+            await webPageResponse(
+                request: request,
+                page: .settings,
+                template: indexTemplate,
+                dependencies: dependencies,
+                buildInformation: buildInformation
+            )
         }
         router.get("/health") { _, _ in "ok\n" }
         router.get("/version") { _, _ in "\(buildInformation.version)\n" }
@@ -392,7 +400,7 @@ public enum ScannerServerApplication {
             let setup = await dependencies.scannerSetup.state()
             let wifiBackend = dependencies.environment["SCAN_BACKEND", default: "wifi"] == "wifi"
             guard !wifiBackend || setup.configured else {
-                return redirect(setup: .setupRequired)
+                return redirect(setup: .setupRequired, to: "/settings")
             }
 
             var environment = dependencies.environment
@@ -412,7 +420,7 @@ public enum ScannerServerApplication {
         router.post("/modes/default") { request, context -> Response in
             let form = try await decodeForm(ModeIDForm.self, request: request, context: context)
             try await dependencies.settingsStore.setDefaultMode(id: form.modeID)
-            return .redirect(to: "/")
+            return .redirect(to: "/presets")
         }
 
         router.post("/modes/save") { request, context -> Response in
@@ -424,17 +432,17 @@ public enum ScannerServerApplication {
                 existingID: form.modeID,
                 setDefault: form.setDefault != nil
             )
-            return .redirect(to: "/?edit_mode=\(urlQueryValue(modeID))")
+            return .redirect(to: "/presets?edit_mode=\(urlQueryValue(modeID))")
         }
 
         router.post("/modes/delete") { request, context -> Response in
             let form = try await decodeForm(ModeIDForm.self, request: request, context: context)
             try await dependencies.settingsStore.deleteMode(id: form.modeID)
-            return .redirect(to: "/")
+            return .redirect(to: "/presets")
         }
 
         router.post("/setup/scanners/discover") { _, _ -> Response in
-            redirect(setup: await dependencies.scannerSetup.discover())
+            redirect(setup: await dependencies.scannerSetup.discover(), to: "/settings")
         }
         router.get("/setup/scanners/state") { _, _ -> Response in
             await dependencies.scannerSetup.ensureDiscoveryStarted()
@@ -456,9 +464,9 @@ public enum ScannerServerApplication {
         router.post("/setup/scanners/select") { request, context -> Response in
             let form = try await decodeForm(ScannerSelectForm.self, request: request, context: context)
             guard let deviceID = form.deviceID, !deviceID.isEmpty else {
-                return redirect(setup: .noDevice)
+                return redirect(setup: .noDevice, to: "/settings")
             }
-            return redirect(setup: await dependencies.scannerSetup.select(deviceID: deviceID))
+            return redirect(setup: await dependencies.scannerSetup.select(deviceID: deviceID), to: "/settings")
         }
         router.post("/setup/scanners/manual") { request, context -> Response in
             let form = try await decodeForm(ScannerManualForm.self, request: request, context: context)
@@ -466,17 +474,18 @@ public enum ScannerServerApplication {
             let credential = form.scannerCredential ?? ""
             guard !ipAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return Response.redirect(to: "/?setup=manual-missing")
+                return Response.redirect(to: "/settings?setup=manual-missing")
             }
             return redirect(
                 setup: await dependencies.scannerSetup.configureManually(
                     ipAddress: ipAddress,
                     credential: credential
-                )
+                ),
+                to: "/settings"
             )
         }
         router.post("/setup/scanners/clear") { _, _ -> Response in
-            redirect(setup: await dependencies.scannerSetup.clear())
+            redirect(setup: await dependencies.scannerSetup.clear(), to: "/settings")
         }
 
         router.get("/files/:name/preview") { _, context -> Response in
@@ -505,13 +514,13 @@ public enum ScannerServerApplication {
             for name in names {
                 await deleteFile(name: name, dependencies: dependencies)
             }
-            return .redirect(to: "/")
+            return .redirect(to: "/documents")
         }
         router.post("/files/:name/delete") { _, context -> Response in
             if let name = routeName(context: context) {
                 await deleteFile(name: name, dependencies: dependencies)
             }
-            return .redirect(to: "/")
+            return .redirect(to: "/documents")
         }
 
         return router
@@ -613,8 +622,8 @@ private func decodeRepeatedFormValue(
     return components.queryItems?.filter { $0.name == name }.compactMap(\.value) ?? []
 }
 
-private func redirect(setup outcome: ScannerSetupOutcome) -> Response {
-    .redirect(to: "/?setup=\(outcome.rawValue)")
+private func redirect(setup outcome: ScannerSetupOutcome, to path: String = "/") -> Response {
+    .redirect(to: "\(path)?setup=\(outcome.rawValue)")
 }
 
 private func routeName(context: some RequestContext) -> String? {
@@ -711,8 +720,61 @@ private func scanDirectoryErrorResponse(
     )
 }
 
+private enum ScannerServerPage: String, CaseIterable {
+    case scan
+    case documents
+    case presets
+    case settings
+
+    var path: String {
+        switch self {
+        case .scan: "/"
+        default: "/\(rawValue)"
+        }
+    }
+
+    var label: String { rawValue.capitalized }
+}
+
+private func webPageResponse(
+    request: Request,
+    page: ScannerServerPage,
+    template: String,
+    dependencies: ScannerServerDependencies,
+    buildInformation: ScannerServerBuildInformation
+) async -> Response {
+    if let issue = ScanDirectoryAccessIssue.check(
+        directory: dependencies.outputPathResolver.outputDirectory
+    ) {
+        return scanDirectoryErrorResponse(
+            template: template,
+            issue: issue,
+            buildInformation: buildInformation
+        )
+    }
+    do {
+        return try await indexResponse(
+            request: request,
+            page: page,
+            template: template,
+            dependencies: dependencies,
+            buildInformation: buildInformation
+        )
+    } catch {
+        return scanDirectoryErrorResponse(
+            template: template,
+            issue: ScanDirectoryAccessIssue(
+                directoryPath: dependencies.outputPathResolver.outputDirectory.path,
+                details: error.localizedDescription
+            ),
+            buildInformation: buildInformation
+        )
+    }
+}
+
 private func indexResponse(
     request: Request,
+    page: ScannerServerPage,
     template: String,
     dependencies: ScannerServerDependencies,
     buildInformation: ScannerServerBuildInformation
@@ -738,6 +800,7 @@ private func indexResponse(
         timeZone: localTime.timeZone
     )
     let content = renderIndexContent(
+        page: page,
         settings: settings,
         editModeID: query["edit_mode"],
         setupMessageCode: query["setup"],
@@ -777,6 +840,7 @@ private func scanFileGroups(outputDirectory: URL, timeZone: TimeZone) -> [ScanDa
 }
 
 private func renderIndexContent(
+    page: ScannerServerPage,
     settings: ScanSettings,
     editModeID: String?,
     setupMessageCode: String?,
@@ -795,7 +859,7 @@ private func renderIndexContent(
         selectedMode = editModeID.flatMap(settings.mode(id:)) ?? settings.defaultMode
     }
 
-    var html = ""
+    var html = renderNavigation(active: page)
     if let message = setupMessage(setupMessageCode) {
         html += "<p class=\"notice\">\(htmlEscape(message))</p>"
     }
@@ -805,32 +869,62 @@ private func renderIndexContent(
             scannerIsReachable: scannerIsReachable
         )
     }
-    if wifiBackend && !setup.configured {
-        html += renderScannerSetup(setup)
-    }
-
-    if !wifiBackend || setup.configured {
-        html += "<section><h2>Scan</h2><form method=\"post\" action=\"/scan\">"
-        html += "<label>Scan mode<select name=\"mode_id\">"
-        for mode in settings.modes {
-            let selected = mode.id == settings.defaultModeID ? " selected" : ""
-            let suffix = mode.id == settings.defaultModeID ? " (button)" : ""
-            html += "<option value=\"\(htmlEscape(mode.id))\"\(selected)>\(htmlEscape(mode.name + suffix))</option>"
+    switch page {
+    case .scan:
+        if !wifiBackend || setup.configured {
+            html += renderScan(settings: settings, job: job)
+            html += renderStatus(job: job, ocr: ocr, localTime: localTime)
+        } else {
+            html += "<section class=\"empty-state\"><p class=\"eyebrow\">Setup required</p>"
+            html += "<h2>Connect a scanner before your first scan</h2>"
+            html += "<p class=\"muted\">Scanner discovery and connection are managed separately from everyday scanning.</p>"
+            html += "<a class=\"button-link\" href=\"/settings\">Open scanner settings</a></section>"
         }
-        html += "</select></label><div class=\"button-row\">"
-        html += "<button\(job.status == "running" ? " disabled" : "")>Start scan</button>"
-        html += "<button class=\"secondary-button\" formaction=\"/modes/default\">Use for button</button>"
-        html += "</div></form></section>"
+    case .documents:
+        html += renderFiles(groups)
+    case .presets:
         html += renderModes(
             settings: settings,
             selectedMode: selectedMode,
-            maximumOCRCPUs: ocr.cpuLimit,
-            scannerSetup: wifiBackend ? setup : nil,
-            open: editModeID != nil
+            maximumOCRCPUs: ocr.cpuLimit
         )
-        html += renderStatus(job: job, ocr: ocr, localTime: localTime)
-        html += renderFiles(groups)
+    case .settings:
+        if wifiBackend {
+            html += renderScannerSetup(setup)
+        } else {
+            html += "<section><p class=\"eyebrow\">Scanner settings</p><h2>Scanner connection</h2>"
+            html += "<p>This server uses the <strong>sane</strong> scan backend. Its connection is configured outside the web interface.</p></section>"
+        }
     }
+    return html
+}
+
+private func renderNavigation(active: ScannerServerPage) -> String {
+    var html = "<nav class=\"primary-nav\" aria-label=\"Primary\">"
+    for page in ScannerServerPage.allCases {
+        let current = page == active ? " aria-current=\"page\"" : ""
+        html += "<a href=\"\(page.path)\"\(current)>\(htmlEscape(page.label))</a>"
+    }
+    return html + "</nav>"
+}
+
+private func renderScan(settings: ScanSettings, job: ScanJobState) -> String {
+    let buttonMode = settings.defaultMode
+    var html = "<section class=\"scan-panel\"><div class=\"section-heading\">"
+    html += "<div><p class=\"eyebrow\">Scanner controls</p><h2>Start a new scan</h2>"
+    html += "<p class=\"muted\">Choose a preset and start scanning. Preset settings are managed separately.</p></div>"
+    html += "</div><form class=\"scan-form\" method=\"post\" action=\"/scan\">"
+    html += "<label>Preset<select name=\"mode_id\">"
+    for mode in settings.modes {
+        let selected = mode.id == settings.defaultModeID ? " selected" : ""
+        html += "<option value=\"\(htmlEscape(mode.id))\"\(selected)>\(htmlEscape(mode.name))</option>"
+    }
+    html += "</select><span class=\"setting-help\">\(htmlEscape(modeSummary(buttonMode)))</span></label>"
+    let scanDisabled = job.status == "running" ? " disabled" : ""
+    html += "<button class=\"primary-action\"\(scanDisabled)>Start scan</button>"
+    html += "</form><div class=\"button-preset-note\"><span>Physical button</span>"
+    html += "<strong>\(htmlEscape(buttonMode.name))</strong><a href=\"/presets?edit_mode=\(urlQueryValue(buttonMode.id))\">Manage</a>"
+    html += "</div></section>"
     return html
 }
 
@@ -880,7 +974,7 @@ private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
     html += "<label>Scanner password or product serial number<input type=\"text\" name=\"scanner_credential\" required></label>"
     html += "<p class=\"muted\">If you never changed the scanner password, enter the product serial number printed on the scanner. The factory password will be derived automatically.</p>"
     html += "<button>Connect scanner</button></form>"
-    html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\">Clear scanner setup</button></form></div>"
+    html += "<form method=\"post\" action=\"/setup/scanners/clear\"><button class=\"danger-button\" data-confirm=\"Clear this scanner setup?\">Clear scanner setup</button></form></div>"
     return html
 }
 
@@ -897,21 +991,22 @@ private func renderScannerDevices(_ devices: [ScannerSetupDevice]) -> String {
 private func renderModes(
     settings: ScanSettings,
     selectedMode: ScanMode,
-    maximumOCRCPUs: Int,
-    scannerSetup: ScannerSetupState?,
-    open: Bool
+    maximumOCRCPUs: Int
 ) -> String {
-    var html = "<section><details\(open ? " open" : "")><summary>Advanced settings</summary><ul class=\"mode-list\">"
+    var html = "<section class=\"preset-workspace\"><div class=\"section-heading\"><div>"
+    html += "<p class=\"eyebrow\">Reusable configurations</p><h2>Presets</h2>"
+    html += "<p class=\"muted\">Create scan configurations and choose the preset used by the scanner's physical button.</p>"
+    html += "</div><a class=\"button-link secondary-link\" href=\"/presets?edit_mode=new\">New preset</a></div>"
+    html += "<div class=\"preset-layout\"><aside class=\"preset-sidebar\" aria-label=\"Saved presets\"><h3>Saved presets</h3><ul class=\"mode-list\">"
     for mode in settings.modes {
-        let badge = mode.id == settings.defaultModeID ? " <span class=\"default-badge\">button</span>" : ""
-        html += "<li><strong>\(htmlEscape(mode.name))</strong>\(badge)<div class=\"muted\">\(htmlEscape(modeSummary(mode)))</div></li>"
+        let selected = mode.id == selectedMode.id ? " aria-current=\"true\"" : ""
+        let badge = mode.id == settings.defaultModeID ? " <span class=\"default-badge\">Button</span>" : ""
+        html += "<li><a href=\"/presets?edit_mode=\(urlQueryValue(mode.id))\"\(selected)>"
+        html += "<strong>\(htmlEscape(mode.name))</strong>\(badge)<span class=\"muted\">\(htmlEscape(modeSummary(mode)))</span></a></li>"
     }
-    html += "</ul><form class=\"mode-load-form\" method=\"get\" action=\"/\"><label>Edit mode<select name=\"edit_mode\">"
-    for mode in settings.modes {
-        html += option(value: mode.id, label: mode.name, selected: mode.id == selectedMode.id)
-    }
-    html += option(value: "new", label: "New mode", selected: selectedMode.id.isEmpty)
-    html += "</select></label><button class=\"secondary-button\">Load</button></form>"
+    html += "</ul></aside><div class=\"preset-editor\"><div class=\"editor-heading\">"
+    html += "<p class=\"eyebrow\">\(selectedMode.id.isEmpty ? "New preset" : "Edit preset")</p>"
+    html += "<h3>\(htmlEscape(selectedMode.id.isEmpty ? "Untitled preset" : selectedMode.name))</h3></div>"
     html += "<form class=\"mode-editor-form\" method=\"post\" action=\"/modes/save\">"
     html += "<input type=\"hidden\" name=\"mode_id\" value=\"\(htmlEscape(selectedMode.id))\">"
     html += "<fieldset class=\"setting-group\"><legend>Document</legend>"
@@ -1036,13 +1131,9 @@ private func renderModes(
     )
     html += "</div></fieldset><div class=\"mode-actions button-row\"><button>Save mode</button>"
     if !selectedMode.id.isEmpty {
-        html += "<button class=\"danger-button\" formaction=\"/modes/delete\">Delete mode</button>"
+        html += "<button class=\"danger-button\" formaction=\"/modes/delete\" data-confirm=\"Delete this preset?\">Delete mode</button>"
     }
-    html += "</div></form>"
-    if let scannerSetup {
-        html += "<div class=\"advanced-setup\">\(renderScannerSetupContent(scannerSetup))</div>"
-    }
-    html += "</details></section>"
+    html += "</div></form></div></div></section>"
     return html
 }
 
@@ -1051,21 +1142,28 @@ private func renderStatus(
     ocr: OCRQueueState,
     localTime: ScannerServerLocalTime
 ) -> String {
-    var html = "<section><h2>Status</h2><p><span class=\"status\">\(htmlEscape(job.status))</span></p>"
+    var html = "<section class=\"activity-panel\"><div class=\"section-heading\"><div>"
+    html += "<p class=\"eyebrow\">Live progress</p><h2>Current activity</h2></div>"
+    html += "<a href=\"/documents\">View documents</a></div><div class=\"activity-grid\">"
+    html += "<article class=\"activity-card\"><div class=\"activity-card-head\"><h3>Scan</h3>"
+    html += statusPill(job.status) + "</div>"
     if let started = job.started {
-        html += "<p>Started: \(htmlEscape(localTime.statusTimestamp(for: started)))</p>"
+        html += "<p class=\"muted\">Started \(htmlEscape(localTime.statusTimestamp(for: started)))</p>"
     }
     if let finished = job.finished {
-        html += "<p>Finished: \(htmlEscape(localTime.statusTimestamp(for: finished)))</p>"
+        html += "<p class=\"muted\">Finished \(htmlEscape(localTime.statusTimestamp(for: finished)))</p>"
     }
-    if !job.output.isEmpty { html += "<pre>\(htmlEscape(job.output))</pre>" }
-    if !job.error.isEmpty { html += "<pre>\(htmlEscape(job.error))</pre>" }
-
-    html += "<h2>Background processing</h2><p><span class=\"status\">\(htmlEscape(ocr.status))</span>"
-    if ocr.running > 1 { html += " \(ocr.running) jobs active" }
-    if ocr.queued > 0 { html += " \(ocr.queued) queued" }
-    html += "</p>"
-    html += "<p>CPU budget: \(ocr.cpuLimit); priority: "
+    if !job.output.isEmpty || !job.error.isEmpty {
+        html += "<details class=\"technical-details\"><summary>Technical details</summary>"
+        if !job.output.isEmpty { html += "<pre>\(htmlEscape(job.output))</pre>" }
+        if !job.error.isEmpty { html += "<pre>\(htmlEscape(job.error))</pre>" }
+        html += "</details>"
+    }
+    html += "</article><article class=\"activity-card\"><div class=\"activity-card-head\"><h3>Background processing</h3>"
+    html += statusPill(ocr.status)
+    if ocr.running > 1 { html += "<span class=\"queue-count\">\(ocr.running) jobs active</span>" }
+    if ocr.queued > 0 { html += "<span class=\"queue-count\">\(ocr.queued) queued</span>" }
+    html += "</div><p class=\"muted\">CPU budget \(ocr.cpuLimit) · priority "
     if let niceLevel = ocr.niceLevel {
         html += "nice +\(niceLevel)"
     } else {
@@ -1073,53 +1171,76 @@ private func renderStatus(
     }
     html += "</p>"
     if ocr.status == "running" || ocr.status == "queued" || ocr.queued > 0 {
-        html += "<form method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel processing</button></form>"
+        html += "<form class=\"inline-form\" method=\"post\" action=\"/ocr/cancel\"><button class=\"danger-button\">Cancel processing</button></form>"
     }
     if let started = ocr.started {
-        html += "<p>Started: \(htmlEscape(localTime.statusTimestamp(for: started)))</p>"
+        html += "<p class=\"muted\">Started \(htmlEscape(localTime.statusTimestamp(for: started)))</p>"
     }
     if let finished = ocr.finished {
-        html += "<p>Finished: \(htmlEscape(localTime.statusTimestamp(for: finished)))</p>"
+        html += "<p class=\"muted\">Finished \(htmlEscape(localTime.statusTimestamp(for: finished)))</p>"
     }
-    if !ocr.input.isEmpty { html += "<p>Input: \(htmlEscape(ocr.input))</p>" }
-    if !ocr.output.isEmpty { html += "<pre>\(htmlEscape(ocr.output))</pre>" }
-    if !ocr.error.isEmpty { html += "<pre>\(htmlEscape(ocr.error))</pre>" }
+    if !ocr.input.isEmpty || !ocr.output.isEmpty || !ocr.error.isEmpty {
+        html += "<details class=\"technical-details\"><summary>Technical details</summary>"
+        if !ocr.input.isEmpty { html += "<p>Input: \(htmlEscape(ocr.input))</p>" }
+        if !ocr.output.isEmpty { html += "<pre>\(htmlEscape(ocr.output))</pre>" }
+        if !ocr.error.isEmpty { html += "<pre>\(htmlEscape(ocr.error))</pre>" }
+        html += "</details>"
+    }
     if !ocr.recentJobs.isEmpty {
-        html += "<h3>Recent processing jobs</h3><ul class=\"ocr-history\">"
+        html += "<details class=\"technical-details\"><summary>Recent processing jobs</summary><ul class=\"ocr-history\">"
         for recent in ocr.recentJobs {
             let name = URL(fileURLWithPath: recent.input).lastPathComponent
             html += "<li><span class=\"file-name\">\(htmlEscape(name))</span>: "
             html += "\(htmlEscape(recent.status)) in \(htmlEscape(elapsedTime(recent.duration)))</li>"
         }
-        html += "</ul>"
+        html += "</ul></details>"
     }
-    return html + "</section>"
+    return html + "</article></div></section>"
 }
 
 private func renderFiles(_ groups: [ScanDayGroup]) -> String {
-    var html = "<section><h2>Files</h2>"
-    guard !groups.isEmpty else { return html + "<p>No scans yet.</p></section>" }
-    html += "<form method=\"post\" action=\"/files/delete-selected\"><div class=\"button-row\">"
-    html += "<label><input type=\"checkbox\" data-select-all> Select all</label>"
-    html += "<button class=\"danger-button\">Delete selected</button></div><div class=\"file-groups\">"
+    var html = "<section class=\"documents-panel\"><div class=\"section-heading\"><div>"
+    html += "<p class=\"eyebrow\">Scan results</p><h2>Documents</h2>"
+    html += "<p class=\"muted\">Open completed scans, download source files, or remove documents.</p></div></div>"
+    guard !groups.isEmpty else {
+        return html + "<div class=\"empty-state compact\"><h3>No scans yet</h3><p class=\"muted\">Completed scans will appear here.</p><a class=\"button-link\" href=\"/\">Start a scan</a></div></section>"
+    }
+    html += "<form class=\"documents-form\" method=\"post\" action=\"/files/delete-selected\"><div class=\"document-actions\">"
+    html += "<label class=\"select-all\"><input type=\"checkbox\" data-select-all> Select all</label>"
+    html += "<button class=\"danger-button compact-button\" data-confirm=\"Delete the selected files?\">Delete selected</button></div><div class=\"file-groups\">"
     for group in groups {
         html += "<div><h3>\(htmlEscape(group.day))</h3><ul class=\"file-list\">"
         for document in group.files {
             let viewPath = urlPathComponent(document.viewName)
             let previewPath = urlPathComponent(document.previewName)
-            html += "<li class=\"file-row\"><a href=\"/view/\(viewPath)\" target=\"_blank\"><img class=\"file-preview\" src=\"/files/\(previewPath)/preview\" alt=\"\"></a><div>"
-            html += "<strong>\(htmlEscape(document.title))</strong>"
+            html += "<li class=\"file-row\"><a class=\"preview-link\" href=\"/view/\(viewPath)\" target=\"_blank\"><img class=\"file-preview\" src=\"/files/\(previewPath)/preview\" alt=\"Preview of \(htmlEscape(document.title))\"></a><div class=\"file-details\">"
+            html += "<a class=\"document-title\" href=\"/view/\(viewPath)\" target=\"_blank\">\(htmlEscape(document.title))</a>"
             for file in document.files {
                 let path = urlPathComponent(file.name)
                 html += "<div class=\"file-variant\"><input type=\"checkbox\" name=\"files\" value=\"\(htmlEscape(file.name))\">"
                 html += "<a href=\"/files/\(path)\">\(htmlEscape(file.kind.label))</a> <span class=\"file-name\">\(htmlEscape(file.name))</span>"
-                html += "<button class=\"danger-button\" formaction=\"/files/\(path)/delete\">Delete</button></div>"
+                html += "<button class=\"danger-button compact-button\" formaction=\"/files/\(path)/delete\" data-confirm=\"Delete this file?\">Delete</button></div>"
             }
             html += "</div></li>"
         }
         html += "</ul></div>"
     }
     return html + "</div></form></section>"
+}
+
+private func statusPill(_ status: String) -> String {
+    let normalized = status.lowercased()
+    let style: String
+    if ["running", "queued"].contains(normalized) {
+        style = "working"
+    } else if ["done", "idle"].contains(normalized) {
+        style = "success"
+    } else if normalized.hasPrefix("failed") || ["error", "cancelled"].contains(normalized) {
+        style = "error"
+    } else {
+        style = "neutral"
+    }
+    return "<span class=\"status-pill \(style)\">\(htmlEscape(status.capitalized))</span>"
 }
 
 private func modeSummary(_ mode: ScanMode) -> String {
