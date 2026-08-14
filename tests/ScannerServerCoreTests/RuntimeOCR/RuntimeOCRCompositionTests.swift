@@ -22,7 +22,8 @@ struct RuntimeOCRCompositionTests {
         let scanState = await dependencies.scanJobs.state
         let ocrState = await dependencies.ocrQueue.state
         #expect(scanState.status == "done")
-        #expect(scanState.output == fixture.inputURL.path)
+        // Final single-page paths are published by the background queue after acquisition finishes.
+        #expect(scanState.output.isEmpty)
         #expect(ocrState.status == "done")
         #expect(ocrState.input == fixture.inputURL.path)
         #expect(ocrState.output == fixture.outputURL.path)

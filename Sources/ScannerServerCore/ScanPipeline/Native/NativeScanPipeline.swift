@@ -59,7 +59,12 @@ public actor NativeScanPipeline: NativeScanExecuting {
         } catch {
             return failure(status: 1, message: "Could not create scan work directory: \(error.localizedDescription)")
         }
-        defer { try? fileSystem.removeItemIfPresent(at: workDirectory) }
+        var pipelineOwnsWorkDirectory = true
+        defer {
+            if pipelineOwnsWorkDirectory {
+                try? fileSystem.removeItemIfPresent(at: workDirectory)
+            }
+        }
 
         let capturingExecutor = NativeScanCapturingExecutor(executor: executor)
         do {
@@ -85,7 +90,6 @@ public actor NativeScanPipeline: NativeScanExecuting {
             }
 
             let options = try DocumentProcessingOptions(environment: environment)
-            let outputPaths: [String]
             if configuration.format == "pdf", configuration.pageMode == "multi" {
                 try await processForMultipagePDF(
                     rawPDF: rawPDF,
@@ -96,35 +100,36 @@ public actor NativeScanPipeline: NativeScanExecuting {
                     workDirectory: workDirectory,
                     executor: capturingExecutor
                 )
-                outputPaths = [outputDirectory
+                let outputPath = outputDirectory
                     .appendingPathComponent("\(timestamp.rawValue).pdf", isDirectory: false)
-                    .path]
-            } else {
-                outputPaths = try await processFinalOutputs(
-                    rawPDF: rawPDF,
-                    outputDirectory: outputDirectory,
-                    timestamp: timestamp,
-                    configuration: configuration,
-                    options: options,
-                    workDirectory: workDirectory,
-                    executor: capturingExecutor
+                    .path
+                guard fileSystem.regularFileExists(at: URL(fileURLWithPath: outputPath)) else {
+                    return await failure(
+                        status: 2,
+                        message: "No output files were created.",
+                        diagnosticsFrom: capturingExecutor
+                    )
+                }
+                return ProcessResult(
+                    exitStatus: 0,
+                    standardOutput: outputPath + "\n",
+                    standardError: await capturingExecutor.standardError
                 )
             }
 
-            guard !outputPaths.isEmpty,
-                  outputPaths.allSatisfy({ fileSystem.regularFileExists(at: URL(fileURLWithPath: $0)) })
-            else {
-                return await failure(
-                    status: 2,
-                    message: "No output files were created.",
-                    diagnosticsFrom: capturingExecutor
-                )
-            }
-
+            let deferredProcessing = deferredFinalOutputProcessing(
+                rawPDF: rawPDF,
+                outputDirectory: outputDirectory,
+                timestamp: timestamp,
+                configuration: configuration,
+                options: options,
+                workDirectory: workDirectory
+            )
+            pipelineOwnsWorkDirectory = false
             return ProcessResult(
                 exitStatus: 0,
-                standardOutput: outputPaths.joined(separator: "\n") + "\n",
-                standardError: await capturingExecutor.standardError
+                standardError: await capturingExecutor.standardError,
+                deferredScanProcessing: deferredProcessing
             )
         } catch is CancellationError {
             throw CancellationError()
@@ -309,15 +314,14 @@ public actor NativeScanPipeline: NativeScanExecuting {
         try fileSystem.placeFileExclusively(at: rawPDF, destination: destination)
     }
 
-    private func processFinalOutputs(
+    private func deferredFinalOutputProcessing(
         rawPDF: URL,
         outputDirectory: URL,
         timestamp: ScanTimestamp,
         configuration: ScanPipelineConfiguration,
         options: DocumentProcessingOptions,
-        workDirectory: URL,
-        executor: NativeScanCapturingExecutor
-    ) async throws -> [String] {
+        workDirectory: URL
+    ) -> DeferredScanProcessing {
         let finalOutput: DocumentFinalOutputRequest
         if configuration.format == "png" {
             finalOutput = .exportImages(ExportScanImagesRequest(
@@ -345,9 +349,12 @@ public actor NativeScanPipeline: NativeScanExecuting {
             environment: configuration.environment,
             workingDirectory: workDirectory
         )
-        return try await DocumentProcessingOrchestrator(executor: executor)
-            .process(plan)
-            .outputPaths
+        return DeferredScanProcessing(
+            inputPath: rawPDF.path,
+            cleanupDirectory: workDirectory,
+            plan: plan,
+            ocrEnabled: configuration.ocrEnabled && configuration.format == "pdf"
+        )
     }
 
     private func executeDocumentStep(

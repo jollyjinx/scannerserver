@@ -20,10 +20,13 @@ YYYY-MM-DD.HHMMSS.ocr.pdf
 The date and time prefix uses the service's `TZ` setting, including daylight-saving changes. The
 web status timestamps and file-list day headings use the same time zone.
 
-The acquisition lifecycle finishes as soon as the source PDF is published. The web scan control
-and physical button can therefore accept another scan while blank-page removal, crop, or OCR is
-still running. Without OCR, the background queue processes an isolated copy and atomically replaces
-the source PDF. With OCR, it leaves the source unchanged and publishes the processed `.ocr.pdf`.
+For multipage PDF mode, the acquisition lifecycle finishes as soon as the source PDF is published.
+For single-page PDF and PNG modes, it finishes after the captured raw document is handed to the
+background queue; blank removal and crop still run across the complete document before the queue
+publishes individual files. The web scan control and physical button can therefore accept another
+scan while blank-page removal, crop, final-output conversion, or OCR is still running. Without OCR,
+the background queue processes an isolated multipage copy and atomically replaces the source PDF.
+With OCR, it leaves the source unchanged and publishes the processed `.ocr.pdf`.
 
 Deleting a source scan while processing is active cancels that document's work before removing the
 file. Matching queued work is removed as well, while jobs for other scans continue.
@@ -34,6 +37,10 @@ Single-page PDF modes use:
 YYYY-MM-DD.HHMMSS-page-0001.pdf
 YYYY-MM-DD.HHMMSS-page-0001.ocr.pdf
 ```
+
+These individual files appear after background blank removal, crop, metadata, and splitting finish.
+OCR variants then appear beside them as their queued jobs complete. PNG exports follow the same
+deferred final-output lifecycle.
 
 PNG modes save one image per page:
 

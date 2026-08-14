@@ -58,10 +58,11 @@ for packet directions and [configuration](docs/configuration.md#physical-button-
 for firewall and log checks.
 
 Raw multipage PDFs appear immediately in `./scans` after acquisition, and the scanner button is
-rearmed before document processing begins. Blank-page removal and autocrop run in the bounded
-background queue on an isolated copy. Without OCR, that processed copy atomically replaces the raw
-PDF. With OCR, the original remains unchanged and the processed searchable `.ocr.pdf` is published
-beside it.
+rearmed before document processing begins. For single-page PDF and PNG modes, the captured raw
+document is handed directly to the bounded background queue; blank-page removal, autocrop, and
+final file splitting or image export happen there while the scanner is already available again.
+Without OCR, a processed multipage copy atomically replaces its raw PDF. With OCR, the original
+remains unchanged and the processed searchable `.ocr.pdf` is published beside it.
 
 ## Compose
 

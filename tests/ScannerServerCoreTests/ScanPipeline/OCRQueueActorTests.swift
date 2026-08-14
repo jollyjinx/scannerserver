@@ -131,6 +131,245 @@ struct OCRQueueActorTests {
         ))
     }
 
+    @Test("Deferred single-page processing preserves preprocessing order and queues OCR")
+    func deferredSinglePageProcessing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "deferred-single-page-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205338"
+        let firstPage = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let secondPage = root.appendingPathComponent("\(prefix)-page-0002.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+            .materialize(
+                files: [
+                    firstPage.path: Data("page one".utf8),
+                    secondPage.path: Data("page two".utf8),
+                ],
+                result: ProcessResult(
+                    exitStatus: 0,
+                    standardOutput: "\(firstPage.path)\n\(secondPage.path)\n"
+                )
+            ),
+            .result(ProcessResult(
+                exitStatus: 0,
+                standardOutput: "\(firstPage.deletingPathExtension().path).ocr.pdf\n"
+            )),
+            .result(ProcessResult(
+                exitStatus: 0,
+                standardOutput: "\(secondPage.deletingPathExtension().path).ocr.pdf\n"
+            )),
+        ])
+        let environment = [
+            "SCAN_PAGE_MODE": "single",
+            "SCAN_LANGUAGE": "eng",
+        ]
+        let plan = DocumentProcessingPlan(
+            removeBlankPages: RemoveBlankPagesRequest(pdfPath: input.path),
+            cropPages: CropPDFPagesRequest(pdfPath: input.path),
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: root.path,
+                prefix: try ScanTimestamp(rawValue: prefix)
+            )),
+            environment: environment,
+            workingDirectory: work
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: plan,
+            ocrEnabled: true
+        ))
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == [
+            "remove-blank-pages",
+            "crop-pdf-pages",
+            "set-pdf-creator",
+            "split-pdf-pages",
+            "ocrmypdf",
+            "ocrmypdf",
+        ])
+        #expect(requests[0].arguments.first == input.path)
+        #expect(requests[1].arguments.first == input.path)
+        #expect(requests[2].arguments.first == input.path)
+        #expect(requests[3].arguments == [input.path, root.path, prefix])
+        #expect(requests[4].arguments == ocrArguments(
+            input: firstPage.path,
+            output: firstPage.deletingPathExtension().path + ".ocr.pdf",
+            language: "eng"
+        ))
+        #expect(requests[5].arguments == ocrArguments(
+            input: secondPage.path,
+            output: secondPage.deletingPathExtension().path + ".ocr.pdf",
+            language: "eng"
+        ))
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+        #expect(await queue.state.status == "done")
+        #expect(await queue.state.recentJobs.count == 3)
+    }
+
+    @Test("Deferred output conflicts retain status compatibility and clean work files")
+    func deferredOutputConflict() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "deferred-conflict-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205339"
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(
+                exitStatus: 1,
+                standardError: "FileExistsError: page already exists\n"
+            )),
+        ])
+        let plan = DocumentProcessingPlan(
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: root.path,
+                prefix: try ScanTimestamp(rawValue: prefix)
+            )),
+            workingDirectory: work
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: plan,
+            ocrEnabled: false
+        ))
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "set-pdf-creator", "split-pdf-pages",
+        ])
+        #expect(await queue.state.status == "failed (73)")
+        #expect(await queue.state.error.contains("FileExistsError"))
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+    }
+
+    @Test("Deferred processing rejects reported outputs that do not exist")
+    func deferredMissingFinalOutput() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "deferred-missing-output-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205342"
+        let missingPage = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(
+                exitStatus: 0,
+                standardOutput: missingPage.path + "\n"
+            )),
+        ])
+        let plan = DocumentProcessingPlan(
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: root.path,
+                prefix: try ScanTimestamp(rawValue: prefix)
+            )),
+            workingDirectory: work
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: plan,
+            ocrEnabled: false
+        ))
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "set-pdf-creator", "split-pdf-pages",
+        ])
+        #expect(await queue.state.status == "failed (2)")
+        #expect(await queue.state.error == "No output files were created.")
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+    }
+
+    @Test("Invalid deferred cleanup scope is rejected without deleting files")
+    func invalidDeferredCleanupScope() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "invalid-deferred-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let input = root.appendingPathComponent("raw.pdf")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("keep me".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [])
+        let plan = DocumentProcessingPlan(
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: root.path,
+                prefix: try ScanTimestamp(rawValue: "2026-08-13.205340")
+            )),
+            workingDirectory: root
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: root,
+            plan: plan,
+            ocrEnabled: false
+        ))
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().isEmpty)
+        #expect(await queue.state.status == "failed (64)")
+        #expect(FileManager.default.fileExists(atPath: input.path))
+    }
+
     @Test("Invalid and conflicting paths fail without launching OCR")
     func invalidAndConflictingPaths() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -169,15 +408,38 @@ struct OCRQueueActorTests {
     }
 
     @Test("Cancellation stops the worker and clears queued jobs")
-    func cancellation() async {
+    func cancellation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cancelled-deferred-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.queued", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("queued".utf8).write(to: input)
+
         let executor = FakeProcessExecutor(stubs: [
             .suspended(ProcessResult(exitStatus: 0)),
-            .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let deferred = DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: DocumentProcessingPlan(
+                creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+                finalOutput: .splitPDF(SplitPDFPagesRequest(
+                    pdfPath: input.path,
+                    outputDirectory: root.path,
+                    prefix: try ScanTimestamp(rawValue: "2026-08-13.205341")
+                )),
+                workingDirectory: work
+            ),
+            ocrEnabled: false
+        )
 
         await queue.enqueue("/scans/one.pdf")
-        await queue.enqueue("/scans/two.pdf")
+        await queue.enqueue(deferred)
         await executor.waitForRequestCount(1)
         await queue.cancelAll()
 
@@ -186,6 +448,65 @@ struct OCRQueueActorTests {
         #expect(await queue.state.queued == 0)
         #expect(await queue.state.recentJobs.first?.input == "/scans/one.pdf")
         #expect(await queue.state.recentJobs.first?.status == "cancelled")
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+    }
+
+    @Test("Cancellation discards OCR follow-ups from late deferred completion")
+    func cancellationDiscardsDeferredFollowUps() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cancelled-deferred-follow-up-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.active", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205343"
+        let page = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw".utf8).write(to: input)
+        try Data("page".utf8).write(to: page)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .suspendedIgnoringCancellation(ProcessResult(
+                exitStatus: 0,
+                standardOutput: page.path + "\n"
+            )),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+        let deferred = DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: DocumentProcessingPlan(
+                creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+                finalOutput: .splitPDF(SplitPDFPagesRequest(
+                    pdfPath: input.path,
+                    outputDirectory: root.path,
+                    prefix: try ScanTimestamp(rawValue: prefix)
+                )),
+                workingDirectory: work
+            ),
+            ocrEnabled: true
+        )
+
+        await queue.enqueue(deferred)
+        await executor.waitForRequestCount(2)
+        let cancellation = Task { await queue.cancelAll() }
+        await executor.waitForIgnoredCancellationCount(1)
+        await executor.resumeNextSuspendedExecution()
+        await cancellation.value
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "set-pdf-creator", "split-pdf-pages",
+        ])
+        #expect(await queue.state.status == "cancelled")
+        #expect(!FileManager.default.fileExists(atPath: work.path))
     }
 
     @Test("Cancelling the active job preserves unrelated queued jobs")

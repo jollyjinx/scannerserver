@@ -66,6 +66,7 @@ public actor OCRQueueActor {
         let ocrEnabled: Bool
         let removeBlankPages: Bool
         let cropPages: Bool
+        let deferredProcessing: DeferredScanProcessing?
     }
 
     private struct ActiveJob: Sendable {
@@ -81,6 +82,23 @@ public actor OCRQueueActor {
         let output: String
         let error: String
         let publishedOutputPath: String
+        let followUpJobs: [Job]
+
+        init(
+            finished: Date,
+            status: String,
+            output: String,
+            error: String,
+            publishedOutputPath: String,
+            followUpJobs: [Job] = []
+        ) {
+            self.finished = finished
+            self.status = status
+            self.output = output
+            self.error = error
+            self.publishedOutputPath = publishedOutputPath
+            self.followUpJobs = followUpJobs
+        }
     }
 
     private let executor: any ProcessExecutor
@@ -129,7 +147,23 @@ public actor OCRQueueActor {
             workingDirectory: workingDirectory,
             ocrEnabled: ocrEnabled,
             removeBlankPages: removeBlankPages,
-            cropPages: cropPages
+            cropPages: cropPages,
+            deferredProcessing: nil
+        ))
+        scheduleAvailableJobs()
+        await publishQueueState()
+    }
+
+    public func enqueue(_ deferredProcessing: DeferredScanProcessing) async {
+        queue.append(Job(
+            inputPath: deferredProcessing.inputPath,
+            batchID: UUID(),
+            environment: deferredProcessing.plan.environment,
+            workingDirectory: deferredProcessing.plan.workingDirectory,
+            ocrEnabled: deferredProcessing.ocrEnabled,
+            removeBlankPages: deferredProcessing.plan.removeBlankPages != nil,
+            cropPages: deferredProcessing.plan.cropPages != nil,
+            deferredProcessing: deferredProcessing
         ))
         scheduleAvailableJobs()
         await publishQueueState()
@@ -143,7 +177,11 @@ public actor OCRQueueActor {
     }
 
     public func cancelAll() async {
+        let queuedJobs = queue
         queue.removeAll()
+        for job in queuedJobs {
+            job.deferredProcessing?.removeCleanupDirectoryIfValid()
+        }
         isCancellingAll = true
         let tasks = activeJobs.values.map(\.task)
         for task in tasks { task.cancel() }
@@ -154,8 +192,12 @@ public actor OCRQueueActor {
     }
 
     public func cancelJobs(referencing path: String) async {
+        let removedJobs = queue.filter { jobReferencesPath($0.inputPath, path: path) }
         let queuedCount = queue.count
         queue.removeAll { jobReferencesPath($0.inputPath, path: path) }
+        for job in removedJobs {
+            job.deferredProcessing?.removeCleanupDirectoryIfValid()
+        }
         let removedQueuedJob = queue.count != queuedCount
         queueState.queued = queue.count
 
@@ -216,6 +258,13 @@ public actor OCRQueueActor {
     }
 
     private func run(job: Job, jobs: Int) async -> JobCompletion {
+        if let deferredProcessing = job.deferredProcessing {
+            return await runDeferredProcessing(
+                job: job,
+                deferredProcessing: deferredProcessing
+            )
+        }
+
         guard job.inputPath.lowercased().hasSuffix(".pdf"),
               !job.inputPath.lowercased().hasSuffix(".ocr.pdf")
         else {
@@ -271,18 +320,28 @@ public actor OCRQueueActor {
 
     private func finish(identifier: UUID, completion: JobCompletion) async {
         guard let activeJob = activeJobs.removeValue(forKey: identifier) else { return }
+        let effectiveCompletion = isCancellingAll || Task.isCancelled
+            ? JobCompletion(
+                finished: Date(),
+                status: "cancelled",
+                output: "",
+                error: "",
+                publishedOutputPath: ""
+            )
+            : completion
         record(
             job: activeJob.job,
             started: activeJob.started,
-            completion: completion
+            completion: effectiveCompletion
         )
-        queueState.finished = completion.finished
+        queueState.finished = effectiveCompletion.finished
         queueState.input = activeJob.job.inputPath
-        queueState.output = completion.output
-        queueState.error = completion.error
+        queueState.output = effectiveCompletion.output
+        queueState.error = effectiveCompletion.error
+        queue.append(contentsOf: effectiveCompletion.followUpJobs)
         scheduleAvailableJobs()
         if activeJobs.isEmpty, queue.isEmpty {
-            queueState.status = completion.status
+            queueState.status = effectiveCompletion.status
             resumeIdleWaiters()
         }
         await publishQueueState()
@@ -304,6 +363,9 @@ public actor OCRQueueActor {
     }
 
     private func cpuReservation(for job: Job) -> Int {
+        if job.deferredProcessing != nil {
+            return cpuLimit(for: job)
+        }
         let pageMode = job.environment?["SCAN_PAGE_MODE"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -427,8 +489,95 @@ public actor OCRQueueActor {
         return ProcessResult(exitStatus: 0, standardOutput: outputPath + "\n")
     }
 
+    private func runDeferredProcessing(
+        job: Job,
+        deferredProcessing: DeferredScanProcessing
+    ) async -> JobCompletion {
+        if let validationError = deferredProcessing.validationError {
+            return JobCompletion(
+                finished: Date(),
+                status: "failed (64)",
+                output: "",
+                error: validationError,
+                publishedOutputPath: ""
+            )
+        }
+        defer { deferredProcessing.removeCleanupDirectoryIfValid() }
+
+        do {
+            let result = try await DocumentProcessingOrchestrator(executor: documentExecutor)
+                .process(deferredProcessing.plan)
+            guard result.outputPaths.allSatisfy(regularFileExists) else {
+                return JobCompletion(
+                    finished: Date(),
+                    status: "failed (2)",
+                    output: "",
+                    error: "No output files were created.",
+                    publishedOutputPath: ""
+                )
+            }
+            let output = result.outputPaths.joined(separator: "\n")
+            let followUpJobs: [Job] = deferredProcessing.ocrEnabled
+                ? result.outputPaths.compactMap { path in
+                    guard path.lowercased().hasSuffix(".pdf") else { return nil }
+                    return Job(
+                        inputPath: path,
+                        batchID: job.batchID,
+                        environment: job.environment,
+                        workingDirectory: nil,
+                        ocrEnabled: true,
+                        removeBlankPages: false,
+                        cropPages: false,
+                        deferredProcessing: nil
+                    )
+                }
+                : []
+            return JobCompletion(
+                finished: Date(),
+                status: "done",
+                output: output,
+                error: "",
+                publishedOutputPath: output,
+                followUpJobs: followUpJobs
+            )
+        } catch is CancellationError {
+            return JobCompletion(
+                finished: Date(),
+                status: "cancelled",
+                output: "",
+                error: "",
+                publishedOutputPath: ""
+            )
+        } catch let error as DocumentProcessingError {
+            return JobCompletion(
+                finished: Date(),
+                status: "failed (\(error.compatibleExitStatus))",
+                output: "",
+                error: error.processResult.standardError.isEmpty
+                    ? error.localizedDescription
+                    : error.processResult.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
+                publishedOutputPath: ""
+            )
+        } catch {
+            return JobCompletion(
+                finished: Date(),
+                status: "failed",
+                output: "",
+                error: error.localizedDescription,
+                publishedOutputPath: ""
+            )
+        }
+    }
+
     private func isValidPathComponent(_ value: String) -> Bool {
         !value.isEmpty && value != "." && value != ".." && !value.contains("/")
+    }
+
+    private func regularFileExists(at path: String) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return false
+        }
+        return attributes[.type] as? FileAttributeType == .typeRegular
     }
 }
 

@@ -95,28 +95,12 @@ struct NativeScanPipelineTests {
         #expect(try Data(contentsOf: finalPDF) == Data("multipage-pdf".utf8))
     }
 
-    @Test("Wi-Fi options and processing arguments produce single-page PDFs")
+    @Test("Wi-Fi options produce deferred single-page PDF processing")
     func wifiSinglePagePDF() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let timestamp = "2026-07-10.142306"
-        let firstPage = fixture.output.appendingPathComponent("\(timestamp)-page-0001.pdf")
-        let secondPage = fixture.output.appendingPathComponent("\(timestamp)-page-0002.pdf")
-        let executor = FakeNativeScanProcessExecutor(stubs: [
-            .result(ProcessResult(exitStatus: 0)),
-            .result(ProcessResult(exitStatus: 0)),
-            .result(ProcessResult(exitStatus: 0)),
-            .materialize(
-                files: [
-                    firstPage.path: Data("page-one".utf8),
-                    secondPage.path: Data("page-two".utf8),
-                ],
-                result: ProcessResult(
-                    exitStatus: 0,
-                    standardOutput: "\(firstPage.path)\n\(secondPage.path)\n"
-                )
-            ),
-        ])
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
         let wifiAcquirer = FakeScanSnapWiFiAcquirer()
         let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
         let configuration = fixture.configuration([
@@ -149,9 +133,12 @@ struct NativeScanPipelineTests {
         let result = try await pipeline.scan(configuration: configuration)
         let requests = await executor.requests()
         let acquisition = try #require(await wifiAcquirer.requests().first)
+        let deferred = try #require(result.deferredScanProcessing)
+        let blankPages = try #require(deferred.plan.removeBlankPages)
+        let cropPages = try #require(deferred.plan.cropPages)
 
         #expect(result.exitStatus == 0)
-        #expect(result.standardOutput == "\(firstPage.path)\n\(secondPage.path)\n")
+        #expect(result.standardOutput.isEmpty)
         #expect(acquisition.scannerIPAddress == "192.0.2.20")
         #expect(acquisition.identity == ScanSnapIdentity("primary-key"))
         #expect(acquisition.clientIPAddress == "192.0.2.30")
@@ -160,20 +147,15 @@ struct NativeScanPipelineTests {
         #expect(acquisition.debug)
         #expect(!acquisition.reusesArmedSession)
         #expect(acquisition.outputURL == fixture.rawPDF)
-        #expect(requests.map(\.executable) == [
-            "remove-blank-pages",
-            "crop-pdf-pages",
-            "set-pdf-creator",
-            "split-pdf-pages",
-        ])
-        #expect(requests[0].arguments == [
+        #expect(requests.isEmpty)
+        #expect(blankPages.command.arguments == [
             fixture.rawPDF.path,
             "--white-threshold", "240",
             "--content-ratio-threshold", "0.01",
             "--mean-threshold", "247.5",
             "--debug",
         ])
-        #expect(requests[1].arguments == [
+        #expect(cropPages.command.arguments == [
             fixture.rawPDF.path,
             "--background-delta", "9",
             "--border-px", "50",
@@ -184,9 +166,18 @@ struct NativeScanPipelineTests {
             "--keep-original-boxes",
             "--debug",
         ])
-        #expect(requests[2].arguments == [fixture.rawPDF.path, "--creator", "ScannerServer"])
-        #expect(requests[3].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp])
-        #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
+        #expect(deferred.plan.creatorMetadata.command.arguments == [
+            fixture.rawPDF.path, "--creator", "ScannerServer",
+        ])
+        guard case .splitPDF(let splitRequest) = deferred.plan.finalOutput else {
+            Issue.record("Expected deferred PDF splitting")
+            return
+        }
+        #expect(splitRequest.command.arguments == [fixture.rawPDF.path, fixture.output.path, timestamp])
+        #expect(deferred.inputPath == fixture.rawPDF.path)
+        #expect(deferred.cleanupDirectory == fixture.work)
+        #expect(deferred.ocrEnabled)
+        #expect(FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
     @Test("Wi-Fi acquisition reuses a button session handed off by the lifecycle")
@@ -222,14 +213,7 @@ struct NativeScanPipelineTests {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let timestamp = try ScanTimestamp(rawValue: "2026-07-10.142307")
-        let image = fixture.output.appendingPathComponent("\(timestamp.rawValue)-page-0001.png")
-        let executor = FakeNativeScanProcessExecutor(stubs: [
-            .result(ProcessResult(exitStatus: 0)),
-            .materialize(
-                files: [image.path: Data("png".utf8)],
-                result: ProcessResult(exitStatus: 0, standardOutput: "\(image.path)\n")
-            ),
-        ])
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
         let pipeline = fixture.pipeline(executor: executor, timestamp: timestamp)
         let configuration = fixture.configuration([
             "SCAN_BACKEND": "wifi",
@@ -243,11 +227,21 @@ struct NativeScanPipelineTests {
 
         let result = try await pipeline.scan(configuration: configuration)
         let requests = await executor.requests()
+        let deferred = try #require(result.deferredScanProcessing)
 
         #expect(configuration.format == "png")
-        #expect(result == ProcessResult(exitStatus: 0, standardOutput: "\(image.path)\n"))
-        #expect(requests.map(\.executable) == ["set-pdf-creator", "export-scan-images"])
-        #expect(requests[1].arguments == [fixture.rawPDF.path, fixture.output.path, timestamp.rawValue])
+        #expect(result.exitStatus == 0)
+        #expect(result.standardOutput.isEmpty)
+        #expect(requests.isEmpty)
+        guard case .exportImages(let exportRequest) = deferred.plan.finalOutput else {
+            Issue.record("Expected deferred PNG export")
+            return
+        }
+        #expect(exportRequest.command.arguments == [
+            fixture.rawPDF.path, fixture.output.path, timestamp.rawValue,
+        ])
+        #expect(!deferred.ocrEnabled)
+        #expect(FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
     @Test("SANE success without page files returns status 2")
@@ -367,14 +361,11 @@ struct NativeScanPipelineTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
-    @Test("Split output conflicts retain document-tool status compatibility")
+    @Test("Split output conflict checks are deferred with single-page processing")
     func splitOutputConflict() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let executor = FakeNativeScanProcessExecutor(stubs: [
-            .result(ProcessResult(exitStatus: 0)),
-            .result(ProcessResult(exitStatus: 1, standardError: "FileExistsError: page already exists")),
-        ])
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
         let pipeline = fixture.pipeline(executor: executor)
         let result = try await pipeline.scan(configuration: fixture.configuration([
             "SCAN_BACKEND": "wifi",
@@ -387,9 +378,9 @@ struct NativeScanPipelineTests {
             "SCAN_CROP_PAGES": "false",
         ]))
 
-        #expect(result.exitStatus == 73)
-        #expect(result.standardError.contains("FileExistsError"))
-        #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
+        #expect(result.exitStatus == 0)
+        #expect(result.deferredScanProcessing != nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
     @Test("Cancellation reaches native Wi-Fi acquisition and removes the work directory")

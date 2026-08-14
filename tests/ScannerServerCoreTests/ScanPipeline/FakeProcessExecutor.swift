@@ -10,6 +10,7 @@ actor FakeProcessExecutor: ProcessExecutor {
         case result(ProcessResult)
         case failure(FakeProcessError)
         case suspended(ProcessResult)
+        case suspendedIgnoringCancellation(ProcessResult)
     }
 
     private struct RequestWaiter {
@@ -21,6 +22,8 @@ actor FakeProcessExecutor: ProcessExecutor {
     private var recordedRequests: [ProcessRequest] = []
     private var suspendedExecutions: [CheckedContinuation<Void, any Error>] = []
     private var requestWaiters: [RequestWaiter] = []
+    private var ignoredCancellationCount = 0
+    private var ignoredCancellationWaiters: [RequestWaiter] = []
 
     init(stubs: [Stub]) {
         self.stubs = stubs
@@ -47,6 +50,15 @@ actor FakeProcessExecutor: ProcessExecutor {
             }
             try Task.checkCancellation()
             return result
+        case .suspendedIgnoringCancellation(let result):
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    suspendedExecutions.append(continuation)
+                }
+            } onCancel: {
+                Task { await self.recordIgnoredCancellation() }
+            }
+            return result
         }
     }
 
@@ -66,6 +78,16 @@ actor FakeProcessExecutor: ProcessExecutor {
         suspendedExecutions.removeFirst().resume(returning: ())
     }
 
+    func waitForIgnoredCancellationCount(_ count: Int) async {
+        guard ignoredCancellationCount < count else { return }
+        await withCheckedContinuation { continuation in
+            ignoredCancellationWaiters.append(RequestWaiter(
+                count: count,
+                continuation: continuation
+            ))
+        }
+    }
+
     private func resumeSatisfiedRequestWaiters() {
         let satisfied = requestWaiters.filter { recordedRequests.count >= $0.count }
         requestWaiters.removeAll { recordedRequests.count >= $0.count }
@@ -77,5 +99,18 @@ actor FakeProcessExecutor: ProcessExecutor {
     private func cancelNextSuspendedExecution() {
         guard !suspendedExecutions.isEmpty else { return }
         suspendedExecutions.removeFirst().resume(throwing: CancellationError())
+    }
+
+    private func recordIgnoredCancellation() {
+        ignoredCancellationCount += 1
+        let satisfied = ignoredCancellationWaiters.filter {
+            ignoredCancellationCount >= $0.count
+        }
+        ignoredCancellationWaiters.removeAll {
+            ignoredCancellationCount >= $0.count
+        }
+        for waiter in satisfied {
+            waiter.continuation.resume()
+        }
     }
 }
