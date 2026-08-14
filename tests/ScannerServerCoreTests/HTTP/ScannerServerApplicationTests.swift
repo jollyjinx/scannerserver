@@ -48,7 +48,9 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("Version 2026.08.08.231742"))
                 #expect(body.contains("action=\"/scan\""))
                 #expect(body.contains("name=\"mode_id\""))
-                #expect(body.contains("No scans yet."))
+                #expect(body.contains("href=\"/documents\""))
+                #expect(body.contains("href=\"/presets\""))
+                #expect(body.contains("href=\"/settings\""))
                 #expect(body.contains("fetch(`/updates?since=${revision}`"))
                 #expect(!body.contains("SCANNER_SERVER_REVISION"))
                 #expect(!body.contains("SCANNER_SERVER_VERSION"))
@@ -151,7 +153,7 @@ struct ScannerServerApplicationTests {
         let application = try fixture.application(scannerSetup: scannerSetup)
 
         try await application.test(.router) { client in
-            try await client.execute(uri: "/", method: .get) { response in
+            try await client.execute(uri: "/settings", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(!body.contains(#"<meta http-equiv="refresh""#))
                 #expect(body.contains(#"fetch("/setup/scanners/state""#))
@@ -181,7 +183,7 @@ struct ScannerServerApplicationTests {
         let application = try fixture.application(scannerSetup: PasswordNeededSetupService())
 
         try await application.test(.router) { client in
-            try await client.execute(uri: "/", method: .get) { response in
+            try await client.execute(uri: "/settings", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(body.contains("action=\"/setup/scanners/manual\""))
                 #expect(body.contains("name=\"scanner_ip\""))
@@ -198,8 +200,8 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("Configured scanner setup is hidden inside advanced settings")
-    func configuredSetupIsAdvanced() async throws {
+    @Test("Configured scanner setup is separate from scan controls")
+    func configuredSetupIsSeparate() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
         defer { fixture.remove() }
         let scannerStore = ScannerConfigStore(environment: fixture.environment)
@@ -219,10 +221,6 @@ struct ScannerServerApplicationTests {
                 let body = String(buffer: response.body)
                 let summary = try #require(body.range(of: "<section class=\"scanner-summary\""))
                 let summaryEnd = try #require(body.range(of: "</section>", range: summary.lowerBound..<body.endIndex))
-                let scan = try #require(body.range(of: "<section><h2>Scan</h2>"))
-                let advanced = try #require(body.range(of: "<details><summary>Advanced settings</summary>"))
-                let scannerSetup = try #require(body.range(of: "<h2>Scanner setup</h2>"))
-                let advancedEnd = try #require(body.range(of: "</details>", range: advanced.lowerBound..<body.endIndex))
                 let reachability = try #require(body.range(of: "scanner-reachability reachable"))
 
                 #expect(body.contains("action=\"/scan\""))
@@ -230,23 +228,23 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("Reachable</span>"))
                 #expect(summary.lowerBound < reachability.lowerBound)
                 #expect(reachability.lowerBound < summaryEnd.lowerBound)
-                #expect(summaryEnd.lowerBound < scan.lowerBound)
-                #expect(scan.lowerBound < advanced.lowerBound)
-                #expect(advanced.lowerBound < scannerSetup.lowerBound)
-                #expect(scannerSetup.lowerBound < advancedEnd.lowerBound)
-                let advancedContent = body[advanced.lowerBound..<advancedEnd.upperBound]
-                #expect(!advancedContent.contains("scanner-reachability"))
+                #expect(!body.contains("Scanner setup"))
+            }
+
+            try await client.execute(uri: "/settings", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Scanner setup"))
+                #expect(body.contains("action=\"/setup/scanners/clear\""))
             }
 
             await scannerReachability.update(isReachable: false)
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
                 let summary = try #require(body.range(of: "<section class=\"scanner-summary\""))
-                let scan = try #require(body.range(of: "<section><h2>Scan</h2>"))
                 #expect(body.contains("scanner-reachability unreachable"))
                 #expect(body.contains("Not reachable</span>"))
                 #expect(!body.contains("scanner-reachability reachable"))
-                #expect(summary.lowerBound < scan.lowerBound)
+                #expect(summary.lowerBound < body.endIndex)
             }
         }
     }
@@ -259,7 +257,7 @@ struct ScannerServerApplicationTests {
 
         try await application.test(.router) { client in
             try await postForm(client, uri: "/modes/default", body: "mode_id=photo-png") { response in
-                expectRedirect(response, to: "/")
+                expectRedirect(response, to: "/presets")
             }
             var settings = try await fixture.settingsStore.load()
             #expect(settings.defaultModeID == "photo-png")
@@ -282,7 +280,7 @@ struct ScannerServerApplicationTests {
             ].joined(separator: "&")
             try await postForm(client, uri: "/modes/save", body: form) { response in
                 #expect(response.status == .seeOther)
-                #expect(response.headers[.location] == "/?edit_mode=script-alert-1-script")
+                #expect(response.headers[.location] == "/presets?edit_mode=script-alert-1-script")
             }
 
             settings = try await fixture.settingsStore.load()
@@ -300,7 +298,7 @@ struct ScannerServerApplicationTests {
             #expect(mode.settings.cropMarginPoints == 2.5)
             #expect(settings.defaultModeID == mode.id)
 
-            try await client.execute(uri: "/?edit_mode=script-alert-1-script", method: .get) { response in
+            try await client.execute(uri: "/presets?edit_mode=script-alert-1-script", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(!body.contains("<script>alert(1)</script>"))
                 #expect(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"))
@@ -315,7 +313,7 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#"<select name="SCAN_OCR_NICE">"#))
                 #expect(body.contains(#"<option value="true" selected>Niced (reduced)</option>"#))
                 #expect(body.contains(#"name="SCAN_CROP_MARGIN_POINTS" value="2.5" min="0" step="0.1""#))
-                #expect(body.contains(#"class="mode-load-form""#))
+                #expect(body.contains(#"class="preset-layout""#))
                 #expect(body.contains(#"class="mode-editor-form""#))
                 #expect(body.contains("<legend>Document</legend>"))
                 #expect(body.contains("<legend>Scan quality</legend>"))
@@ -329,7 +327,7 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("Use this mode when the scanner&#39;s physical button is pressed."))
             }
             try await postForm(client, uri: "/modes/delete", body: "mode_id=script-alert-1-script") { response in
-                expectRedirect(response, to: "/")
+                expectRedirect(response, to: "/presets")
             }
             settings = try await fixture.settingsStore.load()
             #expect(settings.mode(id: "script-alert-1-script") == nil)
@@ -375,12 +373,16 @@ struct ScannerServerApplicationTests {
 
         try await application.test(.router) { client in
             try await postForm(client, uri: "/scan", body: "mode_id=duplex-pdf-ocr") { response in
-                expectRedirect(response, to: "/?setup=setup-required")
+                expectRedirect(response, to: "/settings?setup=setup-required")
             }
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains("Live scanner discovery and pairing are not available"))
+                #expect(body.contains("Open scanner settings"))
                 #expect(!body.contains("action=\"/scan\""))
+            }
+            try await client.execute(uri: "/settings", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Live scanner discovery and pairing are not available"))
                 #expect(body.contains("action=\"/setup/scanners/discover\""))
                 #expect(body.contains("action=\"/setup/scanners/manual\""))
                 #expect(body.contains("name=\"scanner_credential\""))
@@ -444,7 +446,7 @@ struct ScannerServerApplicationTests {
 
         try await application.test(.router) { client in
             try await postForm(client, uri: "/files/\(fileName)/delete", body: "") { response in
-                expectRedirect(response, to: "/")
+                expectRedirect(response, to: "/documents")
             }
         }
 
@@ -461,22 +463,22 @@ struct ScannerServerApplicationTests {
 
         try await application.test(.router) { client in
             try await postForm(client, uri: "/setup/scanners/discover", body: "") { response in
-                expectRedirect(response, to: "/?setup=unavailable")
+                expectRedirect(response, to: "/settings?setup=unavailable")
             }
             try await postForm(client, uri: "/setup/scanners/select", body: "device_id=") { response in
-                expectRedirect(response, to: "/?setup=no-device")
+                expectRedirect(response, to: "/settings?setup=no-device")
             }
             try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=&scanner_credential=") { response in
-                expectRedirect(response, to: "/?setup=manual-missing")
+                expectRedirect(response, to: "/settings?setup=manual-missing")
             }
             try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=192.0.2.8&scanner_credential=") { response in
-                expectRedirect(response, to: "/?setup=manual-missing")
+                expectRedirect(response, to: "/settings?setup=manual-missing")
             }
             try await postForm(client, uri: "/setup/scanners/manual", body: "scanner_ip=192.0.2.8&scanner_credential=secret") { response in
-                expectRedirect(response, to: "/?setup=unavailable")
+                expectRedirect(response, to: "/settings?setup=unavailable")
             }
             try await postForm(client, uri: "/setup/scanners/clear", body: "") { response in
-                expectRedirect(response, to: "/?setup=cleared")
+                expectRedirect(response, to: "/settings?setup=cleared")
             }
         }
     }
@@ -494,7 +496,7 @@ struct ScannerServerApplicationTests {
                 uri: "/setup/scanners/manual",
                 body: "scanner_ip=office-scanner.example&scanner_credential=AWRHC08122"
             ) { response in
-                expectRedirect(response, to: "/?setup=configured")
+                expectRedirect(response, to: "/settings?setup=configured")
             }
         }
 
@@ -533,7 +535,7 @@ struct ScannerServerApplicationTests {
                 #expect(response.status == .notFound)
             }
             try await postForm(client, uri: "/files/\(fileName)/delete", body: "") { response in
-                expectRedirect(response, to: "/")
+                expectRedirect(response, to: "/documents")
             }
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.outputDirectory.appendingPathComponent(fileName).path))
@@ -553,7 +555,7 @@ struct ScannerServerApplicationTests {
         try await application.test(.router) { client in
             let body = names.map { "files=\($0)" }.joined(separator: "&")
             try await postForm(client, uri: "/files/delete-selected", body: body) { response in
-                expectRedirect(response, to: "/")
+                expectRedirect(response, to: "/documents")
             }
         }
         for name in names {
@@ -570,7 +572,7 @@ struct ScannerServerApplicationTests {
         let application = try fixture.application()
 
         try await application.test(.router) { client in
-            try await client.execute(uri: "/", method: .get) { response in
+            try await client.execute(uri: "/documents", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(body.contains("Friday, 2026-07-10"))
                 #expect(body.contains("2026-07-10.&lt;script&gt;.pdf"))
