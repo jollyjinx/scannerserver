@@ -131,6 +131,41 @@ struct OCRQueueActorTests {
         ))
     }
 
+    @Test("Nice priority applies to every post-scan preprocessing command")
+    func nicePriorityCoversPreprocessing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "nice-processing-queue-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let input = root.appendingPathComponent("scan.pdf")
+        try Data("raw source".utf8).write(to: input)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            workspaceSuffixProvider: { "nice-processing-test" },
+            configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: 10)
+        )
+
+        await queue.enqueue(
+            input.path,
+            ocrEnabled: false,
+            removeBlankPages: true,
+            cropPages: true
+        )
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == ["remove-blank-pages", "crop-pdf-pages"])
+        #expect(requests.map(\.niceLevel) == [10, 10])
+    }
+
     @Test("Deferred single-page processing preserves preprocessing order and queues OCR")
     func deferredSinglePageProcessing() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -172,6 +207,8 @@ struct OCRQueueActorTests {
         let environment = [
             "SCAN_PAGE_MODE": "single",
             "SCAN_LANGUAGE": "eng",
+            "SCAN_OCR_NICE": "true",
+            "SCAN_OCR_NICE_LEVEL": "12",
         ]
         let plan = DocumentProcessingPlan(
             removeBlankPages: RemoveBlankPagesRequest(pdfPath: input.path),
@@ -222,6 +259,7 @@ struct OCRQueueActorTests {
             output: secondPage.deletingPathExtension().path + ".ocr.pdf",
             language: "eng"
         ))
+        #expect(requests.allSatisfy { $0.niceLevel == 12 })
         #expect(!FileManager.default.fileExists(atPath: work.path))
         #expect(await queue.state.status == "done")
         #expect(await queue.state.recentJobs.count == 3)
@@ -573,8 +611,8 @@ struct OCRQueueActorTests {
         #expect(await queue.state.queued == 1)
         let firstRequests = await executor.requests()
         #expect(firstRequests.allSatisfy {
-            $0.executable == "nice"
-                && Array($0.arguments.prefix(3)) == ["-n", "10", "ocrmypdf"]
+            $0.executable == "ocrmypdf"
+                && $0.niceLevel == 10
                 && argumentValue("--jobs", in: $0.arguments) == "1"
         })
 
@@ -620,7 +658,7 @@ struct OCRQueueActorTests {
             queueNiceLevel: Optional<Int>.none,
             modeNice: "true",
             expectedNiceLevel: Optional(15),
-            expectedExecutable: "nice"
+            expectedExecutable: "ocrmypdf"
         ),
     ])
     func savedPriority(
@@ -644,10 +682,8 @@ struct OCRQueueActorTests {
 
         let request = await executor.requests().first
         #expect(request?.executable == expectedExecutable)
+        #expect(request?.niceLevel == expectedNiceLevel)
         #expect(await queue.state.niceLevel == expectedNiceLevel)
-        if modeNice == "true" {
-            #expect(Array(request?.arguments.prefix(3) ?? []) == ["-n", "15", "ocrmypdf"])
-        }
     }
 
     @Test("A saved CPU limit caps parallel pages from one scan")

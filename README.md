@@ -105,7 +105,7 @@ for an Ethernet/MAC address or generated pairing key.
 
 - First-run ScanSnap Wi-Fi setup in the browser.
 - Web scan button and physical iX500 button support.
-- Saved scan modes for duplex/simplex, PDF/PNG, OCR CPU count and priority, autocrop, and blank-page removal.
+- Saved scan modes for duplex/simplex, PDF/PNG, post-scan CPU count and priority, autocrop, and blank-page removal.
 - Scan list grouped by day with previews and download/delete controls.
 - CPU-budgeted background blank-page removal, autocrop, and OCR, including automatic container CPU
   detection, bounded per-page concurrency, configurable caps, and optional reduced-priority nice mode.

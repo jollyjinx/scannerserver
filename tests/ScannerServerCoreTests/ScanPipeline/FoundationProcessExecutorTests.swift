@@ -50,6 +50,22 @@ struct FoundationProcessExecutorTests {
         #expect(result.standardError.contains("error-4999"))
     }
 
+    @Test("Applies nice priority when spawning a subprocess")
+    func appliesNicePriority() async throws {
+        let result = try await FoundationProcessExecutor().execute(ProcessRequest(
+            executable: "/bin/sh",
+            arguments: ["-c", "ps -o ni= -p $$"],
+            niceLevel: 10
+        ))
+
+        let reportedNiceLevel = Int(
+            result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        #expect(result.exitStatus == 0)
+        #expect(reportedNiceLevel != nil)
+        #expect((reportedNiceLevel ?? 0) >= 10)
+    }
+
     @Test("Cancellation kills a TERM-ignoring process group and pipe-holding descendant")
     func cancellationKillsProcessTree() async throws {
         let directory = try temporaryDirectory()

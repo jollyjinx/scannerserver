@@ -36,9 +36,9 @@ struct ScanPipelineCommandTests {
             niceLevel: 10
         )
 
-        #expect(request.executable == "nice")
+        #expect(request.executable == "ocrmypdf")
+        #expect(request.niceLevel == 10)
         #expect(request.arguments == [
-            "-n", "10", "ocrmypdf",
             "--language", "deu+eng",
             "--rotate-pages",
             "--rotate-pages-threshold", "2.0",

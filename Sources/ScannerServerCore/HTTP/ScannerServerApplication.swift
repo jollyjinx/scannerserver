@@ -998,10 +998,10 @@ private func renderModes(
     )
     html += select(
         name: "SCAN_OCR_NICE",
-        label: "OCR priority",
+        label: "Post-scan priority",
         values: [("false", "Normal"), ("true", "Niced (reduced)")],
         selected: selectedMode.settings.ocrNiceText,
-        help: "Niced OCR yields CPU time to other work on the service host."
+        help: "Niced background processing yields CPU time while scanning and the web service remain at normal priority."
     )
     html += "</div><div class=\"setting-card\">"
     html += checkbox(

@@ -25,14 +25,12 @@ public enum ScanPipelineCommands {
             inputPath,
             outputPath ?? OCRInputPath.outputPath(for: inputPath) ?? inputPath,
         ]
-        if let niceLevel {
-            arguments = ["-n", String(min(max(niceLevel, 1), 19)), "ocrmypdf"] + arguments
-        }
         return ProcessRequest(
-            executable: niceLevel == nil ? "ocrmypdf" : "nice",
+            executable: "ocrmypdf",
             arguments: arguments,
             environment: environment,
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            niceLevel: niceLevel
         )
     }
 

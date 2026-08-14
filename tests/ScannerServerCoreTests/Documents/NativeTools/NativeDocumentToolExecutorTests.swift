@@ -28,7 +28,8 @@ struct NativeDocumentToolExecutorTests {
             executable: "set-pdf-creator",
             arguments: ["raw.pdf", "--creator", "Office Scanner"],
             environment: ["PATH": "/native-tools"],
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            niceLevel: 12
         )
 
         let result = try await executor.execute(request)
@@ -39,7 +40,8 @@ struct NativeDocumentToolExecutorTests {
                 executable: "exiftool",
                 arguments: ["-s3", "-XMP-pdf:Producer", "raw.pdf"],
                 environment: request.environment,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                niceLevel: 12
             ),
             ProcessRequest(
                 executable: "exiftool",
@@ -52,7 +54,8 @@ struct NativeDocumentToolExecutorTests {
                     "raw.pdf",
                 ],
                 environment: request.environment,
-                workingDirectory: workingDirectory
+                workingDirectory: workingDirectory,
+                niceLevel: 12
             ),
         ])
     }

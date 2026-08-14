@@ -387,7 +387,8 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
             executable: executable,
             arguments: arguments,
             environment: request.environment,
-            workingDirectory: request.workingDirectory
+            workingDirectory: request.workingDirectory,
+            niceLevel: request.niceLevel
         )
     }
 

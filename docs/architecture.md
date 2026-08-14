@@ -66,8 +66,10 @@ persisted stores, reachability, and physical-button session state.
   one detected processor for acquisition and HTTP work. Deferred single-page PDF and PNG jobs keep
   global blank removal and crop semantics before publishing their final files, then schedule
   per-file OCR. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
-  single-page OCR are bounded concurrently. The queue exposes aggregate running/queued state,
-  targeted cancellation, and recent jobs.
+  single-page OCR are bounded concurrently. When reduced priority is enabled, the queue applies the
+  configured nice level to every external document-processing subprocess; the service and scanner
+  acquisition remain at normal priority. The queue exposes aggregate running/queued state, targeted
+  cancellation, and recent jobs.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for

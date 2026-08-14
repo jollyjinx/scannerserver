@@ -451,6 +451,7 @@ public actor OCRQueueActor {
 
         let environment = job.environment ?? [:]
         let options = try DocumentProcessingOptions(environment: environment)
+        let documentExecutor = prioritizedDocumentExecutor(for: job)
         if job.removeBlankPages {
             let result = try await documentExecutor.execute(
                 options.removeBlankPagesRequest(pdfPath: stagedInput.path).command.processRequest(
@@ -505,7 +506,9 @@ public actor OCRQueueActor {
         defer { deferredProcessing.removeCleanupDirectoryIfValid() }
 
         do {
-            let result = try await DocumentProcessingOrchestrator(executor: documentExecutor)
+            let result = try await DocumentProcessingOrchestrator(
+                executor: prioritizedDocumentExecutor(for: job)
+            )
                 .process(deferredProcessing.plan)
             guard result.outputPaths.allSatisfy(regularFileExists) else {
                 return JobCompletion(
@@ -567,6 +570,13 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         }
+    }
+
+    private func prioritizedDocumentExecutor(for job: Job) -> any ProcessExecutor {
+        guard let niceLevel = configuration.niceLevel(for: job.environment) else {
+            return documentExecutor
+        }
+        return NiceProcessExecutor(executor: documentExecutor, niceLevel: niceLevel)
     }
 
     private func isValidPathComponent(_ value: String) -> Bool {

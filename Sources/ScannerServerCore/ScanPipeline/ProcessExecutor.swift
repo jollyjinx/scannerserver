@@ -12,19 +12,44 @@ public struct ProcessRequest: Equatable, Sendable {
     public let environment: [String: String]?
     public let workingDirectory: URL?
     public let timeoutMilliseconds: UInt64?
+    public let niceLevel: Int?
 
     public init(
         executable: String,
         arguments: [String] = [],
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil,
-        timeoutMilliseconds: UInt64? = nil
+        timeoutMilliseconds: UInt64? = nil,
+        niceLevel: Int? = nil
     ) {
         self.executable = executable
         self.arguments = arguments
         self.environment = environment
         self.workingDirectory = workingDirectory
         self.timeoutMilliseconds = timeoutMilliseconds
+        self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
+    }
+
+    func applyingNiceLevel(_ niceLevel: Int) -> ProcessRequest {
+        ProcessRequest(
+            executable: executable,
+            arguments: arguments,
+            environment: environment,
+            workingDirectory: workingDirectory,
+            timeoutMilliseconds: timeoutMilliseconds,
+            niceLevel: niceLevel
+        )
+    }
+
+    fileprivate var launchRequest: ProcessRequest {
+        guard let niceLevel, executable != "nice" else { return self }
+        return ProcessRequest(
+            executable: "nice",
+            arguments: ["-n", String(niceLevel), executable] + arguments,
+            environment: environment,
+            workingDirectory: workingDirectory,
+            timeoutMilliseconds: timeoutMilliseconds
+        )
     }
 }
 
@@ -51,6 +76,15 @@ public struct ProcessResult: Equatable, Sendable {
 
 public protocol ProcessExecutor: Sendable {
     func execute(_ request: ProcessRequest) async throws -> ProcessResult
+}
+
+struct NiceProcessExecutor: ProcessExecutor {
+    let executor: any ProcessExecutor
+    let niceLevel: Int
+
+    func execute(_ request: ProcessRequest) async throws -> ProcessResult {
+        try await executor.execute(request.applyingNiceLevel(niceLevel))
+    }
 }
 
 public enum ProcessExecutorError: Error, Equatable, LocalizedError, Sendable {
@@ -111,8 +145,9 @@ public actor FoundationProcessExecutor: ProcessExecutor {
     public func execute(_ request: ProcessRequest) async throws -> ProcessResult {
         try Task.checkCancellation()
 
-        let executableURL = try executableURL(for: request)
-        let spawned = try Self.spawn(request, executableURL: executableURL)
+        let launchRequest = request.launchRequest
+        let executableURL = try executableURL(for: launchRequest)
+        let spawned = try Self.spawn(launchRequest, executableURL: executableURL)
         let identifier = UUID()
         runningProcesses[identifier] = RunningProcess(processID: spawned.processID)
 
@@ -130,7 +165,7 @@ public actor FoundationProcessExecutor: ProcessExecutor {
                 try await waitForTermination(
                     identifier: identifier,
                     processID: spawned.processID,
-                    timeoutMilliseconds: request.timeoutMilliseconds
+                    timeoutMilliseconds: launchRequest.timeoutMilliseconds
                 )
             } onCancel: {
                 Task { await self.requestTermination(identifier) }

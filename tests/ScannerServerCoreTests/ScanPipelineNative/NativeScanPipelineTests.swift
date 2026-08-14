@@ -29,6 +29,7 @@ struct NativeScanPipelineTests {
             "SCAN_RESOLUTION": "600",
             "SCAN_MODE": "Gray",
             "SCAN_SOURCE": "ADF Duplex",
+            "SCAN_OCR_NICE": "true",
             "SCAN_REMOVE_BLANK_PAGES": "true",
             "SCAN_CROP_PAGES": "true",
         ])
@@ -55,6 +56,7 @@ struct NativeScanPipelineTests {
             "-o", fixture.rawPDF.path,
         ])
         #expect(requests[2].arguments == [fixture.rawPDF.path, "--creator", "ScanSnap"])
+        #expect(requests.allSatisfy { $0.niceLevel == nil })
         #expect(requests.allSatisfy { $0.environment?["SCAN_TIMESTAMP"] == timestamp })
         #expect(requests.allSatisfy { $0.workingDirectory == fixture.work })
         #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
