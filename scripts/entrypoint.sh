@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p "${SCAN_OUTPUT_DIR:-/scans}"
+scan_output_dir="${SCAN_OUTPUT_DIR:-/scans}"
+mkdir -p "${scan_output_dir}"
+
+ocr_temp_dir="${TMPDIR:-${scan_output_dir}/.ocr-tmp}"
+mkdir -p "${ocr_temp_dir}"
+export TMPDIR="${ocr_temp_dir}"
 
 if [[ -n "${SCANNER_URL:-}" ]]; then
   bundled_sane_config_dir="${SANE_CONFIG_DIR:-/app/sane.d}"

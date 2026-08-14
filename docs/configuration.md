@@ -62,6 +62,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | --- | --- | --- |
 | `TZ` | `Europe/Berlin` | Local IANA time zone used for scan filenames, file grouping, and status timestamps |
 | `SCAN_OUTPUT_DIR` | `/scans` | Output directory inside the container |
+| `TMPDIR` | `<SCAN_OUTPUT_DIR>/.ocr-tmp` | Writable temporary directory created at startup and used by OCRmyPDF, Ghostscript, Tesseract, and other document tools |
 | `SCAN_SETTINGS_PATH` | `/scans/.scanner-settings.json` | Saved scan modes and button-default mode |
 | `SCANNER_CONFIG_PATH` | `/scans/.scannerserver-scanner.json` | Saved Wi-Fi scanner IP and derived pairing identity |
 | `SCAN_BACKEND` | `wifi` | `wifi` for iX500 Wi-Fi protocol, `sane` for SANE fallback |

@@ -149,6 +149,12 @@ fi
 
 "${runtime}" exec "${container_name}" sh -c 'touch /scans/.container-smoke && test -w /scans/.container-smoke'
 "${runtime}" exec "${container_name}" sh -c '
+  test "$TMPDIR" = /scans/.ocr-tmp
+  test -d "$TMPDIR"
+  test -w "$TMPDIR"
+  test "$(python3 -c "import tempfile; print(tempfile.gettempdir())")" = "$TMPDIR"
+'
+"${runtime}" exec "${container_name}" sh -c '
   set -eu
   for command in scannerserver img2pdf ocrmypdf nice qpdf pdfimages pdfinfo vips exiftool; do
     command -v "$command" >/dev/null
