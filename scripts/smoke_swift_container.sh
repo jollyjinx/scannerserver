@@ -45,6 +45,7 @@ for argument; do
 done
 test -n "${output_pattern}"
 output=$(printf '%s' "${output_pattern}" | sed 's/%04d/0001/')
+printf '%s\n' "${TMPDIR:-}" > /scans/.scanimage-tmpdir
 printf 'P6\n32 32\n255\n' > "${output}"
 head -c 3072 /dev/zero >> "${output}"
 EOF
@@ -149,10 +150,9 @@ fi
 
 "${runtime}" exec "${container_name}" sh -c 'touch /scans/.container-smoke && test -w /scans/.container-smoke'
 "${runtime}" exec "${container_name}" sh -c '
-  test "$TMPDIR" = /scans/.ocr-tmp
-  test -d "$TMPDIR"
-  test -w "$TMPDIR"
-  test "$(python3 -c "import tempfile; print(tempfile.gettempdir())")" = "$TMPDIR"
+  test "$(cat /scans/.scanimage-tmpdir)" = /scans/.ocr-tmp
+  test -d /scans/.ocr-tmp
+  test -w /scans/.ocr-tmp
 '
 "${runtime}" exec "${container_name}" sh -c '
   set -eu
@@ -166,6 +166,7 @@ fi
 "${runtime}" run --rm \
   --user 12345:12345 \
   --env SCANNER_URL=http://192.0.2.10/eSCL \
+  --tmpfs /scans:rw,mode=1777 \
   --entrypoint scansnap-entrypoint \
   "${image}" \
   sh -c 'test "$SANE_CONFIG_DIR" = /tmp/scannerserver-sane.d && test -s "$SANE_CONFIG_DIR/airscan.conf"'
