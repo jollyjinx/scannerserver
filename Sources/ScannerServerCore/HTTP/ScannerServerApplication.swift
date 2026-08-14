@@ -412,6 +412,10 @@ public enum ScannerServerApplication {
             _ = await dependencies.scanJobs.start(configuration: configuration)
             return .redirect(to: "/")
         }
+        router.post("/scan/cancel") { _, _ -> Response in
+            await dependencies.scanJobs.cancel()
+            return .redirect(to: "/")
+        }
         router.post("/ocr/cancel") { _, _ -> Response in
             await dependencies.ocrQueue.cancelAll()
             return .redirect(to: "/")
@@ -914,15 +918,19 @@ private func renderScan(settings: ScanSettings, job: ScanJobState) -> String {
     html += "<div><p class=\"eyebrow\">Scanner controls</p><h2>Start a new scan</h2>"
     html += "<p class=\"muted\">Choose a preset and start scanning. Preset settings are managed separately.</p></div>"
     html += "</div><form class=\"scan-form\" method=\"post\" action=\"/scan\">"
-    html += "<label>Preset<select name=\"mode_id\">"
+    html += "<label>Preset<select name=\"mode_id\" data-preset-select>"
     for mode in settings.modes {
         let selected = mode.id == settings.defaultModeID ? " selected" : ""
-        html += "<option value=\"\(htmlEscape(mode.id))\"\(selected)>\(htmlEscape(mode.name))</option>"
+        html += "<option value=\"\(htmlEscape(mode.id))\" data-summary=\"\(htmlEscape(modeSummary(mode)))\"\(selected)>\(htmlEscape(mode.name))</option>"
     }
-    html += "</select><span class=\"setting-help\">\(htmlEscape(modeSummary(buttonMode)))</span></label>"
+    html += "</select><span class=\"setting-help\" data-preset-summary>\(htmlEscape(modeSummary(buttonMode)))</span></label>"
     let scanDisabled = job.status == "running" ? " disabled" : ""
     html += "<button class=\"primary-action\"\(scanDisabled)>Start scan</button>"
-    html += "</form><div class=\"button-preset-note\"><span>Physical button</span>"
+    html += "</form>"
+    if job.status == "running" {
+        html += "<form class=\"inline-form\" method=\"post\" action=\"/scan/cancel\"><button class=\"danger-button\" data-confirm=\"Cancel the current scan?\">Cancel scan</button></form>"
+    }
+    html += "<div class=\"button-preset-note\"><span>Physical button</span>"
     html += "<strong>\(htmlEscape(buttonMode.name))</strong><a href=\"/presets?edit_mode=\(urlQueryValue(buttonMode.id))\">Manage</a>"
     html += "</div></section>"
     return html

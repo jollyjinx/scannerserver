@@ -41,6 +41,16 @@
           if (message && !window.confirm(message)) event.preventDefault();
         });
 
+        const presetSelect = document.querySelector("[data-preset-select]");
+        const presetSummary = document.querySelector("[data-preset-summary]");
+        const updatePresetSummary = () => {
+          if (presetSelect && presetSummary) {
+            presetSummary.textContent = presetSelect.selectedOptions[0]?.dataset.summary || "";
+          }
+        };
+        presetSelect?.addEventListener("change", updatePresetSummary);
+        updatePresetSummary();
+
         const selectAll = document.querySelector("[data-select-all]");
         const fileCheckboxes = Array.from(document.querySelectorAll('input[name="files"]'));
         const updateSelectAll = () => {

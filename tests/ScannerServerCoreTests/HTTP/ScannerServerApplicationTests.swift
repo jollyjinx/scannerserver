@@ -353,9 +353,19 @@ struct ScannerServerApplicationTests {
                 expectRedirect(response, to: "/")
             }
 
+            try await client.execute(uri: "/", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("action=\"/scan/cancel\""))
+                #expect(body.contains("data-preset-select"))
+                #expect(body.contains("data-preset-summary"))
+            }
+            try await postForm(client, uri: "/scan/cancel", body: "") { response in
+                expectRedirect(response, to: "/")
+            }
+
             await Task.yield()
             let state = await fixture.scanJobs.state
-            #expect(state.status == "running")
+            #expect(state.status == "cancelled")
             let requests = await executor.requests
             #expect(requests.count == 1)
             #expect(requests.first?.environment?["SCAN_PROFILE_ID"] == "photo-png")
