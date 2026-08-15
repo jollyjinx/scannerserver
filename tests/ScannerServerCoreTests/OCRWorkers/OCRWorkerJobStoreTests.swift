@@ -151,6 +151,35 @@ struct OCRWorkerJobStoreTests {
         #expect(failed.leasedWorkerID == nil)
     }
 
+    @Test("Atomic leasing enforces each worker's concurrent job limit")
+    func workerCapacity() async throws {
+        let store = OCRWorkerJobStore(leaseTokenProvider: { UUID().uuidString })
+        _ = try await store.enqueue(testManifest(jobID: "job-1"))
+        _ = try await store.enqueue(testManifest(jobID: "job-2"))
+
+        let first = try #require(try await store.leaseNext(
+            workerID: "worker",
+            ocrLanguages: ["eng"],
+            maximumActiveLeases: 1
+        ))
+        #expect(try await store.leaseNext(
+            workerID: "worker",
+            ocrLanguages: ["eng"],
+            maximumActiveLeases: 1
+        ) == nil)
+        _ = try await store.fail(
+            jobID: first.manifest.jobID,
+            workerID: first.workerID,
+            leaseToken: first.leaseToken,
+            failure: "expected"
+        )
+        #expect(try await store.leaseNext(
+            workerID: "worker",
+            ocrLanguages: ["eng"],
+            maximumActiveLeases: 1
+        )?.manifest.jobID == "job-2")
+    }
+
     @Test("Jobs and live leases survive restart and expired leases recover")
     func persistenceAndRecovery() async throws {
         let root = FileManager.default.temporaryDirectory

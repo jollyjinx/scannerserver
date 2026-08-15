@@ -208,6 +208,114 @@ struct ScannerServerApplicationTests {
         }
     }
 
+    @Test("Approved workers lease, download, renew, and atomically upload verified OCR jobs")
+    func ocrWorkerJobTransfer() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+        let token = String(repeating: "a", count: 64)
+        let registration = OCRWorkerRegistrationRequest(
+            workerID: "transfer-worker",
+            authenticationToken: token,
+            displayName: "Transfer Worker",
+            hostname: "worker.local",
+            workerVersion: "development",
+            architecture: "arm64",
+            cpuCount: 8,
+            maxConcurrentJobs: 1,
+            ocrLanguages: ["deu", "eng"]
+        )
+        let source = Data("%PDF-1.4\nsource\n".utf8)
+        let result = Data("%PDF-1.4\nsearchable result\n".utf8)
+        let sourceURL = fixture.outputDirectory.appendingPathComponent("source.pdf")
+        let outputURL = fixture.outputDirectory.appendingPathComponent("source.ocr.pdf")
+        try source.write(to: sourceURL)
+        _ = try await fixture.ocrWorkerJobs.enqueue(OCRWorkerJobManifest(
+            jobID: "transfer-job",
+            sourcePath: sourceURL.path,
+            outputPath: outputURL.path,
+            sourceByteCount: Int64(source.count),
+            sourceSHA256: OCRWorkerSHA256.hexDigest(source),
+            ocrLanguages: ["deu", "eng"],
+            ocrEnabled: true,
+            removeBlankPages: false,
+            cropPages: false,
+            containerArguments: ["--language", "deu+eng", "/work/source.pdf", "/work/result.pdf"]
+        ))
+
+        try await application.test(.router) { client in
+            try await client.execute(
+                uri: "/api/ocr-workers/register",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(data: try JSONEncoder().encode(registration))
+            ) { response in #expect(response.status == .ok) }
+            try await client.execute(
+                uri: "/workers/transfer-worker/approve",
+                method: .post
+            ) { response in expectRedirect(response, to: "/workers") }
+
+            let poll = OCRWorkerJobPollRequest(authenticationToken: token, waitSeconds: 0)
+            var capturedLease: OCRWorkerJobLease?
+            try await client.execute(
+                uri: "/api/ocr-workers/transfer-worker/jobs/lease",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(data: try JSONEncoder().encode(poll))
+            ) { response in
+                #expect(response.status == .ok)
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                capturedLease = try decoder.decode(
+                    OCRWorkerJobLease.self,
+                    from: Data(response.body.readableBytesView)
+                )
+            }
+            let lease = try #require(capturedLease)
+
+            try await client.execute(
+                uri: "/api/ocr-workers/transfer-worker/jobs/transfer-job/source",
+                method: .get,
+                headers: [
+                    .authorization: "Bearer \(token)",
+                    .ifMatch: lease.leaseToken,
+                ]
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(Data(response.body.readableBytesView) == source)
+                #expect(response.headers[.eTag] == OCRWorkerSHA256.hexDigest(source))
+            }
+
+            let renewal = OCRWorkerJobLeaseRequest(
+                authenticationToken: token,
+                leaseToken: lease.leaseToken
+            )
+            try await client.execute(
+                uri: "/api/ocr-workers/transfer-worker/jobs/transfer-job/renew",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(data: try JSONEncoder().encode(renewal))
+            ) { response in #expect(response.status == .ok) }
+
+            try await client.execute(
+                uri: "/api/ocr-workers/transfer-worker/jobs/transfer-job/result",
+                method: .post,
+                headers: [
+                    .contentType: "application/pdf",
+                    .authorization: "Bearer \(token)",
+                    .ifMatch: lease.leaseToken,
+                ],
+                body: ByteBuffer(data: result)
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains(#""status":"succeeded""#))
+            }
+        }
+
+        #expect(try Data(contentsOf: outputURL) == result)
+        #expect(try await fixture.ocrWorkerJobs.snapshot(jobID: "transfer-job").status == .succeeded)
+    }
+
     @Test("First-run discovery polling preserves manual form input")
     func discoveryRefresh() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])
@@ -699,6 +807,7 @@ private struct HTTPFixture: Sendable {
     let scanJobs: ScanJobActor
     let ocrQueue: OCRQueueActor
     let ocrWorkerRegistry: OCRWorkerRegistry
+    let ocrWorkerJobs: OCRWorkerJobStore
     let executor: SlowCapturingExecutor
     let environment: [String: String]
 
@@ -725,6 +834,10 @@ private struct HTTPFixture: Sendable {
             fileURL: outputDirectory.appendingPathComponent(".test-ocr-workers.json"),
             webUpdates: webUpdates
         )
+        ocrWorkerJobs = OCRWorkerJobStore(
+            fileURL: outputDirectory.appendingPathComponent(".test-ocr-jobs.json"),
+            leaseTokenProvider: { "test-lease-token" }
+        )
         self.executor = executor
     }
 
@@ -737,6 +850,8 @@ private struct HTTPFixture: Sendable {
             scanJobs: scanJobs,
             ocrQueue: ocrQueue,
             ocrWorkerRegistry: ocrWorkerRegistry,
+            ocrWorkerJobs: ocrWorkerJobs,
+            ocrWorkerResultValidator: AcceptingOCRWorkerResultValidator(),
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: scannerSetup ?? StoredScannerSetupService(
                 store: ScannerConfigStore(environment: environment)
@@ -753,6 +868,10 @@ private struct HTTPFixture: Sendable {
     func remove() {
         try? FileManager.default.removeItem(at: root)
     }
+}
+
+private struct AcceptingOCRWorkerResultValidator: OCRWorkerResultValidating {
+    func validate(fileURL: URL) async throws {}
 }
 
 private actor RunningDiscoverySetupService: ScannerSetupServing {

@@ -93,10 +93,16 @@ public actor OCRWorkerJobStore {
     public func leaseNext(
         workerID: String,
         ocrLanguages: [String],
+        maximumActiveLeases: Int? = nil,
         now: Date = Date()
     ) throws -> OCRWorkerJobLease? {
         guard !workerID.isEmpty else { throw OCRWorkerJobStoreError.invalidLease }
         let reclaimed = requeueExpiredLeasesWithoutPersisting(now: now)
+        if let maximumActiveLeases,
+           activeLeaseCount(workerID: workerID) >= max(1, maximumActiveLeases) {
+            if reclaimed > 0 { try persist() }
+            return nil
+        }
         let supportedLanguages = Set(ocrLanguages)
         let candidates = jobs.values.filter { job in
             job.status == .queued
@@ -223,11 +229,31 @@ public actor OCRWorkerJobStore {
         jobs.values.sorted(by: jobOrder).map(snapshot)
     }
 
+    private func activeLeaseCount(workerID: String) -> Int {
+        jobs.values.count { job in
+            job.status == .leased && job.lease?.workerID == workerID
+        }
+    }
+
     public func snapshot(jobID: String) throws -> OCRWorkerJobSnapshot {
         guard let job = jobs[jobID] else {
             throw OCRWorkerJobStoreError.unknownJob(jobID)
         }
         return snapshot(job)
+    }
+
+    public func authorizeLease(
+        jobID: String,
+        workerID: String,
+        leaseToken: String,
+        now: Date = Date()
+    ) throws -> OCRWorkerJobManifest {
+        try authenticatedLease(
+            jobID: jobID,
+            workerID: workerID,
+            leaseToken: leaseToken,
+            now: now
+        ).0.manifest
     }
 
     private func authenticatedLease(

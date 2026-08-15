@@ -102,6 +102,10 @@ public enum OCRWorkerRegistryError: Error, Equatable, LocalizedError, Sendable {
     case invalidCapacity
     case authenticationFailed
     case unknownWorker
+    case approvalRequired
+    case workerDisabled
+    case workerOffline
+    case workerAtCapacity
 
     public var errorDescription: String? {
         switch self {
@@ -117,6 +121,14 @@ public enum OCRWorkerRegistryError: Error, Equatable, LocalizedError, Sendable {
             "OCR worker authentication failed."
         case .unknownWorker:
             "OCR worker is not registered."
+        case .approvalRequired:
+            "OCR worker is waiting for approval."
+        case .workerDisabled:
+            "OCR worker is disabled."
+        case .workerOffline:
+            "OCR worker heartbeat is stale."
+        case .workerAtCapacity:
+            "OCR worker is already at its configured job capacity."
         }
     }
 }

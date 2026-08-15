@@ -223,6 +223,7 @@ public struct ScannerServerDependencies: Sendable {
     public let ocrQueue: OCRQueueActor
     public let ocrWorkerRegistry: OCRWorkerRegistry
     public let ocrWorkerJobs: OCRWorkerJobStore
+    public let ocrWorkerResultValidator: any OCRWorkerResultValidating
     public let outputPathResolver: ScanOutputPathResolver
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
@@ -240,6 +241,7 @@ public struct ScannerServerDependencies: Sendable {
         ocrQueue: OCRQueueActor? = nil,
         ocrWorkerRegistry: OCRWorkerRegistry? = nil,
         ocrWorkerJobs: OCRWorkerJobStore? = nil,
+        ocrWorkerResultValidator: (any OCRWorkerResultValidating)? = nil,
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
@@ -268,6 +270,8 @@ public struct ScannerServerDependencies: Sendable {
         self.ocrWorkerJobs = ocrWorkerJobs ?? OCRWorkerJobStore(
             fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
         )
+        self.ocrWorkerResultValidator = ocrWorkerResultValidator
+            ?? QPDFOCRWorkerResultValidator()
         self.scannerReachability = scannerReachability ?? ScanSnapReachabilityState(webUpdates: webUpdates)
         self.environment = environment
         self.buttonConfigurationChanges = buttonConfigurationChanges
@@ -283,13 +287,24 @@ public struct ScannerServerDependencies: Sendable {
         let processExecutor = FoundationProcessExecutor()
         let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
         let webUpdates = WebUpdateNotifier()
-        let ocrQueue = OCRQueueActor(
-            executor: processExecutor,
-            configuration: OCRQueueConfiguration(environment: environment),
-            webUpdates: webUpdates
-        )
         let ocrWorkerRegistry = OCRWorkerRegistry(
             fileURL: OCRWorkerRegistry.defaultFileURL(environment: environment),
+            webUpdates: webUpdates
+        )
+        let ocrWorkerJobs = OCRWorkerJobStore(
+            fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
+        )
+        let ocrWorkerResultValidator = QPDFOCRWorkerResultValidator(executor: processExecutor)
+        let distributedOCRExecutor = DistributedOCRProcessExecutor(
+            local: processExecutor,
+            workers: ocrWorkerRegistry,
+            jobs: ocrWorkerJobs,
+            configuration: DistributedOCRConfiguration(environment: environment)
+        )
+        let ocrQueue = OCRQueueActor(
+            executor: distributedOCRExecutor,
+            documentExecutor: documentExecutor,
+            configuration: OCRQueueConfiguration(environment: environment),
             webUpdates: webUpdates
         )
         let settingsStore = ScanSettingsStore(environment: environment)
@@ -311,6 +326,8 @@ public struct ScannerServerDependencies: Sendable {
             scanSnapAcquisitionSessions: scanSnapAcquisitionSessions,
             ocrQueue: ocrQueue,
             ocrWorkerRegistry: ocrWorkerRegistry,
+            ocrWorkerJobs: ocrWorkerJobs,
+            ocrWorkerResultValidator: ocrWorkerResultValidator,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: ScanSnapSetupService(
                 environment: environment,
@@ -475,6 +492,198 @@ public enum ScannerServerApplication {
                     workerID: workerID,
                     request: heartbeat
                 ))
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.post("/api/ocr-workers/:id/jobs/lease") { request, context -> Response in
+            guard let workerID = workerID(context: context) else {
+                return textResponse("Missing worker ID\n", status: .badRequest)
+            }
+            do {
+                let poll = try await decodeJSON(
+                    OCRWorkerJobPollRequest.self,
+                    request: request,
+                    context: context
+                )
+                let deadline = Date().addingTimeInterval(TimeInterval(min(max(poll.waitSeconds, 0), 30)))
+                repeat {
+                    let worker = try await dependencies.ocrWorkerRegistry.authorizeJobRequest(
+                        workerID: workerID,
+                        authenticationToken: poll.authenticationToken,
+                        requireCapacity: false
+                    )
+                    if let lease = try await dependencies.ocrWorkerJobs.leaseNext(
+                        workerID: workerID,
+                        ocrLanguages: worker.ocrLanguages,
+                        maximumActiveLeases: worker.maxConcurrentJobs
+                    ) {
+                        await dependencies.webUpdates.notify()
+                        return jsonResponse(lease)
+                    }
+                    guard Date() < deadline else { break }
+                    try await Task.sleep(for: .milliseconds(500))
+                } while !Task.isCancelled
+                return Response(status: .noContent)
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.get("/api/ocr-workers/:id/jobs/:job/source") { request, context -> Response in
+            guard let workerID = workerID(context: context),
+                  let jobID = workerJobID(context: context),
+                  let authenticationToken = bearerToken(request),
+                  let leaseToken = request.headers[.ifMatch] else {
+                return jsonResponse(
+                    WorkerAPIError(error: "Missing worker or lease authentication."),
+                    status: .unauthorized
+                )
+            }
+            do {
+                _ = try await dependencies.ocrWorkerRegistry.authorizeJobRequest(
+                    workerID: workerID,
+                    authenticationToken: authenticationToken,
+                    requireCapacity: false
+                )
+                let manifest = try await dependencies.ocrWorkerJobs.authorizeLease(
+                    jobID: jobID,
+                    workerID: workerID,
+                    leaseToken: leaseToken
+                )
+                let sourceURL = try workerJobURL(
+                    path: manifest.sourcePath,
+                    outputDirectory: dependencies.outputPathResolver.outputDirectory
+                )
+                let data = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
+                guard data.count == manifest.sourceByteCount,
+                      OCRWorkerSHA256.hexDigest(data) == manifest.sourceSHA256 else {
+                    throw OCRWorkerTransferError.sourceChanged
+                }
+                return dataResponse(
+                    data,
+                    contentType: "application/pdf",
+                    additionalHeaders: [
+                        .contentDisposition: "attachment; filename=source.pdf",
+                        .eTag: manifest.sourceSHA256,
+                    ]
+                )
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.post("/api/ocr-workers/:id/jobs/:job/renew") { request, context -> Response in
+            guard let workerID = workerID(context: context),
+                  let jobID = workerJobID(context: context) else {
+                return textResponse("Missing worker or job ID\n", status: .badRequest)
+            }
+            do {
+                let renewal = try await decodeJSON(
+                    OCRWorkerJobLeaseRequest.self,
+                    request: request,
+                    context: context
+                )
+                _ = try await dependencies.ocrWorkerRegistry.authorizeJobRequest(
+                    workerID: workerID,
+                    authenticationToken: renewal.authenticationToken,
+                    requireCapacity: false
+                )
+                return jsonResponse(try await dependencies.ocrWorkerJobs.renew(
+                    jobID: jobID,
+                    workerID: workerID,
+                    leaseToken: renewal.leaseToken
+                ))
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.post("/api/ocr-workers/:id/jobs/:job/fail") { request, context -> Response in
+            guard let workerID = workerID(context: context),
+                  let jobID = workerJobID(context: context) else {
+                return textResponse("Missing worker or job ID\n", status: .badRequest)
+            }
+            do {
+                let failure = try await decodeJSON(
+                    OCRWorkerJobFailureRequest.self,
+                    request: request,
+                    context: context
+                )
+                _ = try await dependencies.ocrWorkerRegistry.authorizeJobRequest(
+                    workerID: workerID,
+                    authenticationToken: failure.authenticationToken,
+                    requireCapacity: false
+                )
+                let snapshot = try await dependencies.ocrWorkerJobs.fail(
+                    jobID: jobID,
+                    workerID: workerID,
+                    leaseToken: failure.leaseToken,
+                    failure: failure.failure
+                )
+                await dependencies.webUpdates.notify()
+                return jsonResponse(snapshot)
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.post("/api/ocr-workers/:id/jobs/:job/result") { request, context -> Response in
+            guard let workerID = workerID(context: context),
+                  let jobID = workerJobID(context: context),
+                  let authenticationToken = bearerToken(request),
+                  let leaseToken = request.headers[.ifMatch] else {
+                return jsonResponse(
+                    WorkerAPIError(error: "Missing worker or lease authentication."),
+                    status: .unauthorized
+                )
+            }
+            do {
+                _ = try await dependencies.ocrWorkerRegistry.authorizeJobRequest(
+                    workerID: workerID,
+                    authenticationToken: authenticationToken,
+                    requireCapacity: false
+                )
+                let manifest = try await dependencies.ocrWorkerJobs.authorizeLease(
+                    jobID: jobID,
+                    workerID: workerID,
+                    leaseToken: leaseToken
+                )
+                let maximumBytes = workerResultUploadLimit(environment: dependencies.environment)
+                let buffer = try await request.body.collect(upTo: maximumBytes)
+                let data = Data(buffer.readableBytesView)
+                let digest = OCRWorkerSHA256.hexDigest(data)
+                guard data.count >= 5,
+                      data.prefix(5) == Data("%PDF-".utf8) else {
+                    throw OCRWorkerTransferError.invalidPDF
+                }
+                let outputURL = try workerJobURL(
+                    path: manifest.outputPath,
+                    outputDirectory: dependencies.outputPathResolver.outputDirectory
+                )
+                guard !FileManager.default.fileExists(atPath: outputURL.path) else {
+                    throw OCRWorkerTransferError.outputExists
+                }
+                let stagingURL = outputURL.deletingLastPathComponent().appendingPathComponent(
+                    ".ocr-upload.\(jobID)",
+                    isDirectory: false
+                )
+                defer { try? FileManager.default.removeItem(at: stagingURL) }
+                try data.write(to: stagingURL, options: .atomic)
+                try await dependencies.ocrWorkerResultValidator.validate(fileURL: stagingURL)
+                try FileManager.default.moveItem(at: stagingURL, to: outputURL)
+                do {
+                    let snapshot = try await dependencies.ocrWorkerJobs.succeed(
+                        jobID: jobID,
+                        workerID: workerID,
+                        leaseToken: leaseToken,
+                        result: OCRWorkerJobResult(
+                            outputByteCount: Int64(data.count),
+                            outputSHA256: digest
+                        )
+                    )
+                    await dependencies.webUpdates.notify()
+                    return jsonResponse(snapshot)
+                } catch {
+                    try? FileManager.default.removeItem(at: outputURL)
+                    throw error
+                }
             } catch {
                 return workerAPIErrorResponse(error)
             }
@@ -724,6 +933,36 @@ private func workerID(context: some RequestContext) -> String? {
     context.parameters.get("id")?.removingPercentEncoding
 }
 
+private func workerJobID(context: some RequestContext) -> String? {
+    context.parameters.get("job")?.removingPercentEncoding
+}
+
+private func bearerToken(_ request: Request) -> String? {
+    guard let authorization = request.headers[.authorization],
+          authorization.lowercased().hasPrefix("bearer ") else { return nil }
+    let token = authorization.dropFirst("bearer ".count)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return token.isEmpty ? nil : token
+}
+
+private func workerJobURL(path: String, outputDirectory: URL) throws -> URL {
+    let directory = outputDirectory.resolvingSymlinksInPath().standardizedFileURL
+    let url = URL(fileURLWithPath: path, isDirectory: false)
+        .resolvingSymlinksInPath()
+        .standardizedFileURL
+    guard url.deletingLastPathComponent() == directory else {
+        throw OCRWorkerTransferError.pathOutsideScanDirectory
+    }
+    return url
+}
+
+private func workerResultUploadLimit(environment: [String: String]) -> Int {
+    let fallback = 1024 * 1024 * 1024
+    guard let value = environment["SCAN_OCR_WORKER_MAX_RESULT_BYTES"],
+          let parsed = Int(value), parsed > 0 else { return fallback }
+    return parsed
+}
+
 private func resolvedFile(
     context: some RequestContext,
     dependencies: ScannerServerDependencies
@@ -810,6 +1049,10 @@ private func workerAPIErrorResponse(_ error: any Error) -> Response {
     if let registryError = error as? OCRWorkerRegistryError,
        registryError == .authenticationFailed {
         status = .unauthorized
+    } else if error is OCRWorkerJobStoreError
+        || error is OCRWorkerTransferError
+        || error is OCRWorkerResultValidationError {
+        status = .conflict
     } else {
         status = .badRequest
     }
@@ -817,6 +1060,22 @@ private func workerAPIErrorResponse(_ error: any Error) -> Response {
         WorkerAPIError(error: error.localizedDescription),
         status: status
     )
+}
+
+private enum OCRWorkerTransferError: Error, LocalizedError {
+    case pathOutsideScanDirectory
+    case sourceChanged
+    case invalidPDF
+    case outputExists
+
+    var errorDescription: String? {
+        switch self {
+        case .pathOutsideScanDirectory: "OCR job path is outside the scan directory."
+        case .sourceChanged: "OCR source changed after the job was queued."
+        case .invalidPDF: "OCR worker result is not a PDF."
+        case .outputExists: "OCR output already exists."
+        }
+    }
 }
 
 private func scanDirectoryErrorResponse(
@@ -922,6 +1181,7 @@ private func indexResponse(
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
     let workers = await dependencies.ocrWorkerRegistry.snapshots()
+    let workerJobs = await dependencies.ocrWorkerJobs.snapshots()
     let setup = await dependencies.scannerSetup.state()
     let scannerIsReachable = await dependencies.scannerReachability.isReachable
     let localTime = ScannerServerLocalTime(environment: dependencies.environment)
@@ -942,6 +1202,7 @@ private func indexResponse(
         job: job,
         ocr: ocr,
         workers: workers,
+        workerJobs: workerJobs,
         groups: groups,
         localTime: localTime
     )
@@ -984,6 +1245,7 @@ private func renderIndexContent(
     job: ScanJobState,
     ocr: OCRQueueState,
     workers: [OCRWorkerSnapshot],
+    workerJobs: [OCRWorkerJobSnapshot],
     groups: [ScanDayGroup],
     localTime: ScannerServerLocalTime
 ) -> String {
@@ -1024,7 +1286,7 @@ private func renderIndexContent(
             maximumOCRCPUs: ocr.cpuLimit
         )
     case .workers:
-        html += renderWorkers(workers, localTime: localTime)
+        html += renderWorkers(workers, jobs: workerJobs, localTime: localTime)
     case .settings:
         if wifiBackend {
             html += renderScannerSetup(setup)
@@ -1038,16 +1300,23 @@ private func renderIndexContent(
 
 private func renderWorkers(
     _ workers: [OCRWorkerSnapshot],
+    jobs: [OCRWorkerJobSnapshot],
     localTime: ScannerServerLocalTime
 ) -> String {
     var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
     html += "<p class=\"eyebrow\">Distributed processing</p><h2>OCR workers</h2>"
-    html += "<p class=\"muted\">Register, approve, and monitor remote processing capacity. Document dispatch is not enabled yet.</p>"
+    html += "<p class=\"muted\">Register, approve, and monitor remote OCR capacity. Approved online workers automatically receive compatible queued PDFs.</p>"
     html += "</div></div>"
+    let activeJobs = jobs.filter { $0.status == .queued || $0.status == .leased }
+    let completedJobs = jobs.filter { $0.status == .succeeded }.count
+    let failedJobs = jobs.filter { $0.status == .failed }.count
+    html += "<dl class=\"worker-facts\"><div><dt>Queued</dt><dd>\(activeJobs.filter { $0.status == .queued }.count)</dd></div>"
+    html += "<div><dt>Remote running</dt><dd>\(activeJobs.filter { $0.status == .leased }.count)</dd></div>"
+    html += "<div><dt>Completed</dt><dd>\(completedJobs)</dd></div><div><dt>Failed</dt><dd>\(failedJobs)</dd></div></dl>"
     guard !workers.isEmpty else {
         html += "<div class=\"empty-state compact\"><h3>No workers registered</h3>"
         html += "<p class=\"muted\">Start scannerserver-worker with this server's address. New workers will appear here for approval.</p></div></section>"
-        return html
+        return html + renderWorkerJobs(jobs, localTime: localTime)
     }
 
     html += "<div class=\"worker-list\">"
@@ -1073,7 +1342,29 @@ private func renderWorkers(
         }
         html += "</div></article>"
     }
-    return html + "</div></section>"
+    return html + "</div>" + renderWorkerJobs(jobs, localTime: localTime) + "</section>"
+}
+
+private func renderWorkerJobs(
+    _ jobs: [OCRWorkerJobSnapshot],
+    localTime: ScannerServerLocalTime
+) -> String {
+    guard !jobs.isEmpty else { return "" }
+    var html = "<div class=\"section-heading\"><div><h3>Recent remote jobs</h3></div></div><div class=\"worker-list\">"
+    for job in jobs.suffix(10).reversed() {
+        html += "<article class=\"worker-card\"><div class=\"worker-card-head\"><div>"
+        html += "<h3>\(htmlEscape(URL(fileURLWithPath: job.manifest.sourcePath).lastPathComponent))</h3>"
+        html += "<p class=\"muted\">Attempt \(job.attemptCount) · updated \(htmlEscape(localTime.statusTimestamp(for: job.updatedAt)))</p>"
+        html += "</div><span class=\"status-pill\">\(htmlEscape(job.status.rawValue.capitalized))</span></div>"
+        if let workerID = job.leasedWorkerID {
+            html += "<p class=\"muted\">Worker \(htmlEscape(workerID))</p>"
+        }
+        if let failure = job.failure, !failure.isEmpty {
+            html += "<p class=\"warning\">\(htmlEscape(failure))</p>"
+        }
+        html += "</article>"
+    }
+    return html + "</div>"
 }
 
 private func workerStatusPill(_ availability: OCRWorkerAvailability) -> String {

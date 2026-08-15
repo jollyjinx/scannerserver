@@ -18,6 +18,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let ocrEnabled: Bool
     public let removeBlankPages: Bool
     public let cropPages: Bool
+    public let containerArguments: [String]?
     public let createdAt: Date
 
     public init(
@@ -30,6 +31,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         ocrEnabled: Bool,
         removeBlankPages: Bool,
         cropPages: Bool,
+        containerArguments: [String]? = nil,
         createdAt: Date = Date()
     ) {
         self.jobID = jobID
@@ -41,6 +43,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         self.ocrEnabled = ocrEnabled
         self.removeBlankPages = removeBlankPages
         self.cropPages = cropPages
+        self.containerArguments = containerArguments
         self.createdAt = createdAt
     }
 }
@@ -62,6 +65,54 @@ public struct OCRWorkerJobLease: Codable, Equatable, Sendable {
     public let leasedAt: Date
     public let expiresAt: Date
     public let attempt: Int
+
+    public init(
+        manifest: OCRWorkerJobManifest,
+        workerID: String,
+        leaseToken: String,
+        leasedAt: Date,
+        expiresAt: Date,
+        attempt: Int
+    ) {
+        self.manifest = manifest
+        self.workerID = workerID
+        self.leaseToken = leaseToken
+        self.leasedAt = leasedAt
+        self.expiresAt = expiresAt
+        self.attempt = attempt
+    }
+}
+
+public struct OCRWorkerJobPollRequest: Codable, Equatable, Sendable {
+    public let authenticationToken: String
+    public let waitSeconds: Int
+
+    public init(authenticationToken: String, waitSeconds: Int = 20) {
+        self.authenticationToken = authenticationToken
+        self.waitSeconds = waitSeconds
+    }
+}
+
+public struct OCRWorkerJobLeaseRequest: Codable, Equatable, Sendable {
+    public let authenticationToken: String
+    public let leaseToken: String
+
+    public init(authenticationToken: String, leaseToken: String) {
+        self.authenticationToken = authenticationToken
+        self.leaseToken = leaseToken
+    }
+}
+
+public struct OCRWorkerJobFailureRequest: Codable, Equatable, Sendable {
+    public let authenticationToken: String
+    public let leaseToken: String
+    public let failure: String
+
+    public init(authenticationToken: String, leaseToken: String, failure: String) {
+        self.authenticationToken = authenticationToken
+        self.leaseToken = leaseToken
+        self.failure = failure
+    }
 }
 
 public struct OCRWorkerJobSnapshot: Codable, Equatable, Sendable {

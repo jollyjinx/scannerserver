@@ -111,7 +111,30 @@ for an Ethernet/MAC address or generated pairing key.
 - Scan list grouped by day with previews and download/delete controls.
 - CPU-budgeted background blank-page removal, autocrop, and OCR, including automatic container CPU
   detection, bounded per-page concurrency, configurable caps, and optional reduced-priority nice mode.
+- Optional approved macOS OCR workers that run the same image through Apple `container`, use all
+  assigned Mac CPUs, and automatically fall back to local OCR when unavailable.
 - Runs as a non-root user while still binding the web UI to port `80`.
+
+## Optional macOS OCR Worker
+
+On a Mac with Apple's `container` command, start its container system and run the worker from this
+repository:
+
+```bash
+container system start
+container system kernel set --recommended  # only when no default kernel is configured
+container image pull ghcr.io/jollyjinx/scannerserver:latest
+swift run -c release scannerserver-worker \
+  --server http://YOUR_LINUX_HOST \
+  --name "Mac OCR" \
+  --cpus 11 \
+  --jobs 1
+```
+
+Open **Workers** in scannerserver and approve it. New OCR PDFs are then dispatched automatically;
+the scanner host retains scanning, preprocessing, filenames, verification, and final publication.
+See [Distributed OCR workers](docs/ocr-workers.md) for Bonjour discovery, resource options, security,
+and failure behavior.
 
 ## Updating
 

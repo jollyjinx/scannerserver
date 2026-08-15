@@ -73,11 +73,15 @@ persisted stores, reachability, and physical-button session state.
   cancellation, and recent jobs.
 - `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
-  snapshots. Remote job execution is not connected to `OCRQueueActor` yet; local processing remains
-  authoritative until durable leases and verified document transfer are implemented.
+  snapshots.
 - `OCRWorkerJobStore` owns atomically persisted remote-job manifests and FIFO lease transitions,
   including capability filtering, renewal, authenticated completion, cancellation, and recovery of
-  expired leases. It is runtime-composed but not yet fed by `OCRQueueActor` or exposed over HTTP.
+  expired leases. Authenticated HTTP routes lease jobs and transfer digest-verified PDFs.
+- `DistributedOCRProcessExecutor` wraps only the `ocrmypdf` process boundary. It dispatches to an
+  eligible worker and preserves the local process executor as the automatic fallback. The worker
+  runs the existing image with explicit CPU, memory, UID/GID, and one writable job mount; the server
+  verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before reporting
+  OCR completion.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
   `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;
   an explicit server URL remains available and takes precedence over Bonjour.

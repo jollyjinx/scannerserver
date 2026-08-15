@@ -82,6 +82,10 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
 | `SCAN_OCR_WORKERS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-workers.json` | Registered OCR worker identities, approvals, and last-known state |
 | `SCAN_OCR_WORKER_JOBS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-jobs.json` | Durable remote OCR job manifests, lease state, and terminal results |
+| `SCAN_OCR_REMOTE_ENABLED` | `true` | Dispatch OCRmyPDF work to approved compatible workers when available; local OCR remains the fallback |
+| `SCAN_OCR_REMOTE_ASSIGNMENT_WAIT_SECONDS` | `30` | Time an eligible remote job may remain unclaimed (including after lease expiry) before local fallback |
+| `SCAN_OCR_REMOTE_COMPLETION_TIMEOUT_SECONDS` | `3600` | Maximum total remote job duration before cancellation and local fallback |
+| `SCAN_OCR_WORKER_MAX_RESULT_BYTES` | `1073741824` | Maximum PDF upload size accepted from an authenticated worker |
 | `SCAN_OCR_WORKER_BONJOUR_ENABLED` | `false` | Publish `_scannerserver._tcp` for OCR worker discovery through `avahi-publish-service` |
 | `SCANNERSERVER_BONJOUR_NAME` | `scannerserver` | Bonjour service instance name |
 | `SCANNERSERVER_BONJOUR_HOST` | process hostname | Host used to derive the advertised URL when no complete URL is configured |

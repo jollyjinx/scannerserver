@@ -149,6 +149,42 @@ public actor OCRWorkerRegistry {
             }
     }
 
+    public func authorizeJobRequest(
+        workerID: String,
+        authenticationToken: String,
+        now: Date = Date(),
+        requireCapacity: Bool = true
+    ) throws -> OCRWorkerSnapshot {
+        guard let worker = workers[workerID] else {
+            throw OCRWorkerRegistryError.unknownWorker
+        }
+        guard worker.registration.authenticationToken == authenticationToken else {
+            throw OCRWorkerRegistryError.authenticationFailed
+        }
+        guard worker.approved else { throw OCRWorkerRegistryError.approvalRequired }
+        guard worker.enabled else { throw OCRWorkerRegistryError.workerDisabled }
+        guard now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds else {
+            throw OCRWorkerRegistryError.workerOffline
+        }
+        if requireCapacity, worker.runningJobs >= worker.registration.maxConcurrentJobs {
+            throw OCRWorkerRegistryError.workerAtCapacity
+        }
+        return snapshot(worker, now: now)
+    }
+
+    public func hasEligibleWorker(
+        ocrLanguages: [String],
+        now: Date = Date()
+    ) -> Bool {
+        let required = Set(ocrLanguages)
+        return workers.values.contains { worker in
+            worker.approved
+                && worker.enabled
+                && now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds
+                && required.isSubset(of: Set(worker.registration.ocrLanguages))
+        }
+    }
+
     private func validate(_ request: OCRWorkerRegistrationRequest) throws {
         guard request.protocolVersion == OCRWorkerProtocol.currentVersion else {
             throw OCRWorkerRegistryError.unsupportedProtocolVersion(request.protocolVersion)
