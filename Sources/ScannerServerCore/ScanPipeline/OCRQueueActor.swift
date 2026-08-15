@@ -110,8 +110,19 @@ public struct StreamingScanRequest: Sendable {
     }
 }
 
+public struct OCRQueueWorkerCapacity: Equatable, Sendable {
+    public let remoteJobSlots: Int
+    public let internalOCREnabled: Bool
+
+    public init(remoteJobSlots: Int = 0, internalOCREnabled: Bool = true) {
+        self.remoteJobSlots = max(0, remoteJobSlots)
+        self.internalOCREnabled = internalOCREnabled
+    }
+}
+
 public actor OCRQueueActor {
     public typealias WorkspaceSuffixProvider = @Sendable () -> String
+    public typealias WorkerCapacityProvider = @Sendable () async -> OCRQueueWorkerCapacity
     public nonisolated let webUpdates: WebUpdateNotifier
 
     private struct Job: Sendable {
@@ -144,7 +155,16 @@ public actor OCRQueueActor {
         let job: Job
         let started: Date
         let reservedCPUs: Int
+        let localReservationCPUs: Int
+        let executionPreference: OCRExecutionPreference
         let task: Task<Void, Never>
+    }
+
+    private struct ScheduleCandidate: Sendable {
+        let index: Int
+        let reservedCPUs: Int
+        let localReservationCPUs: Int
+        let executionPreference: OCRExecutionPreference
     }
 
     private struct JobCompletion: Sendable {
@@ -179,6 +199,8 @@ public actor OCRQueueActor {
     private let documentExecutor: any ProcessExecutor
     private let workspaceSuffixProvider: WorkspaceSuffixProvider
     private let configuration: OCRQueueConfiguration
+    private let localCapacity: OCRLocalCapacityPool
+    private let workerCapacityProvider: WorkerCapacityProvider
     private var queue: [Job] = []
     private var activeJobs: [UUID: ActiveJob] = [:]
     private var streamingBatches: [UUID: StreamingBatch] = [:]
@@ -191,12 +213,21 @@ public actor OCRQueueActor {
         documentExecutor: (any ProcessExecutor)? = nil,
         workspaceSuffixProvider: @escaping WorkspaceSuffixProvider = { UUID().uuidString },
         configuration: OCRQueueConfiguration = OCRQueueConfiguration(),
+        localCapacity: OCRLocalCapacityPool? = nil,
+        workerCapacityProvider: @escaping WorkerCapacityProvider = {
+            OCRQueueWorkerCapacity()
+        },
         webUpdates: WebUpdateNotifier = WebUpdateNotifier()
     ) {
         self.executor = executor
         self.documentExecutor = documentExecutor ?? NativeDocumentToolExecutor(executor: executor)
         self.workspaceSuffixProvider = workspaceSuffixProvider
         self.configuration = configuration
+        self.localCapacity = localCapacity ?? OCRLocalCapacityPool(
+            capacity: configuration.cpuLimit,
+            webUpdates: webUpdates
+        )
+        self.workerCapacityProvider = workerCapacityProvider
         self.webUpdates = webUpdates
         self.queueState = OCRQueueState(
             cpuLimit: configuration.cpuLimit,
@@ -227,7 +258,7 @@ public actor OCRQueueActor {
             workerMetadata: nil,
             streamingPageNumber: nil
         ))
-        scheduleAvailableJobs()
+        await scheduleAvailableJobs()
         await publishQueueState()
     }
 
@@ -244,7 +275,7 @@ public actor OCRQueueActor {
             workerMetadata: nil,
             streamingPageNumber: nil
         ))
-        scheduleAvailableJobs()
+        await scheduleAvailableJobs()
         await publishQueueState()
     }
 
@@ -303,7 +334,7 @@ public actor OCRQueueActor {
             ),
             streamingPageNumber: page.pageNumber
         ))
-        scheduleAvailableJobs()
+        await scheduleAvailableJobs()
         await publishQueueState()
     }
 
@@ -329,7 +360,7 @@ public actor OCRQueueActor {
         if let batch = streamingBatches.removeValue(forKey: batchID) {
             try? FileManager.default.removeItem(at: batch.request.workDirectory)
         }
-        scheduleAvailableJobs()
+        await scheduleAvailableJobs()
         resumeIdleWaitersIfIdle()
         await publishQueueState()
     }
@@ -357,7 +388,7 @@ public actor OCRQueueActor {
             try? FileManager.default.removeItem(at: batch.request.workDirectory)
         }
         isCancellingAll = false
-        scheduleAvailableJobs()
+        await scheduleAvailableJobs()
         await publishQueueState()
     }
 
@@ -378,22 +409,27 @@ public actor OCRQueueActor {
         for task in matchingTasks { await task.value }
 
         if removedQueuedJob || !matchingTasks.isEmpty {
-            scheduleAvailableJobs()
+            await scheduleAvailableJobs()
             await publishQueueState()
         }
     }
 
-    private func scheduleAvailableJobs() {
-        guard !isCancellingAll else { return }
-        var availableCPUs = configuration.cpuLimit
-            - activeJobs.values.reduce(0) { $0 + $1.reservedCPUs }
+    @discardableResult
+    private func scheduleAvailableJobs() async -> Bool {
+        guard !isCancellingAll else { return false }
+        let workerCapacity = await workerCapacityProvider()
+        var startedJob = false
 
-        while let index = queue.firstIndex(where: { canSchedule($0, availableCPUs: availableCPUs) }) {
-            let job = queue[index]
-            let reservedCPUs = cpuReservation(for: job)
-            queue.remove(at: index)
-            availableCPUs -= reservedCPUs
-            start(job: job, reservedCPUs: reservedCPUs)
+        while let candidate = await nextSchedulableJob(workerCapacity: workerCapacity) {
+            let job = queue[candidate.index]
+            queue.remove(at: candidate.index)
+            start(
+                job: job,
+                reservedCPUs: candidate.reservedCPUs,
+                localReservationCPUs: candidate.localReservationCPUs,
+                executionPreference: candidate.executionPreference
+            )
+            startedJob = true
         }
 
         queueState.running = activeJobs.count
@@ -403,20 +439,38 @@ public actor OCRQueueActor {
         } else if !queue.isEmpty {
             queueState.status = "queued"
         }
+        return startedJob
     }
 
-    private func start(job: Job, reservedCPUs: Int) {
+    public func capacityDidChange() async {
+        if await scheduleAvailableJobs() {
+            await publishQueueState()
+        }
+    }
+
+    private func start(
+        job: Job,
+        reservedCPUs: Int,
+        localReservationCPUs: Int,
+        executionPreference: OCRExecutionPreference
+    ) {
         let identifier = UUID()
         let started = Date()
         let task = Task { [weak self] in
             guard let self else { return }
-            let completion = await self.run(job: job, jobs: reservedCPUs)
+            let completion = await self.run(
+                job: job,
+                jobs: reservedCPUs,
+                executionPreference: executionPreference
+            )
             await self.finish(identifier: identifier, completion: completion)
         }
         activeJobs[identifier] = ActiveJob(
             job: job,
             started: started,
             reservedCPUs: reservedCPUs,
+            localReservationCPUs: localReservationCPUs,
+            executionPreference: executionPreference,
             task: task
         )
         queueState.started = started
@@ -427,7 +481,11 @@ public actor OCRQueueActor {
         queueState.niceLevel = configuration.niceLevel(for: job.environment)
     }
 
-    private func run(job: Job, jobs: Int) async -> JobCompletion {
+    private func run(
+        job: Job,
+        jobs: Int,
+        executionPreference: OCRExecutionPreference
+    ) async -> JobCompletion {
         if let deferredProcessing = job.deferredProcessing {
             return await runDeferredProcessing(
                 job: job,
@@ -460,7 +518,12 @@ public actor OCRQueueActor {
         }
 
         do {
-            let result = try await execute(job: job, outputPath: outputPath, jobs: jobs)
+            let result = try await execute(
+                job: job,
+                outputPath: outputPath,
+                jobs: jobs,
+                executionPreference: executionPreference
+            )
             let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             return JobCompletion(
                 finished: Date(),
@@ -511,7 +574,10 @@ public actor OCRQueueActor {
         queueState.output = effectiveCompletion.output
         queueState.error = effectiveCompletion.error
         queue.append(contentsOf: effectiveCompletion.followUpJobs)
-        scheduleAvailableJobs()
+        if activeJob.localReservationCPUs > 0 {
+            await localCapacity.release(activeJob.localReservationCPUs)
+        }
+        await scheduleAvailableJobs()
         if let pageNumber = activeJob.job.streamingPageNumber,
            var batch = streamingBatches[activeJob.job.batchID],
            var page = batch.pages[pageNumber]
@@ -570,13 +636,83 @@ public actor OCRQueueActor {
         return pageMode == "single" ? 1 : cpuLimit(for: job)
     }
 
-    private func canSchedule(_ job: Job, availableCPUs: Int) -> Bool {
-        let reservation = cpuReservation(for: job)
-        guard reservation <= availableCPUs else { return false }
-        let batchUsage = activeJobs.values
-            .filter { $0.job.batchID == job.batchID }
-            .reduce(0) { $0 + $1.reservedCPUs }
-        return batchUsage + reservation <= cpuLimit(for: job)
+    private func nextSchedulableJob(
+        workerCapacity: OCRQueueWorkerCapacity
+    ) async -> ScheduleCandidate? {
+        for (index, job) in queue.enumerated() {
+            let reservedCPUs = cpuReservation(for: job)
+            if canUseDistributedCapacity(job) {
+                let activeDistributedJobs = activeJobs.values.filter {
+                    canUseDistributedCapacity($0.job)
+                }
+                let activeRemoteJobs = activeDistributedJobs.filter {
+                    $0.executionPreference == .automatic
+                }
+                let activeRemoteBatchJobs = activeRemoteJobs.filter {
+                    $0.job.batchID == job.batchID
+                }
+                if activeRemoteJobs.count < workerCapacity.remoteJobSlots,
+                   activeRemoteBatchJobs.count < workerCapacity.remoteJobSlots {
+                    return ScheduleCandidate(
+                        index: index,
+                        reservedCPUs: reservedCPUs,
+                        localReservationCPUs: 0,
+                        executionPreference: .automatic
+                    )
+                }
+
+                let localLimit = workerCapacity.internalOCREnabled ? cpuLimit(for: job) : 0
+                let activeLocalJobs = activeDistributedJobs.filter {
+                    $0.executionPreference == .localOnly
+                }
+                let activeLocalBatchJobs = activeLocalJobs.filter {
+                    $0.job.batchID == job.batchID
+                }
+                if activeLocalJobs.count < localLimit,
+                   activeLocalBatchJobs.count < localLimit {
+                    return ScheduleCandidate(
+                        index: index,
+                        reservedCPUs: reservedCPUs,
+                        localReservationCPUs: 0,
+                        executionPreference: .localOnly
+                    )
+                }
+                continue
+            }
+
+            let batchUsage = activeJobs.values
+                .filter {
+                    $0.job.batchID == job.batchID
+                        && !canUseDistributedCapacity($0.job)
+                }
+                .reduce(0) { $0 + $1.localReservationCPUs }
+            guard batchUsage + reservedCPUs <= cpuLimit(for: job),
+                  let localReservation = await localCapacity.tryAcquire(reservedCPUs) else {
+                continue
+            }
+            return ScheduleCandidate(
+                index: index,
+                reservedCPUs: reservedCPUs,
+                localReservationCPUs: localReservation,
+                executionPreference: .automatic
+            )
+        }
+        return nil
+    }
+
+    private func canUseDistributedCapacity(_ job: Job) -> Bool {
+        job.deferredProcessing == nil
+            && job.ocrEnabled
+            && (
+                job.streamingPageNumber != nil
+                    || (!job.removeBlankPages && !job.cropPages && pageMode(for: job) == "single")
+            )
+    }
+
+    private func pageMode(for job: Job) -> String? {
+        job.environment?["SCAN_PAGE_MODE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     private func cpuLimit(for job: Job) -> Int {
@@ -648,9 +784,19 @@ public actor OCRQueueActor {
             .path
     }
 
-    private func execute(job: Job, outputPath: String, jobs: Int) async throws -> ProcessResult {
+    private func execute(
+        job: Job,
+        outputPath: String,
+        jobs: Int,
+        executionPreference: OCRExecutionPreference
+    ) async throws -> ProcessResult {
         if job.streamingPageNumber != nil {
-            return try await executeStreamingPage(job: job, outputPath: outputPath, jobs: jobs)
+            return try await executeStreamingPage(
+                job: job,
+                outputPath: outputPath,
+                jobs: jobs,
+                executionPreference: executionPreference
+            )
         }
         guard job.removeBlankPages || job.cropPages else {
             guard job.ocrEnabled else {
@@ -663,7 +809,8 @@ public actor OCRQueueActor {
                 workingDirectory: job.workingDirectory,
                 jobs: jobs,
                 niceLevel: configuration.niceLevel(for: job.environment),
-                workerMetadata: workerMetadata(for: job)
+                workerMetadata: workerMetadata(for: job),
+                executionPreference: executionPreference
             ))
         }
 
@@ -712,7 +859,8 @@ public actor OCRQueueActor {
                 workingDirectory: workspace,
                 jobs: jobs,
                 niceLevel: configuration.niceLevel(for: job.environment),
-                workerMetadata: workerMetadata(for: job)
+                workerMetadata: workerMetadata(for: job),
+                executionPreference: executionPreference
             ))
         }
 
@@ -727,7 +875,8 @@ public actor OCRQueueActor {
     private func executeStreamingPage(
         job: Job,
         outputPath: String,
-        jobs: Int
+        jobs: Int,
+        executionPreference: OCRExecutionPreference
     ) async throws -> ProcessResult {
         let environment = job.environment ?? [:]
         let cropConfiguration = job.cropPages
@@ -744,7 +893,8 @@ public actor OCRQueueActor {
             jobs: jobs,
             niceLevel: configuration.niceLevel(for: job.environment),
             workerMetadata: workerMetadata(for: job),
-            workerCropConfiguration: cropConfiguration
+            workerCropConfiguration: cropConfiguration,
+            executionPreference: executionPreference
         ))
         guard result.succeeded,
               let cropConfiguration,

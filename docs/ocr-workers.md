@@ -33,6 +33,12 @@ do not need a fixed address or an inbound firewall rule.
   including when a registered worker is temporarily offline. Capability-aware workers run OCR and
   the configured autocrop on each page. Scan acquisition, document-wide blank-page policy, naming,
   ordered assembly, verification, and final publication stay on scannerserver.
+- The OCR scheduler fills the aggregate page capacity announced by all online, approved, enabled,
+  unpaused workers. When the internal worker is enabled, its local CPU allowance is added to that
+  total after remote slots are filled; pausing it removes those slower scanner-host slots without
+  reducing remote concurrency.
+  Local fallback has its own shared CPU permit pool, so a worker outage cannot start more local OCR
+  processes than the scanner host allows.
 - Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is wrapped in a
   one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR
   and cropped results are uploaded immediately, retained in the scan workspace, and assembled in

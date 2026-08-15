@@ -67,12 +67,14 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
     private enum LocalExecutionOutcome: Sendable {
         case completed(ProcessResult)
         case paused
+        case atCapacity
     }
 
     private let local: any ProcessExecutor
     private let workers: OCRWorkerRegistry
     private let jobs: OCRWorkerJobStore
     private let internalWorker: InternalOCRWorkerControl
+    private let localCapacity: OCRLocalCapacityPool
     private let configuration: DistributedOCRConfiguration
 
     public init(
@@ -80,12 +82,17 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
         workers: OCRWorkerRegistry,
         jobs: OCRWorkerJobStore,
         internalWorker: InternalOCRWorkerControl = InternalOCRWorkerControl(),
+        localCapacity: OCRLocalCapacityPool? = nil,
         configuration: DistributedOCRConfiguration
     ) {
         self.local = local
         self.workers = workers
         self.jobs = jobs
         self.internalWorker = internalWorker
+        self.localCapacity = localCapacity ?? OCRLocalCapacityPool(
+            capacity: OCRQueueConfiguration().cpuLimit,
+            webUpdates: internalWorker.webUpdates
+        )
         self.configuration = configuration
     }
 
@@ -95,9 +102,13 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             return try await local.execute(request)
         }
 
+        var localOnly = request.ocrExecutionPreference == .localOnly
+        var remoteFallbackRequired = false
         while !Task.isCancelled {
             let observedRevision = await internalWorker.webUpdates.currentRevision
-            if configuration.enabled,
+            if !localOnly,
+               !remoteFallbackRequired,
+               configuration.enabled,
                await workers.hasPreferredWorker(
                    ocrLanguages: remoteRequest.languages,
                    requiredCapabilities: remoteRequest.cropConfiguration == nil
@@ -110,7 +121,9 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
                     throw CancellationError()
                 } catch {
                     JLog.warning("Remote OCR unavailable: \(error.localizedDescription)")
+                    remoteFallbackRequired = true
                     if await internalWorker.isPaused {
+                        remoteFallbackRequired = false
                         try await Task.sleep(for: .milliseconds(250))
                         continue
                     }
@@ -118,6 +131,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             }
 
             if await internalWorker.isPaused {
+                localOnly = false
+                remoteFallbackRequired = false
                 JLog.notice("Internal OCR worker is paused; waiting for remote capacity or resume")
                 try await internalWorker.waitForDispatchChange(after: observedRevision)
                 continue
@@ -132,6 +147,12 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
                 )
                 // Recheck remote eligibility before waiting so a worker that
                 // appeared while local cancellation completed cannot be missed.
+                localOnly = false
+                remoteFallbackRequired = false
+                continue
+            case .atCapacity:
+                _ = await internalWorker.webUpdates.wait(after: observedRevision)
+                try Task.checkCancellation()
                 continue
             }
         }
@@ -143,20 +164,43 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
     ) async throws -> LocalExecutionOutcome {
         guard !(await internalWorker.isPaused) else { return .paused }
 
-        return try await withThrowingTaskGroup(of: LocalExecutionOutcome.self) { group in
-            group.addTask {
-                .completed(try await local.execute(request))
-            }
-            group.addTask {
-                try await internalWorker.waitUntilPaused()
-                return .paused
-            }
-            guard let outcome = try await group.next() else {
-                throw CancellationError()
-            }
-            group.cancelAll()
-            return outcome
+        guard let reservedCPUs = await localCapacity.tryAcquire(
+            localCPUReservation(for: request)
+        ) else {
+            return .atCapacity
         }
+
+        do {
+            let outcome = try await withThrowingTaskGroup(of: LocalExecutionOutcome.self) { group in
+                group.addTask {
+                    .completed(try await local.execute(request))
+                }
+                group.addTask {
+                    try await internalWorker.waitUntilPaused()
+                    return .paused
+                }
+                guard let outcome = try await group.next() else {
+                    throw CancellationError()
+                }
+                group.cancelAll()
+                return outcome
+            }
+            await localCapacity.release(reservedCPUs)
+            return outcome
+        } catch {
+            await localCapacity.release(reservedCPUs)
+            throw error
+        }
+    }
+
+    private func localCPUReservation(for request: ProcessRequest) -> Int {
+        guard let jobsIndex = request.arguments.firstIndex(of: "--jobs"),
+              request.arguments.indices.contains(jobsIndex + 1),
+              let jobs = Int(request.arguments[jobsIndex + 1]),
+              jobs > 0 else {
+            return 1
+        }
+        return jobs
     }
 
     private func executeRemotely(_ request: RemoteRequest) async throws -> ProcessResult {

@@ -273,16 +273,33 @@ public struct ScannerServerDependencies: Sendable {
             self.ocrQueue = ocrQueue
         } else {
             let processExecutor = FoundationProcessExecutor()
+            let queueConfiguration = OCRQueueConfiguration(environment: environment)
+            let distributedConfiguration = DistributedOCRConfiguration(environment: environment)
+            let localCapacity = OCRLocalCapacityPool(
+                capacity: queueConfiguration.cpuLimit,
+                webUpdates: webUpdates
+            )
             self.ocrQueue = OCRQueueActor(
                 executor: DistributedOCRProcessExecutor(
                     local: processExecutor,
                     workers: ocrWorkerRegistry,
                     jobs: ocrWorkerJobs,
                     internalWorker: internalOCRWorker,
-                    configuration: DistributedOCRConfiguration(environment: environment)
+                    localCapacity: localCapacity,
+                    configuration: distributedConfiguration
                 ),
                 documentExecutor: NativeDocumentToolExecutor(executor: processExecutor),
-                configuration: OCRQueueConfiguration(environment: environment),
+                configuration: queueConfiguration,
+                localCapacity: localCapacity,
+                workerCapacityProvider: {
+                    let remoteJobSlots = distributedConfiguration.enabled
+                        ? await ocrWorkerRegistry.availableJobCapacity()
+                        : 0
+                    return OCRQueueWorkerCapacity(
+                        remoteJobSlots: remoteJobSlots,
+                        internalOCREnabled: !(await internalOCRWorker.isPaused)
+                    )
+                },
                 webUpdates: webUpdates
             )
         }
@@ -321,17 +338,34 @@ public struct ScannerServerDependencies: Sendable {
             fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
         )
         let ocrWorkerResultValidator = QPDFOCRWorkerResultValidator(executor: processExecutor)
+        let queueConfiguration = OCRQueueConfiguration(environment: environment)
+        let distributedConfiguration = DistributedOCRConfiguration(environment: environment)
+        let localCapacity = OCRLocalCapacityPool(
+            capacity: queueConfiguration.cpuLimit,
+            webUpdates: webUpdates
+        )
         let distributedOCRExecutor = DistributedOCRProcessExecutor(
             local: processExecutor,
             workers: ocrWorkerRegistry,
             jobs: ocrWorkerJobs,
             internalWorker: internalOCRWorker,
-            configuration: DistributedOCRConfiguration(environment: environment)
+            localCapacity: localCapacity,
+            configuration: distributedConfiguration
         )
         let ocrQueue = OCRQueueActor(
             executor: distributedOCRExecutor,
             documentExecutor: documentExecutor,
-            configuration: OCRQueueConfiguration(environment: environment),
+            configuration: queueConfiguration,
+            localCapacity: localCapacity,
+            workerCapacityProvider: {
+                let remoteJobSlots = distributedConfiguration.enabled
+                    ? await ocrWorkerRegistry.availableJobCapacity()
+                    : 0
+                return OCRQueueWorkerCapacity(
+                    remoteJobSlots: remoteJobSlots,
+                    internalOCREnabled: !(await internalOCRWorker.isPaused)
+                )
+            },
             webUpdates: webUpdates
         )
         let settingsStore = ScanSettingsStore(environment: environment)
@@ -493,10 +527,12 @@ public enum ScannerServerApplication {
         }
         router.post("/internal-worker/pause") { _, _ -> Response in
             try? await dependencies.internalOCRWorker.setPaused(true)
+            await dependencies.ocrQueue.capacityDidChange()
             return .redirect(to: "/workers")
         }
         router.post("/internal-worker/resume") { _, _ -> Response in
             try? await dependencies.internalOCRWorker.setPaused(false)
+            await dependencies.ocrQueue.capacityDidChange()
             return .redirect(to: "/workers")
         }
 
@@ -510,7 +546,9 @@ public enum ScannerServerApplication {
                     request: request,
                     context: context
                 )
-                return jsonResponse(try await dependencies.ocrWorkerRegistry.register(registration))
+                let response = try await dependencies.ocrWorkerRegistry.register(registration)
+                await dependencies.ocrQueue.capacityDidChange()
+                return jsonResponse(response)
             } catch {
                 return workerAPIErrorResponse(error)
             }
@@ -525,10 +563,12 @@ public enum ScannerServerApplication {
                     request: request,
                     context: context
                 )
-                return jsonResponse(try await dependencies.ocrWorkerRegistry.heartbeat(
+                let response = try await dependencies.ocrWorkerRegistry.heartbeat(
                     workerID: workerID,
                     request: heartbeat
-                ))
+                )
+                await dependencies.ocrQueue.capacityDidChange()
+                return jsonResponse(response)
             } catch {
                 return workerAPIErrorResponse(error)
             }
@@ -731,18 +771,21 @@ public enum ScannerServerApplication {
         router.post("/workers/:id/approve") { _, context -> Response in
             if let workerID = workerID(context: context) {
                 _ = try? await dependencies.ocrWorkerRegistry.approve(workerID: workerID)
+                await dependencies.ocrQueue.capacityDidChange()
             }
             return .redirect(to: "/workers")
         }
         router.post("/workers/:id/enable") { _, context -> Response in
             if let workerID = workerID(context: context) {
                 _ = try? await dependencies.ocrWorkerRegistry.setEnabled(true, workerID: workerID)
+                await dependencies.ocrQueue.capacityDidChange()
             }
             return .redirect(to: "/workers")
         }
         router.post("/workers/:id/disable") { _, context -> Response in
             if let workerID = workerID(context: context) {
                 _ = try? await dependencies.ocrWorkerRegistry.setEnabled(false, workerID: workerID)
+                await dependencies.ocrQueue.capacityDidChange()
             }
             return .redirect(to: "/workers")
         }
@@ -751,18 +794,21 @@ public enum ScannerServerApplication {
                (try? await dependencies.ocrWorkerRegistry.setPaused(true, workerID: workerID)) != nil {
                 _ = try? await dependencies.ocrWorkerJobs.requeueLeases(workerID: workerID)
                 await dependencies.webUpdates.notify()
+                await dependencies.ocrQueue.capacityDidChange()
             }
             return .redirect(to: "/workers")
         }
         router.post("/workers/:id/resume") { _, context -> Response in
             if let workerID = workerID(context: context) {
                 _ = try? await dependencies.ocrWorkerRegistry.setPaused(false, workerID: workerID)
+                await dependencies.ocrQueue.capacityDidChange()
             }
             return .redirect(to: "/workers")
         }
         router.post("/workers/:id/delete") { _, context -> Response in
             if let workerID = workerID(context: context) {
                 _ = try? await dependencies.ocrWorkerRegistry.remove(workerID: workerID)
+                await dependencies.ocrQueue.capacityDidChange()
             }
             return .redirect(to: "/workers")
         }

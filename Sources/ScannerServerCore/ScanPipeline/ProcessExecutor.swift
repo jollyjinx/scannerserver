@@ -6,6 +6,11 @@ import Darwin
 import Glibc
 #endif
 
+public enum OCRExecutionPreference: Equatable, Sendable {
+    case automatic
+    case localOnly
+}
+
 public struct ProcessRequest: Equatable, Sendable {
     public let executable: String
     public let arguments: [String]
@@ -15,6 +20,7 @@ public struct ProcessRequest: Equatable, Sendable {
     public let niceLevel: Int?
     public let ocrWorkerMetadata: OCRWorkerJobMetadata?
     public let ocrWorkerCropConfiguration: OCRWorkerCropConfiguration?
+    public let ocrExecutionPreference: OCRExecutionPreference
 
     public init(
         executable: String,
@@ -24,7 +30,8 @@ public struct ProcessRequest: Equatable, Sendable {
         timeoutMilliseconds: UInt64? = nil,
         niceLevel: Int? = nil,
         ocrWorkerMetadata: OCRWorkerJobMetadata? = nil,
-        ocrWorkerCropConfiguration: OCRWorkerCropConfiguration? = nil
+        ocrWorkerCropConfiguration: OCRWorkerCropConfiguration? = nil,
+        ocrExecutionPreference: OCRExecutionPreference = .automatic
     ) {
         self.executable = executable
         self.arguments = arguments
@@ -34,6 +41,7 @@ public struct ProcessRequest: Equatable, Sendable {
         self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
         self.ocrWorkerMetadata = ocrWorkerMetadata
         self.ocrWorkerCropConfiguration = ocrWorkerCropConfiguration
+        self.ocrExecutionPreference = ocrExecutionPreference
     }
 
     func applyingNiceLevel(_ niceLevel: Int) -> ProcessRequest {
@@ -45,7 +53,8 @@ public struct ProcessRequest: Equatable, Sendable {
             timeoutMilliseconds: timeoutMilliseconds,
             niceLevel: niceLevel,
             ocrWorkerMetadata: ocrWorkerMetadata,
-            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration
+            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration,
+            ocrExecutionPreference: ocrExecutionPreference
         )
     }
 
@@ -58,7 +67,8 @@ public struct ProcessRequest: Equatable, Sendable {
             workingDirectory: workingDirectory,
             timeoutMilliseconds: timeoutMilliseconds,
             ocrWorkerMetadata: ocrWorkerMetadata,
-            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration
+            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration,
+            ocrExecutionPreference: ocrExecutionPreference
         )
     }
 }

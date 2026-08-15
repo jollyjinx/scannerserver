@@ -240,6 +240,19 @@ public actor OCRWorkerRegistry {
         }
     }
 
+    /// Total one-page job slots announced by workers that can accept work now.
+    public func availableJobCapacity(now: Date = Date()) -> Int {
+        workers.values.reduce(into: 0) { capacity, worker in
+            guard worker.approved,
+                  worker.enabled,
+                  worker.paused != true,
+                  now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds else {
+                return
+            }
+            capacity += worker.registration.maxConcurrentJobs
+        }
+    }
+
     private func validate(_ request: OCRWorkerRegistrationRequest) throws {
         guard request.protocolVersion == OCRWorkerProtocol.currentVersion else {
             throw OCRWorkerRegistryError.unsupportedProtocolVersion(request.protocolVersion)

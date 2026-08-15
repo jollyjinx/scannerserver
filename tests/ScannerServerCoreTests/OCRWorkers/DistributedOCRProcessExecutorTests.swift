@@ -134,6 +134,74 @@ struct DistributedOCRProcessExecutorTests {
         #expect(await local.requests == [request])
     }
 
+    @Test("Scheduler-assigned internal slots run locally while remote workers are online")
+    func schedulerAssignedLocalExecution() async throws {
+        let registry = OCRWorkerRegistry()
+        let registration = distributedTestRegistration()
+        _ = try await registry.register(registration)
+        _ = try await registry.approve(workerID: registration.workerID)
+        let jobs = OCRWorkerJobStore()
+        let localResult = ProcessResult(exitStatus: 0, standardOutput: "local\n")
+        let local = DistributedTestExecutor(result: localResult)
+        let executor = DistributedOCRProcessExecutor(
+            local: local,
+            workers: registry,
+            jobs: jobs,
+            configuration: DistributedOCRConfiguration()
+        )
+        let request = ScanPipelineCommands.ocr(
+            inputPath: "/scans/input.pdf",
+            outputPath: "/scans/input.ocr.pdf",
+            executionPreference: .localOnly
+        )
+
+        let result = try await executor.execute(request)
+
+        #expect(result == localResult)
+        #expect(await local.requests == [request])
+        #expect(await jobs.snapshots().isEmpty)
+    }
+
+    @Test("Concurrent local fallback cannot exceed the scanner host CPU pool")
+    func boundedLocalFallback() async throws {
+        let webUpdates = WebUpdateNotifier()
+        let internalWorker = InternalOCRWorkerControl(webUpdates: webUpdates)
+        let local = CancellableDistributedTestExecutor()
+        let executor = DistributedOCRProcessExecutor(
+            local: local,
+            workers: OCRWorkerRegistry(webUpdates: webUpdates),
+            jobs: OCRWorkerJobStore(),
+            internalWorker: internalWorker,
+            localCapacity: OCRLocalCapacityPool(capacity: 1, webUpdates: webUpdates),
+            configuration: DistributedOCRConfiguration()
+        )
+        let firstRequest = ScanPipelineCommands.ocr(
+            inputPath: "/scans/first.pdf",
+            outputPath: "/scans/first.ocr.pdf",
+            jobs: 1
+        )
+        let secondRequest = ScanPipelineCommands.ocr(
+            inputPath: "/scans/second.pdf",
+            outputPath: "/scans/second.ocr.pdf",
+            jobs: 1
+        )
+
+        let first = Task { try await executor.execute(firstRequest) }
+        for _ in 0..<100 {
+            if await local.requestCount == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let second = Task { try await executor.execute(secondRequest) }
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(await local.requestCount == 1)
+
+        first.cancel()
+        second.cancel()
+        _ = await first.result
+        _ = await second.result
+    }
+
     @Test("Pausing active internal OCR cancels local fallback and lets a remote worker take over")
     func pausedInternalWorkerAllowsRemoteTakeover() async throws {
         let root = FileManager.default.temporaryDirectory

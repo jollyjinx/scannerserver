@@ -21,6 +21,7 @@ struct OCRWorkerRegistryTests {
             ocrLanguages: ["eng"],
             requiredCapabilities: [OCRWorkerCapability.cropPDFPages]
         ))
+        #expect(await registry.availableJobCapacity(now: start) == 2)
 
         let busy = try await registry.heartbeat(
             workerID: registration.workerID,
@@ -31,6 +32,7 @@ struct OCRWorkerRegistryTests {
             now: start.addingTimeInterval(5)
         )
         #expect(busy.availability == .busy)
+        #expect(await registry.availableJobCapacity(now: start.addingTimeInterval(5)) == 2)
 
         let paused = try await registry.setPaused(
             true,
@@ -39,6 +41,7 @@ struct OCRWorkerRegistryTests {
         )
         #expect(paused.availability == .paused)
         #expect(paused.paused)
+        #expect(await registry.availableJobCapacity(now: start.addingTimeInterval(5)) == 0)
         #expect(await registry.hasPreferredWorker(ocrLanguages: ["eng"]) == false)
         await #expect(throws: OCRWorkerRegistryError.workerPaused) {
             _ = try await registry.authorizeJobRequest(
@@ -59,6 +62,7 @@ struct OCRWorkerRegistryTests {
             now: start.addingTimeInterval(6)
         )
         #expect(disabled.availability == .disabled)
+        #expect(await registry.availableJobCapacity(now: start.addingTimeInterval(6)) == 0)
 
         _ = try await registry.setEnabled(
             true,
@@ -67,6 +71,7 @@ struct OCRWorkerRegistryTests {
         )
         let offline = await registry.snapshots(now: start.addingTimeInterval(30))
         #expect(offline.first?.availability == .offline)
+        #expect(await registry.availableJobCapacity(now: start.addingTimeInterval(30)) == 0)
     }
 
     @Test("A worker ID cannot be taken over with a different token")

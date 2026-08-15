@@ -775,6 +775,45 @@ struct OCRQueueActorTests {
         #expect(await queue.state.queued == 0)
     }
 
+    @Test("Remote worker slots are added to the optional internal OCR capacity")
+    func aggregateWorkerConcurrency() async {
+        let executor = FakeProcessExecutor(stubs: Array(
+            repeating: .suspended(ProcessResult(exitStatus: 0)),
+            count: 18
+        ))
+        let capacity = TestWorkerCapacityProvider(
+            OCRQueueWorkerCapacity(remoteJobSlots: 14, internalOCREnabled: false)
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 3),
+            workerCapacityProvider: { await capacity.value }
+        )
+        let environment = ["SCAN_PAGE_MODE": "single"]
+
+        for page in 1...18 {
+            await queue.enqueue("/scans/page-\(page).pdf", environment: environment)
+        }
+        await executor.waitForRequestCount(14)
+
+        #expect(await queue.state.running == 14)
+        #expect(await queue.state.queued == 4)
+
+        await capacity.set(
+            OCRQueueWorkerCapacity(remoteJobSlots: 14, internalOCREnabled: true)
+        )
+        await queue.capacityDidChange()
+        await executor.waitForRequestCount(17)
+
+        #expect(await queue.state.running == 17)
+        #expect(await queue.state.queued == 1)
+        let requests = await executor.requests()
+        #expect(requests.filter { $0.ocrExecutionPreference == .automatic }.count == 14)
+        #expect(requests.filter { $0.ocrExecutionPreference == .localOnly }.count == 3)
+
+        await queue.cancelAll()
+    }
+
     @Test("A saved CPU limit controls multipage OCRmyPDF workers")
     func multipageCPULimit() async {
         let executor = FakeProcessExecutor(stubs: [
@@ -874,6 +913,18 @@ struct OCRQueueActorTests {
 }
 
 private let serialOCRConfiguration = OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
+
+private actor TestWorkerCapacityProvider {
+    private(set) var value: OCRQueueWorkerCapacity
+
+    init(_ value: OCRQueueWorkerCapacity) {
+        self.value = value
+    }
+
+    func set(_ value: OCRQueueWorkerCapacity) {
+        self.value = value
+    }
+}
 
 private func ocrArguments(
     input: String,

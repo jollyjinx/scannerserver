@@ -67,7 +67,12 @@ persisted stores, reachability, and physical-button session state.
   one detected processor for acquisition and HTTP work. Deferred single-page PDF and PNG jobs keep
   global blank removal and crop semantics before publishing their final files, then schedule
   per-file OCR. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
-  single-page OCR are bounded concurrently. When reduced priority is enabled, the queue applies the
+  single-page OCR are bounded concurrently. Remote-capable OCR admission uses the sum of every
+  online approved worker's advertised concurrent page slots plus the internal OCR capacity when it
+  is unpaused. Remote slots are assigned first and any added internal slots are explicitly kept
+  local, avoiding remote queueing while scanner-host CPUs sit idle. A shared weighted local-capacity
+  pool separately gates queue-owned processing and distributed OCR fallback, so losing remote
+  workers cannot oversubscribe the scanner host. When reduced priority is enabled, the queue applies the
   configured nice level to every external document-processing subprocess; the service and scanner
   acquisition remain at normal priority. The queue exposes aggregate running/queued state, targeted
   cancellation, and recent jobs.
