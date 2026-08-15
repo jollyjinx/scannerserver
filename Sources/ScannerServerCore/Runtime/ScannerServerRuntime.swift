@@ -37,6 +37,17 @@ public actor ScannerServerRuntime {
     }
 
     public func run(configuration: ScannerServerServiceConfiguration) async throws {
+        do {
+            let cancelledJobs = try await dependencies.ocrWorkerJobs.cancelNonterminalJobs()
+            if cancelledJobs > 0 {
+                JLog.warning(
+                    "Cancelled \(cancelledJobs) orphaned remote OCR job(s) left by the previous server process"
+                )
+                await dependencies.webUpdates.notify()
+            }
+        } catch {
+            JLog.warning("Could not cancel orphaned remote OCR jobs: \(error.localizedDescription)")
+        }
         let application = try ScannerServerApplication.make(
             configuration: configuration,
             dependencies: dependencies

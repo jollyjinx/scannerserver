@@ -393,9 +393,18 @@ public actor OCRQueueActor {
     }
 
     public func cancelJobs(referencing path: String) async {
-        let removedJobs = queue.filter { jobReferencesPath($0.inputPath, path: path) }
+        let matchingBatchIDs = Set(streamingBatches.compactMap { batchID, batch in
+            streamingBatch(batch, references: path) ? batchID : nil
+        })
+        let removedJobs = queue.filter {
+            matchingBatchIDs.contains($0.batchID)
+                || jobReferencesPath($0.inputPath, path: path)
+        }
         let queuedCount = queue.count
-        queue.removeAll { jobReferencesPath($0.inputPath, path: path) }
+        queue.removeAll {
+            matchingBatchIDs.contains($0.batchID)
+                || jobReferencesPath($0.inputPath, path: path)
+        }
         for job in removedJobs {
             job.deferredProcessing?.removeCleanupDirectoryIfValid()
         }
@@ -403,13 +412,23 @@ public actor OCRQueueActor {
         queueState.queued = queue.count
 
         let matchingTasks = activeJobs.values
-            .filter { jobReferencesPath($0.job.inputPath, path: path) }
+            .filter {
+                matchingBatchIDs.contains($0.job.batchID)
+                    || jobReferencesPath($0.job.inputPath, path: path)
+            }
             .map(\.task)
+        let removedBatches = matchingBatchIDs.compactMap {
+            streamingBatches.removeValue(forKey: $0)
+        }
         for task in matchingTasks { task.cancel() }
         for task in matchingTasks { await task.value }
+        for batch in removedBatches {
+            try? FileManager.default.removeItem(at: batch.request.workDirectory)
+        }
 
-        if removedQueuedJob || !matchingTasks.isEmpty {
+        if removedQueuedJob || !matchingTasks.isEmpty || !removedBatches.isEmpty {
             await scheduleAvailableJobs()
+            resumeIdleWaitersIfIdle()
             await publishQueueState()
         }
     }
@@ -775,6 +794,18 @@ public actor OCRQueueActor {
             return true
         }
         return OCRInputPath.outputPath(for: inputPath).map(standardizedPath) == candidate
+    }
+
+    private func streamingBatch(_ batch: StreamingBatch, references path: String) -> Bool {
+        let candidate = standardizedPath(path)
+        if standardizedPath(batch.request.finalOutputPath) == candidate {
+            return true
+        }
+        if OCRInputPath.outputPath(for: path).map(standardizedPath)
+            == standardizedPath(batch.request.finalOutputPath) {
+            return true
+        }
+        return batch.request.documentName == URL(fileURLWithPath: candidate).lastPathComponent
     }
 
     private func standardizedPath(_ path: String) -> String {

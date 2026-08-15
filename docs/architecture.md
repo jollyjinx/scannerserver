@@ -90,9 +90,12 @@ persisted stores, reachability, and physical-button session state.
   snapshots.
 - `OCRWorkerJobStore` owns atomically persisted remote-job manifests and FIFO lease transitions,
   including capability filtering, renewal, authenticated completion, cancellation, and recovery of
-  expired leases. Authenticated HTTP routes lease jobs and transfer digest-verified PDFs. Optional
-  manifest metadata identifies the user-facing document, streaming batch, page number, and requested
-  operations without breaking persisted jobs from the original protocol shape.
+  expired leases. Server startup cancels nonterminal manifests because their owning in-memory queue
+  tasks cannot survive a process restart, and document deletion cancels manifests by their
+  user-facing document metadata as well as direct paths. Authenticated HTTP routes lease jobs and
+  transfer digest-verified PDFs. Optional manifest metadata identifies the user-facing document,
+  streaming batch, page number, and requested operations without breaking persisted jobs from the
+  original protocol shape.
 - `DistributedOCRProcessExecutor` wraps the `ocrmypdf` process boundary and carries an optional
   typed per-page crop configuration. Approved, enabled, language- and capability-compatible worker
   registrations get first refusal even across a temporary heartbeat outage; assignment timeout or
@@ -107,8 +110,10 @@ persisted stores, reachability, and physical-button session state.
   native macOS executable. Both modes isolate each job in its own workspace and use the worker
   CPU count as page capacity: each concurrent one-page job receives one CPU and OCRmyPDF `--jobs 1`.
   An optional worker-side concurrency cap can deliberately leave capacity unused for memory or
-  thermal limits. The server verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before
-  reporting OCR completion.
+  thermal limits. Each worker has one long-polling lease dispatcher, which fills that capacity with
+  structured child tasks, while registration and heartbeats use an independent HTTP session so
+  pending lease requests cannot starve liveness. The server verifies results with SHA-256 and
+  `qpdf --check`, then atomically publishes them before reporting OCR completion.
 - The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
   It always exposes the internal fallback worker, current waiting/running work, compact terminal
   history, and successful pages-per-minute measurements without exposing authentication or lease

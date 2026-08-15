@@ -231,6 +231,18 @@ public actor OCRWorkerJobStore {
     }
 
     @discardableResult
+    public func cancelJobs(referencing path: String, now: Date = Date()) throws -> Int {
+        try cancelJobs(now: now) { job in
+            self.job(job, references: path)
+        }
+    }
+
+    @discardableResult
+    public func cancelNonterminalJobs(now: Date = Date()) throws -> Int {
+        try cancelJobs(now: now) { _ in true }
+    }
+
+    @discardableResult
     public func requeueExpiredLeases(now: Date = Date()) throws -> Int {
         let count = requeueExpiredLeasesWithoutPersisting(now: now)
         if count > 0 { try persist() }
@@ -265,6 +277,48 @@ public actor OCRWorkerJobStore {
         jobs.values.count { job in
             job.status == .leased && job.lease?.workerID == workerID
         }
+    }
+
+    private func cancelJobs(
+        now: Date,
+        matching predicate: (StoredJob) -> Bool
+    ) throws -> Int {
+        var count = 0
+        for jobID in jobs.keys {
+            guard var job = jobs[jobID],
+                  job.status == .queued || job.status == .leased,
+                  predicate(job) else {
+                continue
+            }
+            job.status = .cancelled
+            job.lease = nil
+            job.updatedAt = now
+            jobs[jobID] = job
+            count += 1
+        }
+        if count > 0 { try persist() }
+        return count
+    }
+
+    private func job(_ job: StoredJob, references path: String) -> Bool {
+        let candidate = standardizedPath(path)
+        if standardizedPath(job.manifest.sourcePath) == candidate
+            || standardizedPath(job.manifest.outputPath) == candidate {
+            return true
+        }
+
+        guard let documentName = job.manifest.metadata?.documentName else { return false }
+        let candidateName = URL(fileURLWithPath: candidate).lastPathComponent
+        if documentName == candidateName { return true }
+        guard candidateName.lowercased().hasSuffix(".ocr.pdf") else { return false }
+        return documentName == String(candidateName.dropLast(".ocr.pdf".count)) + ".pdf"
+    }
+
+    private func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: false)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
     }
 
     public func snapshot(jobID: String) throws -> OCRWorkerJobSnapshot {

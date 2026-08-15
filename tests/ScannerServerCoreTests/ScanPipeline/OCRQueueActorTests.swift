@@ -153,6 +153,55 @@ struct OCRQueueActorTests {
         #expect(try Data(contentsOf: final) == pdf)
     }
 
+    @Test("Deleting a raw document cancels its active and queued streaming pages")
+    func deletingStreamingDocument() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-delete-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let raw = root.appendingPathComponent("2026-08-15.210920.pdf")
+        let final = root.appendingPathComponent("2026-08-15.210920.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let executor = FakeProcessExecutor(stubs: [
+            .suspended(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: raw.lastPathComponent,
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: ["SCAN_LANGUAGE": "deu+eng"],
+            removeBlankPages: false,
+            cropPages: false
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        await executor.waitForRequestCount(1)
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 2, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 2)
+
+        await queue.cancelJobs(referencing: raw.path)
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().count == 1)
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+        #expect(!FileManager.default.fileExists(atPath: final.path))
+        #expect(await queue.state.status == "cancelled")
+        #expect(await queue.state.queued == 0)
+        #expect(await queue.state.running == 0)
+    }
+
     @Test("Multipage jobs execute in FIFO order within one CPU budget")
     func fifo() async {
         let executor = FakeProcessExecutor(stubs: [

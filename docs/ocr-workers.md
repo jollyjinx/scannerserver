@@ -28,7 +28,9 @@ do not need a fixed address or an inbound firewall rule.
   `/scans/.scannerserver-ocr-workers.json` by default.
 - `OCRWorkerJobStore` provides an atomically persisted manifest and lease state machine at
   `/scans/.scannerserver-ocr-jobs.json`. It supports FIFO capability matching, opaque lease tokens,
-  renewal, authenticated terminal transitions, cancellation, and restart-safe lease expiry.
+  renewal, authenticated terminal transitions, and cancellation. Nonterminal manifests are
+  cancelled at scannerserver startup because their owning in-memory queue tasks do not survive a
+  restart; this prevents abandoned pages from being leased again.
 - `OCRQueueActor` gives approved, enabled, compatible workers first refusal on streaming OCR jobs,
   including when a registered worker is temporarily offline. Capability-aware workers run OCR and
   the configured autocrop on each page. Scan acquisition, document-wide blank-page policy, naming,
@@ -55,6 +57,9 @@ do not need a fixed address or an inbound firewall rule.
   `.ocr.pdf` output name.
 - No approved and enabled compatible worker, assignment timeout, or reported worker failure falls
   back to local OCR and local per-page autocrop. Cancellation invalidates the remote lease.
+- A worker uses one long-polling lease request at a time and starts page-processing tasks until its
+  announced capacity is full. Registration and heartbeats use a separate HTTP session, so many CPU
+  slots cannot occupy every connection and make a healthy worker appear stale.
 
 ## Run A Worker Container
 
@@ -105,6 +110,10 @@ again. This state survives a scannerserver restart.
 
 Deleting a worker removes its persisted registration and approval. If that worker process is still
 running, it registers again with the same identity and must be approved again.
+
+Deleting a document cancels its whole streaming batch, removes queued pages, invalidates active
+remote leases, and removes the private scan workspace. A late result from a worker is rejected and
+cannot recreate the deleted document.
 
 ## Native macOS Worker
 

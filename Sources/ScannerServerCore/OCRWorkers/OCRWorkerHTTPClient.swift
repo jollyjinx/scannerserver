@@ -24,7 +24,14 @@ public struct OCRWorkerHTTPClient: Sendable {
     public let serverURL: URL
     private let session: URLSession
 
-    public init(serverURL: URL, session: URLSession = .shared) throws {
+    public init(serverURL: URL) throws {
+        try self.init(
+            serverURL: serverURL,
+            session: URLSession(configuration: .default)
+        )
+    }
+
+    public init(serverURL: URL, session: URLSession) throws {
         guard ["http", "https"].contains(serverURL.scheme?.lowercased()),
               serverURL.host != nil else {
             throw OCRWorkerHTTPClientError.invalidServerURL

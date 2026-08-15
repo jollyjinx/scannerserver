@@ -146,6 +146,32 @@ struct OCRWorkerJobStoreTests {
         #expect(try await store.leaseNext(workerID: "worker", ocrLanguages: ["eng"]) == nil)
     }
 
+    @Test("Document deletion cancels private streaming page manifests by metadata")
+    func documentCancellation() async throws {
+        let store = OCRWorkerJobStore(leaseTokenProvider: { "token" })
+        _ = try await store.enqueue(testManifest(
+            sourcePath: "/scans/.scan-work.1/page-0001.pdf",
+            outputPath: "/scans/.scan-work.1/page-0001.ocr.pdf",
+            metadata: OCRWorkerJobMetadata(
+                documentName: "2026-08-15.210920.pdf",
+                pageNumber: 1
+            )
+        ))
+        _ = try await store.enqueue(testManifest(
+            jobID: "unrelated",
+            sourcePath: "/scans/.scan-work.2/page-0001.pdf",
+            outputPath: "/scans/.scan-work.2/page-0001.ocr.pdf",
+            metadata: OCRWorkerJobMetadata(documentName: "2026-08-15.211000.pdf")
+        ))
+        _ = try await store.leaseNext(workerID: "worker", ocrLanguages: ["eng"])
+
+        #expect(try await store.cancelJobs(
+            referencing: "/scans/2026-08-15.210920.pdf"
+        ) == 1)
+        #expect(try await store.snapshot(jobID: "job-1").status == .cancelled)
+        #expect(try await store.snapshot(jobID: "unrelated").status == .queued)
+    }
+
     @Test("Pausing a worker returns only its leases to the queue and rejects stale tokens")
     func workerLeaseRequeue() async throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
@@ -276,24 +302,55 @@ struct OCRWorkerJobStoreTests {
         let secondReload = OCRWorkerJobStore(fileURL: fileURL)
         #expect(try await secondReload.snapshot(jobID: "job-1").leasedWorkerID == "worker-2")
     }
+
+    @Test("Startup recovery cancels persisted jobs that have no in-memory owner")
+    func startupRecovery() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = root.appendingPathComponent("jobs.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let first = OCRWorkerJobStore(
+            fileURL: fileURL,
+            leaseTokenProvider: { "lease-token" }
+        )
+        _ = try await first.enqueue(testManifest(jobID: "leased"))
+        _ = try await first.leaseNext(workerID: "worker", ocrLanguages: ["eng"])
+        _ = try await first.enqueue(testManifest(jobID: "queued"))
+
+        let reloaded = OCRWorkerJobStore(fileURL: fileURL)
+        #expect(try await reloaded.cancelNonterminalJobs() == 2)
+
+        let persisted = OCRWorkerJobStore(fileURL: fileURL)
+        #expect(try await persisted.snapshot(jobID: "leased").status == .cancelled)
+        #expect(try await persisted.snapshot(jobID: "queued").status == .cancelled)
+        #expect(try await persisted.leaseNext(
+            workerID: "other-worker",
+            ocrLanguages: ["eng"]
+        ) == nil)
+    }
 }
 
 private func testManifest(
     jobID: String = "job-1",
     languages: [String] = ["eng"],
     cropPages: Bool = false,
+    sourcePath: String = "/scans/input.pdf",
+    outputPath: String = "/scans/input.ocr.pdf",
+    metadata: OCRWorkerJobMetadata? = nil,
     createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
 ) -> OCRWorkerJobManifest {
     OCRWorkerJobManifest(
         jobID: jobID,
-        sourcePath: "/scans/input.pdf",
-        outputPath: "/scans/input.ocr.pdf",
+        sourcePath: sourcePath,
+        outputPath: outputPath,
         sourceByteCount: 1_024,
         sourceSHA256: String(repeating: "a", count: 64),
         ocrLanguages: languages,
         ocrEnabled: true,
         removeBlankPages: false,
         cropPages: cropPages,
+        metadata: metadata,
         createdAt: createdAt
     )
 }

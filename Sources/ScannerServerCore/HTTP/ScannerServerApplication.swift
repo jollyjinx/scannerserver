@@ -1107,6 +1107,9 @@ private func fileResponse(
 private func deleteFile(name: String, dependencies: ScannerServerDependencies) async {
     guard let fileURL = try? dependencies.outputPathResolver.resolve(name) else { return }
     await dependencies.ocrQueue.cancelJobs(referencing: fileURL.path)
+    if (try? await dependencies.ocrWorkerJobs.cancelJobs(referencing: fileURL.path)) ?? 0 > 0 {
+        await dependencies.webUpdates.notify()
+    }
     let previewURL = dependencies.outputPathResolver.outputDirectory
         .appendingPathComponent(PreviewOutputName.directoryName, isDirectory: true)
         .appendingPathComponent("\(fileURL.lastPathComponent).jpg")

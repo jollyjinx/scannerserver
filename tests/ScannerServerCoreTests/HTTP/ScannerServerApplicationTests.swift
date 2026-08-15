@@ -850,6 +850,23 @@ struct ScannerServerApplicationTests {
         let fileName = "2026-07-10.120000.pdf"
         let contents = Data("pdf bytes".utf8)
         try contents.write(to: fixture.outputDirectory.appendingPathComponent(fileName))
+        _ = try await fixture.ocrWorkerJobs.enqueue(OCRWorkerJobManifest(
+            sourcePath: fixture.outputDirectory
+                .appendingPathComponent(".scan-work.test/page-0001.pdf").path,
+            outputPath: fixture.outputDirectory
+                .appendingPathComponent(".scan-work.test/page-0001.ocr.pdf").path,
+            sourceByteCount: 1_024,
+            sourceSHA256: String(repeating: "a", count: 64),
+            ocrLanguages: ["eng"],
+            ocrEnabled: true,
+            removeBlankPages: false,
+            cropPages: false,
+            metadata: OCRWorkerJobMetadata(documentName: fileName)
+        ))
+        _ = try await fixture.ocrWorkerJobs.leaseNext(
+            workerID: "worker",
+            ocrLanguages: ["eng"]
+        )
         try Data("outside".utf8).write(to: fixture.outputDirectory.deletingLastPathComponent().appendingPathComponent("outside.pdf"))
         let application = try fixture.application()
 
@@ -878,6 +895,7 @@ struct ScannerServerApplicationTests {
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.outputDirectory.appendingPathComponent(fileName).path))
         #expect(!FileManager.default.fileExists(atPath: fixture.outputDirectory.appendingPathComponent(".previews/\(fileName).jpg").path))
+        #expect(await fixture.ocrWorkerJobs.snapshots().first?.status == .cancelled)
     }
 
     @Test("Bulk delete accepts repeated browser form fields")
