@@ -142,13 +142,18 @@ The queue treats the resulting value as one shared CPU budget:
   shared budget; operations within each page remain ordered.
 - Streaming ScanSnap pages can move OCR and autocrop to capability-compatible remote workers. Local
   fallback consumes the scanner host's shared budget with the same per-page order and settings.
-
 - A multipage PDF reserves the full budget and passes it to OCRmyPDF with `--jobs` so its pages
   are processed in parallel.
 - Single-page PDF mode starts one OCRmyPDF process per page, up to the budget, and gives each
   process `--jobs 1`.
 - Multipage and single-page work do not oversubscribe each other. FIFO ordering is preserved when
   the next document needs more CPU slots than are currently free.
+
+Remote workers use a page-oriented capacity model: their detected CPU count becomes the default
+number of concurrent leases, and every job runs with one CPU and OCRmyPDF `--jobs 1`. The optional
+worker CLI `--max-concurrent-jobs` lowers concurrency for memory- or thermally constrained hosts.
+Whole-document remote jobs remain supported but use one CPU per document; the ScanSnap Wi-Fi path
+avoids that limitation by streaming individual pages.
 
 Post-scan processing runs at normal process priority by default so a busy service host cannot starve
 background work. Reduced-priority mode remains available as an explicit opt-in, globally through

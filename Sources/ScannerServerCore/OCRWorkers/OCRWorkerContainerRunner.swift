@@ -8,7 +8,7 @@ import Glibc
 public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
     public let runtime: String
     public let image: String
-    public let cpusPerJob: Int
+    public let cpuLimitPerJob: Int
     public let memory: String
     public let workspaceRoot: URL
     public let userID: Int
@@ -18,7 +18,7 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
     public init(
         runtime: String = "container",
         image: String = "ghcr.io/jollyjinx/scannerserver:latest",
-        cpusPerJob: Int,
+        cpuLimitPerJob: Int,
         memory: String = "8G",
         workspaceRoot: URL = Self.defaultWorkspaceRoot,
         userID: Int = Int(getuid()),
@@ -27,7 +27,7 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
     ) {
         self.runtime = runtime
         self.image = image
-        self.cpusPerJob = max(1, cpusPerJob)
+        self.cpuLimitPerJob = max(1, cpuLimitPerJob)
         self.memory = memory
         self.workspaceRoot = workspaceRoot
         self.userID = userID
@@ -55,9 +55,12 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
             guard arguments.indices.contains(jobsIndex + 1) else {
                 throw OCRWorkerContainerError.invalidJob
             }
-            arguments[jobsIndex + 1] = String(cpusPerJob)
+            arguments[jobsIndex + 1] = String(cpuLimitPerJob)
         } else {
-            arguments.insert(contentsOf: ["--jobs", String(cpusPerJob)], at: arguments.count - 2)
+            arguments.insert(
+                contentsOf: ["--jobs", String(cpuLimitPerJob)],
+                at: arguments.count - 2
+            )
         }
 
         if directExecution {
@@ -88,7 +91,7 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
             executable: runtime,
             arguments: [
                 "run", "--rm",
-                "--cpus", String(cpusPerJob),
+                "--cpus", String(cpuLimitPerJob),
                 "--memory", memory,
                 "--uid", String(userID),
                 "--gid", String(groupID),

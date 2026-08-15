@@ -130,8 +130,7 @@ docker run -d \
   gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
   scannerserver-worker \
   --server http://YOUR_LINUX_HOST \
-  --name "Mac OCR" \
-  --jobs 1
+  --name "Mac OCR"
 ```
 
 Open **Workers** in scannerserver and approve it. New OCR PDFs are then dispatched automatically;

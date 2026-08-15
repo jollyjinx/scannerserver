@@ -79,7 +79,6 @@ curl --fail --silent "${base_url}/health" | grep -qx ok
   --server "${base_url}" \
   --name "Distributed smoke worker" \
   --cpus 2 \
-  --jobs 1 \
   --identity-file "${worker_state}/identity.json" \
   --container-image "${worker_image}" \
   --workspace "${worker_state}/jobs" \

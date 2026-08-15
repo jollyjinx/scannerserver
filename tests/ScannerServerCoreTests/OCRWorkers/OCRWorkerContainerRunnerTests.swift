@@ -4,13 +4,13 @@ import Testing
 
 @Suite("OCR worker container runner")
 struct OCRWorkerContainerRunnerTests {
-    @Test("Apple container request bounds CPU and memory and mounts only the job workspace")
+    @Test("Apple container request gives a one-page job one CPU")
     func request() throws {
         let workspace = URL(fileURLWithPath: "/tmp/worker job", isDirectory: true)
         let configuration = OCRWorkerContainerConfiguration(
             runtime: "container",
             image: "scannerserver:test",
-            cpusPerJob: 11,
+            cpuLimitPerJob: 1,
             memory: "12G",
             workspaceRoot: workspace.deletingLastPathComponent(),
             userID: 501,
@@ -24,7 +24,7 @@ struct OCRWorkerContainerRunnerTests {
         #expect(request.executable == "container")
         #expect(request.arguments == [
             "run", "--rm",
-            "--cpus", "11",
+            "--cpus", "1",
             "--memory", "12G",
             "--uid", "501",
             "--gid", "20",
@@ -36,7 +36,7 @@ struct OCRWorkerContainerRunnerTests {
             "scannerserver:test",
             "ocrmypdf",
             "--language", "deu+eng",
-            "--jobs", "11",
+            "--jobs", "1",
             "/work/source.pdf", "/work/result.pdf",
         ])
         #expect(request.workingDirectory == workspace)
@@ -48,7 +48,7 @@ struct OCRWorkerContainerRunnerTests {
         let configuration = OCRWorkerContainerConfiguration(
             runtime: "",
             image: "",
-            cpusPerJob: 6,
+            cpuLimitPerJob: 1,
             memory: "",
             workspaceRoot: workspace.deletingLastPathComponent(),
             directExecution: true
@@ -63,7 +63,7 @@ struct OCRWorkerContainerRunnerTests {
             executable: "ocrmypdf",
             arguments: [
                 "--language", "deu+eng",
-                "--jobs", "6",
+                "--jobs", "1",
                 "/var/lib/scannerserver-worker/jobs/job-1/source.pdf",
                 "/var/lib/scannerserver-worker/jobs/job-1/result.pdf",
             ],
@@ -77,7 +77,7 @@ struct OCRWorkerContainerRunnerTests {
         let configuration = OCRWorkerContainerConfiguration(
             runtime: "container",
             image: "scannerserver:test",
-            cpusPerJob: 4,
+            cpuLimitPerJob: 1,
             memory: "8G",
             workspaceRoot: workspace.deletingLastPathComponent(),
             userID: 501,
@@ -112,7 +112,7 @@ struct OCRWorkerContainerRunnerTests {
             "--crop-debug",
             "--",
             "--language", "deu+eng",
-            "--jobs", "4",
+            "--jobs", "1",
             "/work/source.pdf", "/work/result.pdf",
         ])
     }

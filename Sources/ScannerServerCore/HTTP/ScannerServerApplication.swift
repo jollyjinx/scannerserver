@@ -1417,9 +1417,9 @@ private func renderWorkers(
         html += "<h3>\(htmlEscape(worker.displayName))</h3>"
         html += "<p class=\"muted\">\(htmlEscape(worker.hostname)) · \(htmlEscape(worker.architecture))</p></div>"
         html += workerStatusPill(worker.availability) + "</div>"
-        html += "<dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(worker.cpuCount) CPUs · \(worker.maxConcurrentJobs) job slot"
+        html += "<dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(worker.cpuCount) CPUs · \(worker.maxConcurrentJobs) concurrent page"
         if worker.maxConcurrentJobs != 1 { html += "s" }
-        html += "</dd></div><div><dt>Running</dt><dd>\(worker.runningJobs)</dd></div>"
+        html += " max</dd></div><div><dt>Running</dt><dd>\(worker.runningJobs)</dd></div>"
         html += "<div><dt>Speed</dt><dd>\(workerSpeed(pageTimings))</dd></div>"
         html += "<div><dt>Languages</dt><dd>\(htmlEscape(worker.ocrLanguages.joined(separator: ", ")))</dd></div>"
         html += "<div><dt>Version</dt><dd>\(htmlEscape(worker.workerVersion))</dd></div></dl>"

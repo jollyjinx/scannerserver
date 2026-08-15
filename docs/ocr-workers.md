@@ -19,8 +19,8 @@ do not need a fixed address or an inbound firewall rule.
   `_scannerserver._tcp` through Bonjour on macOS.
 - Each worker creates a persistent ID and authentication token in
   `~/.config/scannerserver-worker/identity.json`.
-- Registration reports its name, hostname, architecture, CPU capacity, job slots, version, and OCR
-  languages.
+- Registration reports its name, hostname, architecture, CPU capacity, derived concurrency limit,
+  version, and OCR languages.
 - New workers require approval on the scannerserver **Workers** page.
 - Heartbeats report liveness and running-job count. Approved workers become offline after missed
   heartbeats. They can be paused temporarily or disabled without forgetting their approval.
@@ -65,8 +65,7 @@ docker run -d \
   gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
   scannerserver-worker \
   --server http://SCANNERSERVER-IP \
-  --name "Mac Studio" \
-  --jobs 1
+  --name "Mac Studio"
 ```
 
 The image enables direct execution automatically: OCRmyPDF runs inside the worker container, so no
@@ -78,10 +77,10 @@ If scannerserver is another container on the same Docker network, use its servic
 `--server`. To reach a scannerserver published on the Docker host, use
 `http://host.docker.internal:PORT` on Docker Desktop.
 
-Open the **Workers** page on scannerserver and approve the new worker. `--jobs` controls concurrent
-page or document jobs, and the detected CPUs are divided across those slots. With the recommended
-`--jobs 1`, one OCR page can use the entire container CPU allowance while additional network workers
-consume other queued pages. The page includes the scannerserver's internal fallback worker,
+Open the **Workers** page on scannerserver and approve the new worker. Worker capacity is derived
+from its detected CPUs: an 11-CPU worker leases up to 11 pages concurrently, and every one-page PDF
+runs with one CPU and OCRmyPDF `--jobs 1`. This keeps every CPU busy across pages instead of assigning
+idle parallel-page capacity to a one-page PDF. The page includes the scannerserver's internal fallback worker,
 highlights processing workers, reports successful page count and average pages per minute, and shows
 waiting, running, and recent terminal work in compact lists with document, page, operations, worker,
 timing, and result details.
@@ -114,7 +113,6 @@ swift run -c release scannerserver-worker \
   --server http://SCANNERSERVER-IP \
   --name "Mac Studio" \
   --cpus 11 \
-  --jobs 1 \
   --container-image gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
   --memory-per-job 8G
 ```
@@ -125,7 +123,6 @@ When scannerserver advertises itself through Bonjour, omit `--server`:
 swift run -c release scannerserver-worker \
   --name "Mac Studio" \
   --cpus 11 \
-  --jobs 1 \
   --container-image gitmaster.jinx.eu/jnxpublic/scannerserver:jinx
 ```
 
@@ -152,9 +149,15 @@ Useful worker overrides:
 --container-runtime container
 --container-image gitmaster.jinx.eu/jnxpublic/scannerserver:jinx
 --memory-per-job 8G
+--max-concurrent-jobs 4
 --workspace ~/Library/Caches/scannerserver-worker/jobs
 --direct-ocr
 ```
+
+`--max-concurrent-jobs` is an optional safety cap for memory- or thermally constrained machines.
+When omitted, it defaults to the detected CPU count. The former `--jobs` spelling remains accepted
+as a hidden compatibility alias but is deprecated. Whole-document jobs are still valid, but use one
+CPU per document; the optimized ScanSnap Wi-Fi path dispatches one-page jobs.
 
 Stop a foreground native worker with Control-C. Its identity remains in
 `~/.config/scannerserver-worker/identity.json`, so it does not need approval again.

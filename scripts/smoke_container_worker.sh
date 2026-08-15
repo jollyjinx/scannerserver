@@ -72,8 +72,7 @@ docker run \
   "${image}" \
   scannerserver-worker \
   --server "${worker_server_url}" \
-  --name "Container smoke worker" \
-  --jobs 1 >/dev/null
+  --name "Container smoke worker" >/dev/null
 
 worker_id=""
 for _ in $(seq 1 30); do
@@ -107,7 +106,7 @@ grep -q '"sourcePath"' "${scan_dir}/.scannerserver-ocr-jobs.json"
 grep -q '\.ocr-work\.[^"]*source\.pdf' "${scan_dir}/.scannerserver-ocr-jobs.json"
 docker exec "${server_name}" qpdf --check "/scans/${ocr_name}" >/dev/null
 curl --fail --silent "${base_url}/workers" | grep -q '>Completed</dt><dd>1</dd>'
-curl --fail --silent "${base_url}/workers" | grep -q '2 CPUs · 1 job slot'
+curl --fail --silent "${base_url}/workers" | grep -q '2 CPUs · 2 concurrent pages max'
 docker logs "${worker_name}" 2>&1 | grep -q 'Completed remote OCR job'
 
 cp "${scan_dir}/${scan_name}" "${scan_dir}/source.pdf"

@@ -28,11 +28,14 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
     @Option(help: "Name shown on the scannerserver Workers page.")
     var name: String = ProcessInfo.processInfo.hostName
 
-    @Option(help: "CPUs advertised and distributed across concurrent OCR jobs.")
+    @Option(help: "CPUs advertised and used for concurrent one-page OCR jobs.")
     var cpus: Int = workerCPUDefault
 
-    @Option(help: "Maximum documents processed concurrently.")
-    var jobs: Int = 1
+    @Option(help: "Optional safety cap for concurrent OCR jobs; defaults to --cpus.")
+    var maxConcurrentJobs: Int?
+
+    @Option(name: .customLong("jobs"), help: .hidden)
+    var legacyJobLimit: Int?
 
     @Option(parsing: .upToNextOption, help: "OCR language codes supported by the worker.")
     var languages: [String] = ["deu", "eng"]
@@ -63,8 +66,12 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
 
     mutating func validate() throws {
         guard cpus > 0 else { throw ValidationError("--cpus must be positive") }
-        guard jobs > 0, jobs <= cpus else {
-            throw ValidationError("--jobs must be positive and no greater than --cpus")
+        guard maxConcurrentJobs == nil || legacyJobLimit == nil else {
+            throw ValidationError("Pass either --max-concurrent-jobs or the legacy --jobs option, not both")
+        }
+        if let requestedLimit = maxConcurrentJobs ?? legacyJobLimit,
+           requestedLimit <= 0 || requestedLimit > cpus {
+            throw ValidationError("The concurrent-job limit must be positive and no greater than --cpus")
         }
         guard !languages.isEmpty else { throw ValidationError("At least one OCR language is required") }
         guard discoveryTimeout > 0 else { throw ValidationError("--discovery-timeout must be positive") }
@@ -77,6 +84,13 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
 
     mutating func run() async throws {
         JLog.loglevel = logLevel
+        if legacyJobLimit != nil {
+            JLog.warning("--jobs is deprecated; use --max-concurrent-jobs only when a safety cap is needed")
+        }
+        let capacity = OCRWorkerCapacity(
+            cpuCount: cpus,
+            maximumConcurrentJobs: maxConcurrentJobs ?? legacyJobLimit
+        )
         let serverURL = try await resolveServerURL()
         let client = try OCRWorkerHTTPClient(serverURL: serverURL)
         let identity = try WorkerIdentity.loadOrCreate(
@@ -89,8 +103,8 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
             hostname: ProcessInfo.processInfo.hostName,
             workerVersion: ScannerServerBuildInformation().version,
             architecture: architectureName,
-            cpuCount: cpus,
-            maxConcurrentJobs: jobs,
+            cpuCount: capacity.cpuCount,
+            maxConcurrentJobs: capacity.maximumConcurrentJobs,
             ocrLanguages: languages.sorted(),
             capabilities: [OCRWorkerCapability.cropPDFPages]
         )
@@ -117,6 +131,7 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
                 try await runApprovedSession(
                     client: client,
                     identity: identity,
+                    capacity: capacity,
                     heartbeatIntervalSeconds: state.heartbeatIntervalSeconds
                 )
             } catch is CancellationError {
@@ -131,6 +146,7 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
     private func runApprovedSession(
         client: OCRWorkerHTTPClient,
         identity: WorkerIdentity,
+        capacity: OCRWorkerCapacity,
         heartbeatIntervalSeconds: Int
     ) async throws {
         let activity = WorkerActivity()
@@ -150,15 +166,13 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
                     }
                 }
             }
-            for slot in 0..<jobs {
-                let base = cpus / jobs
-                let extra = slot < cpus % jobs ? 1 : 0
+            for _ in 0..<capacity.maximumConcurrentJobs {
                 let processor = OCRWorkerJobProcessor(
                     client: client,
                     configuration: OCRWorkerContainerConfiguration(
                         runtime: containerRuntime,
                         image: containerImage,
-                        cpusPerJob: base + extra,
+                        cpuLimitPerJob: capacity.cpuLimitPerJob,
                         memory: memoryPerJob,
                         workspaceRoot: URL(fileURLWithPath: workspace, isDirectory: true),
                         directExecution: directOCR
@@ -256,6 +270,7 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
         "unknown"
         #endif
     }
+
 }
 
 private struct ProcessWorkerJobCommand: AsyncParsableCommand {

@@ -179,6 +179,7 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("Internal worker"))
                 #expect(body.contains("action=\"/internal-worker/pause\""))
                 #expect(body.contains("Mac Studio &amp; OCR"))
+                #expect(body.contains("12 CPUs · 1 concurrent page max"))
                 #expect(body.contains("Approval required"))
                 #expect(body.contains("action=\"/workers/mac-studio-1/approve\""))
             }

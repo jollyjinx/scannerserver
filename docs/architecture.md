@@ -100,8 +100,9 @@ persisted stores, reachability, and physical-button session state.
   runs OCRmyPDF followed by the native crop implementation when the worker itself is the production
   container, or runs that combined operation in the existing image through Apple Container from the
   native macOS executable. Both modes isolate each job in its own workspace and use the worker
-  slot's CPU allowance. The
-  server verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before
+  CPU count as page capacity: each concurrent one-page job receives one CPU and OCRmyPDF `--jobs 1`.
+  An optional worker-side concurrency cap can deliberately leave capacity unused for memory or
+  thermal limits. The server verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before
   reporting OCR completion.
 - The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
   It always exposes the internal fallback worker, current waiting/running work, compact terminal
