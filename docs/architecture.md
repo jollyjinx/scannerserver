@@ -44,6 +44,7 @@ Sources/
     ScanSnap/             discovery, pairing, transport, setup, and button protocol
       Acquisition/        native JPEG transfer state machine and PDF assembly
     ScanPipeline/         single-flight scans, acquisition, subprocesses, and OCR queue
+    OCRWorkers/           remote-worker registry, discovery, manifests, and lease state
     Documents/            PDF/image processing, previews, naming, and grouping
     Settings/             persisted scanner and mode configuration
 tests/
@@ -74,6 +75,9 @@ persisted stores, reachability, and physical-button session state.
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
   snapshots. Remote job execution is not connected to `OCRQueueActor` yet; local processing remains
   authoritative until durable leases and verified document transfer are implemented.
+- `OCRWorkerJobStore` owns atomically persisted remote-job manifests and FIFO lease transitions,
+  including capability filtering, renewal, authenticated completion, cancellation, and recovery of
+  expired leases. It is runtime-composed but not yet fed by `OCRQueueActor` or exposed over HTTP.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
   `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;
   an explicit server URL remains available and takes precedence over Bonjour.

@@ -222,6 +222,7 @@ public struct ScannerServerDependencies: Sendable {
     public let scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     public let ocrQueue: OCRQueueActor
     public let ocrWorkerRegistry: OCRWorkerRegistry
+    public let ocrWorkerJobs: OCRWorkerJobStore
     public let outputPathResolver: ScanOutputPathResolver
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
@@ -238,6 +239,7 @@ public struct ScannerServerDependencies: Sendable {
         scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         ocrQueue: OCRQueueActor? = nil,
         ocrWorkerRegistry: OCRWorkerRegistry? = nil,
+        ocrWorkerJobs: OCRWorkerJobStore? = nil,
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
@@ -262,6 +264,9 @@ public struct ScannerServerDependencies: Sendable {
         self.ocrWorkerRegistry = ocrWorkerRegistry ?? OCRWorkerRegistry(
             fileURL: OCRWorkerRegistry.defaultFileURL(environment: environment),
             webUpdates: webUpdates
+        )
+        self.ocrWorkerJobs = ocrWorkerJobs ?? OCRWorkerJobStore(
+            fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
         )
         self.scannerReachability = scannerReachability ?? ScanSnapReachabilityState(webUpdates: webUpdates)
         self.environment = environment

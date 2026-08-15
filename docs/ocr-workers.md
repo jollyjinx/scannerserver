@@ -28,10 +28,12 @@ The first control-plane slice is implemented:
   heartbeats and can be disabled without forgetting their approval.
 - Registrations and approvals are stored atomically in
   `/scans/.scannerserver-ocr-workers.json` by default.
+- `OCRWorkerJobStore` provides an atomically persisted manifest and lease state machine at
+  `/scans/.scannerserver-ocr-jobs.json`. It supports FIFO capability matching, opaque lease tokens,
+  renewal, authenticated terminal transitions, cancellation, and restart-safe lease expiry.
 
-This slice does not send documents to remote workers yet. Local `OCRQueueActor` processing remains
-the only execution path until job manifests, leases, downloads, verified uploads, and cancellation
-are added.
+The job store is not fed by `OCRQueueActor` or exposed to workers yet. Local processing remains the
+only execution path until downloads, verified uploads, and cancellation propagation are added.
 
 ## Running The Registration Agent
 
@@ -89,13 +91,13 @@ The public listing contains worker metadata and status but never authentication 
 
 ## Next Vertical Slices
 
-1. Add a durable server-side job manifest and lease state machine.
-2. Let workers hold a long poll for assignments and stream verified source files from scannerserver.
-3. Add a batch document-processing command to the existing container image and invoke it with an
+1. Let workers hold a long poll for assignments and stream verified source files from scannerserver.
+2. Add a batch document-processing command to the existing container image and invoke it with an
    explicit CPU and memory allocation.
-4. Upload results to a temporary server path, verify their digest and expected type, and atomically
+3. Upload results to a temporary server path, verify their digest and expected type, and atomically
    publish them using the existing output names.
-5. Propagate cancellation, expire abandoned leases, and fall back to local processing.
+4. Propagate cancellation, reclaim abandoned work through the lease store, and fall back to local
+   processing.
 
 Initially, one multipage document should be assigned to one worker. More workers increase throughput
 across queued documents. Cross-machine page sharding is a separate compatibility project because it
