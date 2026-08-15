@@ -63,6 +63,96 @@ struct OCRQueueActorTests {
         #expect(pageTimings.allSatisfy { $0.executionLocation == .local })
     }
 
+    @Test("Streaming autocrop is requested from the remote worker and not repeated after assembly")
+    func streamingRemoteAutocrop() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-remote-crop-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-15.160206.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdf = Data("%PDF-1.4\nremote cropped\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0, executionLocation: .remote)),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-15.160206.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: [
+                "SCAN_LANGUAGE": "deu+eng",
+                "SCAN_CROP_MARGIN_POINTS": "2.5",
+            ],
+            removeBlankPages: false,
+            cropPages: true
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 1)
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == ["ocrmypdf", "qpdf", "set-pdf-creator"])
+        #expect(requests[0].ocrWorkerCropConfiguration?.marginPoints == 2.5)
+        #expect(try Data(contentsOf: final) == pdf)
+    }
+
+    @Test("Streaming autocrop falls back locally when OCR was not remote")
+    func streamingLocalAutocropFallback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-local-crop-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-15.160207.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdf = Data("%PDF-1.4\nlocally cropped\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-15.160207.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: ["SCAN_LANGUAGE": "deu+eng"],
+            removeBlankPages: false,
+            cropPages: true
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 1)
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "ocrmypdf", "crop-pdf-pages", "qpdf", "set-pdf-creator",
+        ])
+        #expect(try Data(contentsOf: final) == pdf)
+    }
+
     @Test("Multipage jobs execute in FIFO order within one CPU budget")
     func fifo() async {
         let executor = FakeProcessExecutor(stubs: [

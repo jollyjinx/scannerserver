@@ -14,6 +14,7 @@ public struct ProcessRequest: Equatable, Sendable {
     public let timeoutMilliseconds: UInt64?
     public let niceLevel: Int?
     public let ocrWorkerMetadata: OCRWorkerJobMetadata?
+    public let ocrWorkerCropConfiguration: OCRWorkerCropConfiguration?
 
     public init(
         executable: String,
@@ -22,7 +23,8 @@ public struct ProcessRequest: Equatable, Sendable {
         workingDirectory: URL? = nil,
         timeoutMilliseconds: UInt64? = nil,
         niceLevel: Int? = nil,
-        ocrWorkerMetadata: OCRWorkerJobMetadata? = nil
+        ocrWorkerMetadata: OCRWorkerJobMetadata? = nil,
+        ocrWorkerCropConfiguration: OCRWorkerCropConfiguration? = nil
     ) {
         self.executable = executable
         self.arguments = arguments
@@ -31,6 +33,7 @@ public struct ProcessRequest: Equatable, Sendable {
         self.timeoutMilliseconds = timeoutMilliseconds
         self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
         self.ocrWorkerMetadata = ocrWorkerMetadata
+        self.ocrWorkerCropConfiguration = ocrWorkerCropConfiguration
     }
 
     func applyingNiceLevel(_ niceLevel: Int) -> ProcessRequest {
@@ -41,7 +44,8 @@ public struct ProcessRequest: Equatable, Sendable {
             workingDirectory: workingDirectory,
             timeoutMilliseconds: timeoutMilliseconds,
             niceLevel: niceLevel,
-            ocrWorkerMetadata: ocrWorkerMetadata
+            ocrWorkerMetadata: ocrWorkerMetadata,
+            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration
         )
     }
 
@@ -53,7 +57,8 @@ public struct ProcessRequest: Equatable, Sendable {
             environment: environment,
             workingDirectory: workingDirectory,
             timeoutMilliseconds: timeoutMilliseconds,
-            ocrWorkerMetadata: ocrWorkerMetadata
+            ocrWorkerMetadata: ocrWorkerMetadata,
+            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration
         )
     }
 }

@@ -74,10 +74,12 @@ persisted stores, reachability, and physical-button session state.
 - For OCR-enabled multipage ScanSnap Wi-Fi scans, acquisition calls the queue after every accepted
   JPEG side. The queue immediately creates and schedules a one-page PDF, owns the private scan
   workspace after raw publication, receives each remote result independently, and assembles pages
-  in source order. Whole-document blank removal and crop then run on the assembled searchable PDF,
-  followed by creator metadata and exclusive `.ocr.pdf` publication. This streaming path retains
-  the raw PDF, local OCR fallback, cancellation, CPU budgeting, and failure atomicity contracts.
-  SANE acquisition still enters the established whole-document path.
+  in source order. Workers advertising the crop capability run the same native autocrop after OCR
+  on each page; an unavailable or failed remote worker falls back to local OCR and the same per-page
+  crop. Whole-document blank removal, creator metadata, and exclusive `.ocr.pdf` publication remain
+  on scannerserver. This streaming path retains the raw PDF, local fallback, cancellation, CPU
+  budgeting, crop settings, and failure atomicity contracts. SANE acquisition still enters the
+  established whole-document path.
 - `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
   snapshots.
@@ -86,20 +88,24 @@ persisted stores, reachability, and physical-button session state.
   expired leases. Authenticated HTTP routes lease jobs and transfer digest-verified PDFs. Optional
   manifest metadata identifies the user-facing document, streaming batch, page number, and requested
   operations without breaking persisted jobs from the original protocol shape.
-- `DistributedOCRProcessExecutor` wraps only the `ocrmypdf` process boundary. Approved, enabled,
-  language-compatible worker registrations get first refusal even across a temporary heartbeat
-  outage; assignment timeout or remote failure preserves the local process executor as the safety
-  fallback. Paused workers are excluded from dispatch, and pausing immediately requeues their active
+- `DistributedOCRProcessExecutor` wraps the `ocrmypdf` process boundary and carries an optional
+  typed per-page crop configuration. Approved, enabled, language- and capability-compatible worker
+  registrations get first refusal even across a temporary heartbeat outage; assignment timeout or
+  remote failure preserves local OCR plus local per-page crop as the safety fallback. The persisted
+  internal-worker control can pause that fallback, cancel active local OCR, and keep the same work
+  dispatchable so newly available remote capacity can take over. Older OCR-only
+  workers cannot lease crop jobs. Paused workers are excluded from dispatch, and pausing immediately requeues their active
   leases so another worker can claim them; stale renewals and results are rejected. Completed jobs
   retain their worker and lease-start time for per-page throughput statistics. The worker either
-  runs OCRmyPDF directly when the worker itself is the production
-  container or starts the existing image with Apple Container from the native macOS executable.
-  Both modes isolate each job in its own workspace and use the worker slot's CPU allowance. The
+  runs OCRmyPDF followed by the native crop implementation when the worker itself is the production
+  container, or runs that combined operation in the existing image through Apple Container from the
+  native macOS executable. Both modes isolate each job in its own workspace and use the worker
+  slot's CPU allowance. The
   server verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before
   reporting OCR completion.
 - The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
   It always exposes the internal fallback worker, current waiting/running work, compact terminal
-  history, and successful seconds-per-page measurements without exposing authentication or lease
+  history, and successful pages-per-minute measurements without exposing authentication or lease
   tokens.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
   `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;

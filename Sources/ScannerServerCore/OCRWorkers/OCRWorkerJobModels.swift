@@ -27,6 +27,64 @@ public struct OCRWorkerJobMetadata: Codable, Equatable, Sendable {
     }
 }
 
+public struct OCRWorkerCropConfiguration: Codable, Equatable, Sendable {
+    public let backgroundDelta: Int
+    public let borderPixels: Int
+    public let marginPoints: Double
+    public let maximumWidthRatio: Double
+    public let maximumHeightRatio: Double
+    public let minimumDensity: Double
+    public let keepOriginalBoxes: Bool
+    public let debug: Bool
+
+    public init(
+        backgroundDelta: Int = 8,
+        borderPixels: Int = 64,
+        marginPoints: Double = 1.0,
+        maximumWidthRatio: Double = 0.80,
+        maximumHeightRatio: Double = 0.80,
+        minimumDensity: Double = 0.08,
+        keepOriginalBoxes: Bool = false,
+        debug: Bool = false
+    ) {
+        self.backgroundDelta = backgroundDelta
+        self.borderPixels = borderPixels
+        self.marginPoints = marginPoints
+        self.maximumWidthRatio = maximumWidthRatio
+        self.maximumHeightRatio = maximumHeightRatio
+        self.minimumDensity = minimumDensity
+        self.keepOriginalBoxes = keepOriginalBoxes
+        self.debug = debug
+    }
+
+    public init(request: CropPDFPagesRequest) {
+        self.init(
+            backgroundDelta: request.backgroundDelta,
+            borderPixels: request.borderPixels,
+            marginPoints: request.marginPoints,
+            maximumWidthRatio: request.maximumWidthRatio,
+            maximumHeightRatio: request.maximumHeightRatio,
+            minimumDensity: request.minimumDensity,
+            keepOriginalBoxes: request.keepOriginalBoxes,
+            debug: request.debug
+        )
+    }
+
+    public func request(pdfPath: String) -> CropPDFPagesRequest {
+        CropPDFPagesRequest(
+            pdfPath: pdfPath,
+            backgroundDelta: backgroundDelta,
+            borderPixels: borderPixels,
+            marginPoints: marginPoints,
+            maximumWidthRatio: maximumWidthRatio,
+            maximumHeightRatio: maximumHeightRatio,
+            minimumDensity: minimumDensity,
+            keepOriginalBoxes: keepOriginalBoxes,
+            debug: debug
+        )
+    }
+}
+
 public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let jobID: String
     public let sourcePath: String
@@ -37,6 +95,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let ocrEnabled: Bool
     public let removeBlankPages: Bool
     public let cropPages: Bool
+    public let cropConfiguration: OCRWorkerCropConfiguration?
     public let containerArguments: [String]?
     public let metadata: OCRWorkerJobMetadata?
     public let createdAt: Date
@@ -51,6 +110,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         ocrEnabled: Bool,
         removeBlankPages: Bool,
         cropPages: Bool,
+        cropConfiguration: OCRWorkerCropConfiguration? = nil,
         containerArguments: [String]? = nil,
         metadata: OCRWorkerJobMetadata? = nil,
         createdAt: Date = Date()
@@ -64,6 +124,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         self.ocrEnabled = ocrEnabled
         self.removeBlankPages = removeBlankPages
         self.cropPages = cropPages
+        self.cropConfiguration = cropConfiguration
         self.containerArguments = containerArguments
         self.metadata = metadata
         self.createdAt = createdAt

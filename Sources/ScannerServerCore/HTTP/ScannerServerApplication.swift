@@ -221,6 +221,7 @@ public struct ScannerServerDependencies: Sendable {
     public let scanJobs: ScanJobActor
     public let scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     public let ocrQueue: OCRQueueActor
+    public let internalOCRWorker: InternalOCRWorkerControl
     public let ocrWorkerRegistry: OCRWorkerRegistry
     public let ocrWorkerJobs: OCRWorkerJobStore
     public let ocrWorkerResultValidator: any OCRWorkerResultValidating
@@ -239,6 +240,7 @@ public struct ScannerServerDependencies: Sendable {
         scanJobs: ScanJobActor,
         scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         ocrQueue: OCRQueueActor? = nil,
+        internalOCRWorker: InternalOCRWorkerControl? = nil,
         ocrWorkerRegistry: OCRWorkerRegistry? = nil,
         ocrWorkerJobs: OCRWorkerJobStore? = nil,
         ocrWorkerResultValidator: (any OCRWorkerResultValidating)? = nil,
@@ -254,22 +256,42 @@ public struct ScannerServerDependencies: Sendable {
         self.scannerStore = scannerStore ?? ScannerConfigStore(environment: environment)
         self.scanJobs = scanJobs
         self.scanSnapAcquisitionSessions = scanSnapAcquisitionSessions
-        self.ocrQueue = ocrQueue ?? OCRQueueActor(
-            executor: FoundationProcessExecutor(),
-            configuration: OCRQueueConfiguration(environment: environment)
-        )
-        self.outputPathResolver = outputPathResolver
-        self.scannerSetup = scannerSetup
-        self.previewProvider = previewProvider
         let webUpdates = webUpdates ?? scanJobs.webUpdates
-        self.webUpdates = webUpdates
-        self.ocrWorkerRegistry = ocrWorkerRegistry ?? OCRWorkerRegistry(
+        let internalOCRWorker = internalOCRWorker ?? InternalOCRWorkerControl(
+            fileURL: InternalOCRWorkerControl.defaultFileURL(environment: environment),
+            webUpdates: webUpdates
+        )
+        let ocrWorkerRegistry = ocrWorkerRegistry ?? OCRWorkerRegistry(
             fileURL: OCRWorkerRegistry.defaultFileURL(environment: environment),
             webUpdates: webUpdates
         )
-        self.ocrWorkerJobs = ocrWorkerJobs ?? OCRWorkerJobStore(
+        let ocrWorkerJobs = ocrWorkerJobs ?? OCRWorkerJobStore(
             fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
         )
+        self.internalOCRWorker = internalOCRWorker
+        if let ocrQueue {
+            self.ocrQueue = ocrQueue
+        } else {
+            let processExecutor = FoundationProcessExecutor()
+            self.ocrQueue = OCRQueueActor(
+                executor: DistributedOCRProcessExecutor(
+                    local: processExecutor,
+                    workers: ocrWorkerRegistry,
+                    jobs: ocrWorkerJobs,
+                    internalWorker: internalOCRWorker,
+                    configuration: DistributedOCRConfiguration(environment: environment)
+                ),
+                documentExecutor: NativeDocumentToolExecutor(executor: processExecutor),
+                configuration: OCRQueueConfiguration(environment: environment),
+                webUpdates: webUpdates
+            )
+        }
+        self.outputPathResolver = outputPathResolver
+        self.scannerSetup = scannerSetup
+        self.previewProvider = previewProvider
+        self.webUpdates = webUpdates
+        self.ocrWorkerRegistry = ocrWorkerRegistry
+        self.ocrWorkerJobs = ocrWorkerJobs
         self.ocrWorkerResultValidator = ocrWorkerResultValidator
             ?? QPDFOCRWorkerResultValidator()
         self.scannerReachability = scannerReachability ?? ScanSnapReachabilityState(webUpdates: webUpdates)
@@ -287,6 +309,10 @@ public struct ScannerServerDependencies: Sendable {
         let processExecutor = FoundationProcessExecutor()
         let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
         let webUpdates = WebUpdateNotifier()
+        let internalOCRWorker = InternalOCRWorkerControl(
+            fileURL: InternalOCRWorkerControl.defaultFileURL(environment: environment),
+            webUpdates: webUpdates
+        )
         let ocrWorkerRegistry = OCRWorkerRegistry(
             fileURL: OCRWorkerRegistry.defaultFileURL(environment: environment),
             webUpdates: webUpdates
@@ -299,6 +325,7 @@ public struct ScannerServerDependencies: Sendable {
             local: processExecutor,
             workers: ocrWorkerRegistry,
             jobs: ocrWorkerJobs,
+            internalWorker: internalOCRWorker,
             configuration: DistributedOCRConfiguration(environment: environment)
         )
         let ocrQueue = OCRQueueActor(
@@ -326,6 +353,7 @@ public struct ScannerServerDependencies: Sendable {
             ),
             scanSnapAcquisitionSessions: scanSnapAcquisitionSessions,
             ocrQueue: ocrQueue,
+            internalOCRWorker: internalOCRWorker,
             ocrWorkerRegistry: ocrWorkerRegistry,
             ocrWorkerJobs: ocrWorkerJobs,
             ocrWorkerResultValidator: ocrWorkerResultValidator,
@@ -463,6 +491,14 @@ public enum ScannerServerApplication {
             await dependencies.ocrQueue.cancelAll()
             return .redirect(to: "/")
         }
+        router.post("/internal-worker/pause") { _, _ -> Response in
+            try? await dependencies.internalOCRWorker.setPaused(true)
+            return .redirect(to: "/workers")
+        }
+        router.post("/internal-worker/resume") { _, _ -> Response in
+            try? await dependencies.internalOCRWorker.setPaused(false)
+            return .redirect(to: "/workers")
+        }
 
         router.get("/api/ocr-workers") { _, _ -> Response in
             jsonResponse(await dependencies.ocrWorkerRegistry.snapshots())
@@ -517,6 +553,7 @@ public enum ScannerServerApplication {
                     if let lease = try await dependencies.ocrWorkerJobs.leaseNext(
                         workerID: workerID,
                         ocrLanguages: worker.ocrLanguages,
+                        capabilities: worker.capabilities,
                         maximumActiveLeases: worker.maxConcurrentJobs
                     ) {
                         await dependencies.webUpdates.notify()
@@ -1214,6 +1251,7 @@ private func indexResponse(
     let settings = try await dependencies.settingsStore.load()
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
+    let internalWorkerPaused = await dependencies.internalOCRWorker.isPaused
     let workers = await dependencies.ocrWorkerRegistry.snapshots()
     let workerJobs = await dependencies.ocrWorkerJobs.snapshots()
     let setup = await dependencies.scannerSetup.state()
@@ -1235,6 +1273,7 @@ private func indexResponse(
         wifiBackend: wifiBackend,
         job: job,
         ocr: ocr,
+        internalWorkerPaused: internalWorkerPaused,
         workers: workers,
         workerJobs: workerJobs,
         groups: groups,
@@ -1278,6 +1317,7 @@ private func renderIndexContent(
     wifiBackend: Bool,
     job: ScanJobState,
     ocr: OCRQueueState,
+    internalWorkerPaused: Bool,
     workers: [OCRWorkerSnapshot],
     workerJobs: [OCRWorkerJobSnapshot],
     groups: [ScanDayGroup],
@@ -1320,7 +1360,13 @@ private func renderIndexContent(
             maximumOCRCPUs: ocr.cpuLimit
         )
     case .workers:
-        html += renderWorkers(workers, jobs: workerJobs, ocr: ocr, localTime: localTime)
+        html += renderWorkers(
+            workers,
+            jobs: workerJobs,
+            ocr: ocr,
+            internalWorkerPaused: internalWorkerPaused,
+            localTime: localTime
+        )
     case .settings:
         if wifiBackend {
             html += renderScannerSetup(setup)
@@ -1336,6 +1382,7 @@ private func renderWorkers(
     _ workers: [OCRWorkerSnapshot],
     jobs: [OCRWorkerJobSnapshot],
     ocr: OCRQueueState,
+    internalWorkerPaused: Bool,
     localTime: ScannerServerLocalTime
 ) -> String {
     var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
@@ -1352,7 +1399,11 @@ private func renderWorkers(
     html += "<div><dt>Failed</dt><dd>\(jobs.filter { $0.status == .failed }.count)</dd></div></dl>"
 
     html += "<div class=\"worker-list\">"
-    html += renderInternalWorker(ocr: ocr, activeRemoteJobs: activeJobs)
+    html += renderInternalWorker(
+        ocr: ocr,
+        activeRemoteJobs: activeJobs,
+        paused: internalWorkerPaused
+    )
     for worker in workers {
         let workerJobs = activeJobs.filter { $0.workerID == worker.workerID }
         let pageTimings = jobs.filter {
@@ -1405,17 +1456,25 @@ private func renderWorkers(
         html += "<p class=\"muted\">Start scannerserver-worker with this server's address. New workers will appear here for approval.</p></div>"
     }
     html += "</div>"
-    html += renderWorkerQueue(ocr: ocr, jobs: activeJobs, workers: workers, localTime: localTime)
+    html += renderWorkerQueue(
+        ocr: ocr,
+        jobs: activeJobs,
+        workers: workers,
+        internalWorkerPaused: internalWorkerPaused,
+        localTime: localTime
+    )
     html += renderWorkerHistory(ocr: ocr, jobs: jobs, workers: workers, localTime: localTime)
     return html + "</section>"
 }
 
 private func renderInternalWorker(
     ocr: OCRQueueState,
-    activeRemoteJobs: [OCRWorkerJobSnapshot]
+    activeRemoteJobs: [OCRWorkerJobSnapshot],
+    paused: Bool
 ) -> String {
     let remoteKeys = Set(activeRemoteJobs.compactMap(workerJobKey))
-    let localRunning = ocr.processingJobs.filter { !remoteKeys.contains(queueJobKey($0)) }.count
+    let scheduledLocally = ocr.processingJobs.filter { !remoteKeys.contains(queueJobKey($0)) }.count
+    let localRunning = paused ? 0 : scheduledLocally
     let localPages = ocr.recentJobs.filter {
         $0.status == "done"
             && $0.executionLocation == .local
@@ -1424,14 +1483,25 @@ private func renderInternalWorker(
     let busyClass = localRunning > 0 ? " worker-card-busy" : ""
     var html = "<article class=\"worker-card\(busyClass)\"><div class=\"worker-card-head\"><div>"
     html += "<h3>Internal worker</h3><p class=\"muted\">scannerserver · local fallback</p></div>"
-    html += localRunning > 0
-        ? "<span class=\"status-pill working\">Processing</span>"
-        : "<span class=\"status-pill success\">Available</span>"
+    if paused {
+        html += "<span class=\"status-pill working\">Paused</span>"
+    } else if localRunning > 0 {
+        html += "<span class=\"status-pill working\">Processing</span>"
+    } else {
+        html += "<span class=\"status-pill success\">Available</span>"
+    }
     html += "</div><dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(ocr.cpuLimit) CPUs</dd></div>"
     html += "<div><dt>Running</dt><dd>\(localRunning)</dd></div>"
     html += "<div><dt>Speed</dt><dd>\(localSpeed(localPages))</dd></div>"
     html += "<div><dt>Priority</dt><dd>Remote workers first</dd></div></dl>"
-    html += "<p class=\"muted\">Always available when no compatible remote worker takes a job.</p></article>"
+    if paused {
+        html += "<p class=\"muted\">Local OCR is stopped. Waiting work remains available to remote workers.</p>"
+        html += "<div class=\"button-row\"><form class=\"inline-form\" method=\"post\" action=\"/internal-worker/resume\"><button>Resume</button></form></div>"
+    } else {
+        html += "<p class=\"muted\">Available when no compatible remote worker takes a job.</p>"
+        html += "<div class=\"button-row\"><form class=\"inline-form\" method=\"post\" action=\"/internal-worker/pause\"><button class=\"secondary-button\">Pause</button></form></div>"
+    }
+    html += "</article>"
     return html
 }
 
@@ -1439,6 +1509,7 @@ private func renderWorkerQueue(
     ocr: OCRQueueState,
     jobs: [OCRWorkerJobSnapshot],
     workers: [OCRWorkerSnapshot],
+    internalWorkerPaused: Bool,
     localTime: ScannerServerLocalTime
 ) -> String {
     let remoteKeys = Set(jobs.compactMap(workerJobKey))
@@ -1446,7 +1517,12 @@ private func renderWorkerQueue(
     guard !ocr.waitingJobs.isEmpty || !localProcessing.isEmpty || !jobs.isEmpty else { return "" }
     var html = "<div class=\"worker-job-section\"><h3>Waiting and running</h3><ul class=\"worker-job-list\">"
     for job in localProcessing {
-        html += queueJobRow(job, assignment: "Internal worker", status: "Processing", localTime: localTime)
+        html += queueJobRow(
+            job,
+            assignment: internalWorkerPaused ? "OCR scheduler" : "Internal worker",
+            status: internalWorkerPaused ? "Waiting for remote worker" : "Processing",
+            localTime: localTime
+        )
     }
     for job in ocr.waitingJobs {
         html += queueJobRow(job, assignment: "OCR scheduler", status: "Waiting", localTime: localTime)
@@ -1533,14 +1609,21 @@ private func workerSpeed(_ jobs: [OCRWorkerJobSnapshot]) -> String {
         return max(0, job.updatedAt.timeIntervalSince(started))
     }
     guard !durations.isEmpty else { return "No page timings yet" }
-    let pageLabel = durations.count == 1 ? "page" : "pages"
-    return "\(formatDuration(durations.reduce(0, +) / Double(durations.count)))/page · \(durations.count) \(pageLabel)"
+    return pageSpeed(totalDuration: durations.reduce(0, +), pageCount: durations.count)
 }
 
 private func localSpeed(_ jobs: [OCRJobTiming]) -> String {
     guard !jobs.isEmpty else { return "No page timings yet" }
-    let pageLabel = jobs.count == 1 ? "page" : "pages"
-    return "\(formatDuration(jobs.reduce(0) { $0 + $1.duration } / Double(jobs.count)))/page · \(jobs.count) \(pageLabel)"
+    return pageSpeed(
+        totalDuration: jobs.reduce(0) { $0 + $1.duration },
+        pageCount: jobs.count
+    )
+}
+
+private func pageSpeed(totalDuration: TimeInterval, pageCount: Int) -> String {
+    let pageLabel = pageCount == 1 ? "page" : "pages"
+    let pagesPerMinute = 60 * Double(pageCount) / max(totalDuration, 0.001)
+    return String(format: "%.1f pages/min · %d %@", pagesPerMinute, pageCount, pageLabel)
 }
 
 private func formatDuration(_ duration: TimeInterval) -> String {

@@ -177,10 +177,24 @@ struct ScannerServerApplicationTests {
                 let body = String(buffer: response.body)
                 #expect(response.status == .ok)
                 #expect(body.contains("Internal worker"))
+                #expect(body.contains("action=\"/internal-worker/pause\""))
                 #expect(body.contains("Mac Studio &amp; OCR"))
                 #expect(body.contains("Approval required"))
                 #expect(body.contains("action=\"/workers/mac-studio-1/approve\""))
             }
+            try await client.execute(uri: "/internal-worker/pause", method: .post) { response in
+                expectRedirect(response, to: "/workers")
+            }
+            #expect(await fixture.internalOCRWorker.isPaused)
+            try await client.execute(uri: "/workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Local OCR is stopped"))
+                #expect(body.contains("action=\"/internal-worker/resume\""))
+            }
+            try await client.execute(uri: "/internal-worker/resume", method: .post) { response in
+                expectRedirect(response, to: "/workers")
+            }
+            #expect(await fixture.internalOCRWorker.isPaused == false)
             try await client.execute(
                 uri: "/workers/mac-studio-1/approve",
                 method: .post
@@ -368,7 +382,7 @@ struct ScannerServerApplicationTests {
             }
             try await client.execute(uri: "/workers", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains("/page · 1 page"))
+                #expect(body.contains("pages/min · 1 page"))
                 #expect(body.contains("Recent completed jobs"))
                 #expect(body.contains("Succeeded"))
             }
@@ -914,6 +928,7 @@ private struct HTTPFixture: Sendable {
     let settingsStore: ScanSettingsStore
     let scanJobs: ScanJobActor
     let ocrQueue: OCRQueueActor
+    let internalOCRWorker: InternalOCRWorkerControl
     let ocrWorkerRegistry: OCRWorkerRegistry
     let ocrWorkerJobs: OCRWorkerJobStore
     let executor: SlowCapturingExecutor
@@ -938,6 +953,10 @@ private struct HTTPFixture: Sendable {
             webUpdates: webUpdates
         )
         ocrQueue = OCRQueueActor(executor: executor, webUpdates: webUpdates)
+        internalOCRWorker = InternalOCRWorkerControl(
+            fileURL: outputDirectory.appendingPathComponent(".test-internal-ocr-worker.json"),
+            webUpdates: webUpdates
+        )
         ocrWorkerRegistry = OCRWorkerRegistry(
             fileURL: outputDirectory.appendingPathComponent(".test-ocr-workers.json"),
             webUpdates: webUpdates
@@ -957,6 +976,7 @@ private struct HTTPFixture: Sendable {
             settingsStore: settingsStore,
             scanJobs: scanJobs,
             ocrQueue: ocrQueue,
+            internalOCRWorker: internalOCRWorker,
             ocrWorkerRegistry: ocrWorkerRegistry,
             ocrWorkerJobs: ocrWorkerJobs,
             ocrWorkerResultValidator: AcceptingOCRWorkerResultValidator(),

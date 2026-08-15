@@ -28,8 +28,10 @@ struct OCRWorkerContainerRunnerTests {
             "--memory", "12G",
             "--uid", "501",
             "--gid", "20",
+            "--env", "HOME=/work",
             "--env", "SCAN_OUTPUT_DIR=/work",
             "--env", "TMPDIR=/work/.tmp",
+            "--workdir", "/work",
             "--volume", "/tmp/worker job:/work",
             "scannerserver:test",
             "ocrmypdf",
@@ -68,9 +70,57 @@ struct OCRWorkerContainerRunnerTests {
             workingDirectory: workspace
         ))
     }
+
+    @Test("Apple container runs OCR and autocrop inside the isolated worker job")
+    func cropRequest() throws {
+        let workspace = URL(fileURLWithPath: "/tmp/worker-job", isDirectory: true)
+        let configuration = OCRWorkerContainerConfiguration(
+            runtime: "container",
+            image: "scannerserver:test",
+            cpusPerJob: 4,
+            memory: "8G",
+            workspaceRoot: workspace.deletingLastPathComponent(),
+            userID: 501,
+            groupID: 20
+        )
+        let request = try configuration.processRequest(
+            lease: testContainerLease(
+                cropConfiguration: OCRWorkerCropConfiguration(
+                    backgroundDelta: 9,
+                    borderPixels: 50,
+                    marginPoints: 2.5,
+                    maximumWidthRatio: 0.7,
+                    maximumHeightRatio: 0.75,
+                    minimumDensity: 0.1,
+                    keepOriginalBoxes: true,
+                    debug: true
+                )
+            ),
+            workspace: workspace
+        )
+
+        #expect(request.arguments.suffix(24) == [
+            "scannerserver:test",
+            "scannerserver-worker", "process-job",
+            "--crop-background-delta", "9",
+            "--crop-border-pixels", "50",
+            "--crop-margin-points", "2.5",
+            "--crop-maximum-width-ratio", "0.7",
+            "--crop-maximum-height-ratio", "0.75",
+            "--crop-minimum-density", "0.1",
+            "--crop-keep-original-boxes",
+            "--crop-debug",
+            "--",
+            "--language", "deu+eng",
+            "--jobs", "4",
+            "/work/source.pdf", "/work/result.pdf",
+        ])
+    }
 }
 
-private func testContainerLease() -> OCRWorkerJobLease {
+private func testContainerLease(
+    cropConfiguration: OCRWorkerCropConfiguration? = nil
+) -> OCRWorkerJobLease {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     return OCRWorkerJobLease(
         manifest: OCRWorkerJobManifest(
@@ -82,7 +132,8 @@ private func testContainerLease() -> OCRWorkerJobLease {
             ocrLanguages: ["deu", "eng"],
             ocrEnabled: true,
             removeBlankPages: false,
-            cropPages: false,
+            cropPages: cropConfiguration != nil,
+            cropConfiguration: cropConfiguration,
             containerArguments: [
                 "--language", "deu+eng",
                 "--jobs", "3",

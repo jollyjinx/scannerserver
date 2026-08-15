@@ -29,24 +29,26 @@ do not need a fixed address or an inbound firewall rule.
 - `OCRWorkerJobStore` provides an atomically persisted manifest and lease state machine at
   `/scans/.scannerserver-ocr-jobs.json`. It supports FIFO capability matching, opaque lease tokens,
   renewal, authenticated terminal transitions, cancellation, and restart-safe lease expiry.
-- `OCRQueueActor` gives approved, enabled, compatible workers first refusal on `ocrmypdf` commands,
-  including when a registered worker is temporarily offline. Blank-page removal, autocrop, scan
-  acquisition, naming, and final publication stay on scannerserver.
+- `OCRQueueActor` gives approved, enabled, compatible workers first refusal on streaming OCR jobs,
+  including when a registered worker is temporarily offline. Capability-aware workers run OCR and
+  the configured autocrop on each page. Scan acquisition, document-wide blank-page policy, naming,
+  ordered assembly, verification, and final publication stay on scannerserver.
 - Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is wrapped in a
   one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR
-  results are uploaded immediately, retained in the scan workspace, and assembled in source order
-  after the feeder is empty. The raw `.pdf` remains independently published; blank removal,
-  trimming, creator metadata, and atomic `.ocr.pdf` publication happen after ordered assembly.
+  and cropped results are uploaded immediately, retained in the scan workspace, and assembled in
+  source order after the feeder is empty. The raw `.pdf` remains independently published;
+  document-wide blank removal, creator metadata, and atomic `.ocr.pdf` publication happen after
+  ordered assembly.
   The SANE backend remains whole-document because `scanimage` does not expose the same page-arrival
   callback.
-- The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF directly in worker-container
-  mode or starts the existing image with Apple `container` in native macOS mode, and uploads the
-  result through its authenticated lease.
+- The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF and the native autocrop
+  implementation directly in worker-container mode or inside the existing image with Apple
+  `container` in native macOS mode, and uploads the result through its authenticated lease.
 - scannerserver requires a PDF result, calculates its SHA-256 digest, writes it to a same-directory
   staging file, validates it with `qpdf --check`, and atomically publishes the established
   `.ocr.pdf` output name.
 - No approved and enabled compatible worker, assignment timeout, or reported worker failure falls
-  back to the existing local OCR executor. Cancellation invalidates the remote lease.
+  back to local OCR and local per-page autocrop. Cancellation invalidates the remote lease.
 
 ## Run A Worker Container
 
@@ -80,7 +82,7 @@ Open the **Workers** page on scannerserver and approve the new worker. `--jobs` 
 page or document jobs, and the detected CPUs are divided across those slots. With the recommended
 `--jobs 1`, one OCR page can use the entire container CPU allowance while additional network workers
 consume other queued pages. The page includes the scannerserver's internal fallback worker,
-highlights processing workers, reports successful page count and average seconds per page, and shows
+highlights processing workers, reports successful page count and average pages per minute, and shows
 waiting, running, and recent terminal work in compact lists with document, page, operations, worker,
 timing, and result details.
 
@@ -89,6 +91,12 @@ leases to the queue. Another compatible worker can claim them without waiting fo
 paused process remains registered and continues heartbeating; if it is still processing an old
 lease, its next renewal or upload is rejected and that work is discarded. **Resume** makes it
 eligible again. **Disable** remains the administrative off switch.
+
+The internal worker has its own **Pause** and **Resume** controls. Pausing it cancels active local
+OCR and keeps that page in the scheduler so a compatible remote worker can take over. While it is
+paused, new remote registrations and approvals are detected immediately; if no remote capacity is
+available, work waits instead of consuming scannerserver CPU. Resuming permits local fallback
+again. This state survives a scannerserver restart.
 
 Deleting a worker removes its persisted registration and approval. If that worker process is still
 running, it registers again with the same identity and must be approved again.
@@ -171,7 +179,8 @@ GET  /api/ocr-workers
 ```
 
 The browser approval, pause/resume, enable/disable, and delete controls use server-rendered form
-routes under `/workers/{worker-id}/...`.
+routes under `/workers/{worker-id}/...`; internal fallback pause/resume uses
+`/internal-worker/...`.
 The public listing contains worker metadata and status but never authentication tokens.
 
 Remote manifests may carry optional document, batch, page, and operation metadata. Older persisted

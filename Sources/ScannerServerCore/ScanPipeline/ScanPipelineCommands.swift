@@ -8,7 +8,8 @@ public enum ScanPipelineCommands {
         workingDirectory: URL? = nil,
         jobs: Int? = nil,
         niceLevel: Int? = nil,
-        workerMetadata: OCRWorkerJobMetadata? = nil
+        workerMetadata: OCRWorkerJobMetadata? = nil,
+        workerCropConfiguration: OCRWorkerCropConfiguration? = nil
     ) -> ProcessRequest {
         let language = environment?["SCAN_LANGUAGE"] ?? "deu+eng"
         let rotatePagesThreshold = environment?["SCAN_OCR_ROTATE_PAGES_THRESHOLD"] ?? "2.0"
@@ -32,7 +33,8 @@ public enum ScanPipelineCommands {
             environment: environment,
             workingDirectory: workingDirectory,
             niceLevel: niceLevel,
-            ocrWorkerMetadata: workerMetadata
+            ocrWorkerMetadata: workerMetadata,
+            ocrWorkerCropConfiguration: workerCropConfiguration
         )
     }
 

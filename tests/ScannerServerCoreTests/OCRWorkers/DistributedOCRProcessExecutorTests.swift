@@ -60,6 +60,59 @@ struct DistributedOCRProcessExecutorTests {
         #expect(await local.requests.isEmpty)
     }
 
+    @Test("Remote autocrop configuration is included in a capable worker lease")
+    func remoteCropExecution() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inputURL = root.appendingPathComponent("page.pdf")
+        let outputURL = root.appendingPathComponent("page.ocr.pdf")
+        try Data("%PDF-1.4\ninput\n".utf8).write(to: inputURL)
+
+        let registry = OCRWorkerRegistry()
+        let registration = distributedTestRegistration()
+        _ = try await registry.register(registration)
+        _ = try await registry.approve(workerID: registration.workerID)
+        let jobs = OCRWorkerJobStore(leaseTokenProvider: { "lease-token" })
+        let local = DistributedTestExecutor()
+        let executor = DistributedOCRProcessExecutor(
+            local: local,
+            workers: registry,
+            jobs: jobs,
+            configuration: DistributedOCRConfiguration(
+                assignmentWaitSeconds: 2,
+                completionTimeoutSeconds: 5
+            )
+        )
+        let crop = OCRWorkerCropConfiguration(marginPoints: 2.5)
+        let request = ScanPipelineCommands.ocr(
+            inputPath: inputURL.path,
+            outputPath: outputURL.path,
+            environment: ["SCAN_LANGUAGE": "deu+eng"],
+            workerCropConfiguration: crop
+        )
+
+        async let execution = executor.execute(request)
+        let lease = try await requireLease(jobs: jobs, registration: registration)
+        #expect(lease.manifest.cropPages)
+        #expect(lease.manifest.cropConfiguration == crop)
+        let output = Data("%PDF-1.4\nremote cropped searchable output\n".utf8)
+        try output.write(to: outputURL)
+        _ = try await jobs.succeed(
+            jobID: lease.manifest.jobID,
+            workerID: registration.workerID,
+            leaseToken: lease.leaseToken,
+            result: OCRWorkerJobResult(
+                outputByteCount: Int64(output.count),
+                outputSHA256: OCRWorkerSHA256.hexDigest(output)
+            )
+        )
+
+        #expect(try await execution.executionLocation == .remote)
+        #expect(await local.requests.isEmpty)
+    }
+
     @Test("No eligible worker preserves the local OCR executor")
     func localFallback() async throws {
         let localResult = ProcessResult(exitStatus: 0, standardOutput: "local\n")
@@ -79,6 +132,66 @@ struct DistributedOCRProcessExecutorTests {
         #expect(result == localResult)
         #expect(result.executionLocation == .local)
         #expect(await local.requests == [request])
+    }
+
+    @Test("Pausing active internal OCR cancels local fallback and lets a remote worker take over")
+    func pausedInternalWorkerAllowsRemoteTakeover() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inputURL = root.appendingPathComponent("scan.pdf")
+        let outputURL = root.appendingPathComponent("scan.ocr.pdf")
+        try Data("%PDF-1.4\ninput\n".utf8).write(to: inputURL)
+
+        let webUpdates = WebUpdateNotifier()
+        let internalWorker = InternalOCRWorkerControl(webUpdates: webUpdates)
+        let registry = OCRWorkerRegistry(webUpdates: webUpdates)
+        let jobs = OCRWorkerJobStore(leaseTokenProvider: { "lease-token" })
+        let local = CancellableDistributedTestExecutor()
+        let executor = DistributedOCRProcessExecutor(
+            local: local,
+            workers: registry,
+            jobs: jobs,
+            internalWorker: internalWorker,
+            configuration: DistributedOCRConfiguration(
+                assignmentWaitSeconds: 2,
+                completionTimeoutSeconds: 5
+            )
+        )
+        let request = ScanPipelineCommands.ocr(
+            inputPath: inputURL.path,
+            outputPath: outputURL.path,
+            environment: ["SCAN_LANGUAGE": "deu+eng"]
+        )
+
+        async let execution = executor.execute(request)
+        for _ in 0..<100 {
+            if await local.requestCount > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await local.requestCount == 1)
+
+        try await internalWorker.setPaused(true)
+        let registration = distributedTestRegistration()
+        _ = try await registry.register(registration)
+        _ = try await registry.approve(workerID: registration.workerID)
+        let lease = try await requireLease(jobs: jobs, registration: registration)
+        let output = Data("%PDF-1.4\nremote takeover output\n".utf8)
+        try output.write(to: outputURL)
+        _ = try await jobs.succeed(
+            jobID: lease.manifest.jobID,
+            workerID: registration.workerID,
+            leaseToken: lease.leaseToken,
+            result: OCRWorkerJobResult(
+                outputByteCount: Int64(output.count),
+                outputSHA256: OCRWorkerSHA256.hexDigest(output)
+            )
+        )
+
+        #expect(try await execution.executionLocation == .remote)
+        #expect(await local.cancellationCount == 1)
+        #expect(try Data(contentsOf: outputURL) == output)
     }
 
     @Test("Approved enabled workers get first refusal after a stale heartbeat")
@@ -148,6 +261,27 @@ private actor DistributedTestExecutor: ProcessExecutor {
     }
 }
 
+private actor CancellableDistributedTestExecutor: ProcessExecutor {
+    private(set) var requestCount = 0
+    private(set) var cancellationCount = 0
+
+    func execute(_ request: ProcessRequest) async throws -> ProcessResult {
+        requestCount += 1
+        do {
+            try await Task.sleep(for: .seconds(30))
+            return ProcessResult(exitStatus: 0, standardOutput: "local\n")
+        } catch is CancellationError {
+            if let outputPath = request.arguments.last {
+                try? Data("partial local output".utf8).write(
+                    to: URL(fileURLWithPath: outputPath)
+                )
+            }
+            cancellationCount += 1
+            throw CancellationError()
+        }
+    }
+}
+
 private func distributedTestRegistration() -> OCRWorkerRegistrationRequest {
     OCRWorkerRegistrationRequest(
         workerID: "remote-worker",
@@ -158,7 +292,8 @@ private func distributedTestRegistration() -> OCRWorkerRegistrationRequest {
         architecture: "arm64",
         cpuCount: 8,
         maxConcurrentJobs: 1,
-        ocrLanguages: ["deu", "eng"]
+        ocrLanguages: ["deu", "eng"],
+        capabilities: [OCRWorkerCapability.cropPDFPages]
     )
 }
 
@@ -169,7 +304,8 @@ private func requireLease(
     for _ in 0..<100 {
         if let lease = try await jobs.leaseNext(
             workerID: registration.workerID,
-            ocrLanguages: registration.ocrLanguages
+            ocrLanguages: registration.ocrLanguages,
+            capabilities: registration.capabilities ?? []
         ) {
             return lease
         }

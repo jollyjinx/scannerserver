@@ -31,6 +31,22 @@ struct OCRWorkerJobStoreTests {
         #expect(try await store.snapshot(jobID: "first").status == .queued)
     }
 
+    @Test("Autocrop jobs lease only to workers that advertise crop support")
+    func cropCapabilityLeasing() async throws {
+        let store = OCRWorkerJobStore(leaseTokenProvider: { "lease-token" })
+        _ = try await store.enqueue(testManifest(cropPages: true))
+
+        #expect(try await store.leaseNext(
+            workerID: "ocr-only",
+            ocrLanguages: ["eng"]
+        ) == nil)
+        #expect(try await store.leaseNext(
+            workerID: "ocr-and-crop",
+            ocrLanguages: ["eng"],
+            capabilities: [OCRWorkerCapability.cropPDFPages]
+        )?.manifest.jobID == "job-1")
+    }
+
     @Test("Only the lease owner can renew and complete a live lease")
     func authenticatedTransitions() async throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
@@ -265,6 +281,7 @@ struct OCRWorkerJobStoreTests {
 private func testManifest(
     jobID: String = "job-1",
     languages: [String] = ["eng"],
+    cropPages: Bool = false,
     createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
 ) -> OCRWorkerJobManifest {
     OCRWorkerJobManifest(
@@ -276,7 +293,7 @@ private func testManifest(
         ocrLanguages: languages,
         ocrEnabled: true,
         removeBlankPages: false,
-        cropPages: true,
+        cropPages: cropPages,
         createdAt: createdAt
     )
 }

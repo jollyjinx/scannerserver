@@ -15,7 +15,8 @@ private let workerCPUDefault = directOCRDefault
 struct ScannerServerWorkerCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "scannerserver-worker",
-        abstract: "Register this computer as an OCR worker for scannerserver."
+        abstract: "Register this computer as an OCR worker for scannerserver.",
+        subcommands: [ProcessWorkerJobCommand.self]
     )
 
     @Option(help: "The scannerserver base URL. When omitted, discover scannerserver through Bonjour.")
@@ -90,7 +91,8 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
             architecture: architectureName,
             cpuCount: cpus,
             maxConcurrentJobs: jobs,
-            ocrLanguages: languages.sorted()
+            ocrLanguages: languages.sorted(),
+            capabilities: [OCRWorkerCapability.cropPDFPages]
         )
 
         JLog.notice("Connecting OCR worker \(name) to \(serverURL.absoluteString)")
@@ -253,5 +255,85 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
         #else
         "unknown"
         #endif
+    }
+}
+
+private struct ProcessWorkerJobCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "process-job",
+        abstract: "Run one OCR and autocrop job inside the worker image."
+    )
+
+    @Option(name: .customLong("crop-background-delta"))
+    var backgroundDelta: Int = 8
+
+    @Option(name: .customLong("crop-border-pixels"))
+    var borderPixels: Int = 64
+
+    @Option(name: .customLong("crop-margin-points"))
+    var marginPoints: Double = 1.0
+
+    @Option(name: .customLong("crop-maximum-width-ratio"))
+    var maximumWidthRatio: Double = 0.80
+
+    @Option(name: .customLong("crop-maximum-height-ratio"))
+    var maximumHeightRatio: Double = 0.80
+
+    @Option(name: .customLong("crop-minimum-density"))
+    var minimumDensity: Double = 0.08
+
+    @Flag(name: .customLong("crop-keep-original-boxes"))
+    var keepOriginalBoxes = false
+
+    @Flag(name: .customLong("crop-debug"))
+    var cropDebug = false
+
+    @Argument(parsing: .captureForPassthrough)
+    var ocrArguments: [String] = []
+
+    mutating func validate() throws {
+        if ocrArguments == ["--help"] || ocrArguments == ["-h"] {
+            throw CleanExit.helpRequest(Self.self)
+        }
+        let arguments = normalizedOCRArguments
+        guard arguments.count >= 2,
+              arguments[arguments.count - 2] == "/work/source.pdf",
+              arguments.last == "/work/result.pdf" else {
+            throw ValidationError("OCR arguments must end with /work/source.pdf /work/result.pdf")
+        }
+    }
+
+    mutating func run() async throws {
+        let arguments = normalizedOCRArguments
+        let resultURL = URL(fileURLWithPath: arguments.last!, isDirectory: false)
+        let result = try await OCRWorkerJobPipeline(
+            ocrExecutor: FoundationProcessExecutor()
+        ).execute(
+            ocrRequest: ProcessRequest(
+                executable: "ocrmypdf",
+                arguments: arguments,
+                workingDirectory: URL(fileURLWithPath: "/work", isDirectory: true)
+            ),
+            resultURL: resultURL,
+            cropConfiguration: OCRWorkerCropConfiguration(
+                backgroundDelta: backgroundDelta,
+                borderPixels: borderPixels,
+                marginPoints: marginPoints,
+                maximumWidthRatio: maximumWidthRatio,
+                maximumHeightRatio: maximumHeightRatio,
+                minimumDensity: minimumDensity,
+                keepOriginalBoxes: keepOriginalBoxes,
+                debug: cropDebug
+            )
+        )
+        guard result.succeeded else {
+            let diagnostic = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
+            JLog.error("\(diagnostic.isEmpty ? "Worker job processing failed" : diagnostic)")
+            throw ExitCode(result.exitStatus)
+        }
+    }
+
+    private var normalizedOCRArguments: [String] {
+        ocrArguments.first == "--" ? Array(ocrArguments.dropFirst()) : ocrArguments
     }
 }

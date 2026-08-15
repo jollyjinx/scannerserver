@@ -4,6 +4,10 @@ public enum OCRWorkerProtocol {
     public static let currentVersion = 1
 }
 
+public enum OCRWorkerCapability {
+    public static let cropPDFPages = "crop-pdf-pages-v1"
+}
+
 public struct OCRWorkerRegistrationRequest: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let workerID: String
@@ -15,6 +19,7 @@ public struct OCRWorkerRegistrationRequest: Codable, Equatable, Sendable {
     public let cpuCount: Int
     public let maxConcurrentJobs: Int
     public let ocrLanguages: [String]
+    public let capabilities: [String]?
 
     public init(
         protocolVersion: Int = OCRWorkerProtocol.currentVersion,
@@ -26,7 +31,8 @@ public struct OCRWorkerRegistrationRequest: Codable, Equatable, Sendable {
         architecture: String,
         cpuCount: Int,
         maxConcurrentJobs: Int,
-        ocrLanguages: [String]
+        ocrLanguages: [String],
+        capabilities: [String]? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.workerID = workerID
@@ -38,6 +44,7 @@ public struct OCRWorkerRegistrationRequest: Codable, Equatable, Sendable {
         self.cpuCount = cpuCount
         self.maxConcurrentJobs = maxConcurrentJobs
         self.ocrLanguages = ocrLanguages
+        self.capabilities = capabilities
     }
 }
 
@@ -89,6 +96,7 @@ public struct OCRWorkerSnapshot: Codable, Equatable, Sendable {
     public let maxConcurrentJobs: Int
     public let runningJobs: Int
     public let ocrLanguages: [String]
+    public let capabilities: [String]
     public let approved: Bool
     public let enabled: Bool
     public let paused: Bool
@@ -102,6 +110,7 @@ public enum OCRWorkerRegistryError: Error, Equatable, LocalizedError, Sendable {
     case invalidWorkerID
     case invalidAuthenticationToken
     case invalidCapacity
+    case invalidCapabilities
     case authenticationFailed
     case unknownWorker
     case approvalRequired
@@ -120,6 +129,8 @@ public enum OCRWorkerRegistryError: Error, Equatable, LocalizedError, Sendable {
             "Worker authentication token is invalid."
         case .invalidCapacity:
             "Worker CPU and concurrent-job capacity must be positive."
+        case .invalidCapabilities:
+            "Worker capabilities are invalid."
         case .authenticationFailed:
             "OCR worker authentication failed."
         case .unknownWorker:

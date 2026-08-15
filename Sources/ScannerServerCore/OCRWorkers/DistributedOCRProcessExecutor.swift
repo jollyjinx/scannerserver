@@ -64,38 +64,98 @@ public enum OCRRemoteDispatchError: Error, LocalizedError, Sendable {
 }
 
 public struct DistributedOCRProcessExecutor: ProcessExecutor {
+    private enum LocalExecutionOutcome: Sendable {
+        case completed(ProcessResult)
+        case paused
+    }
+
     private let local: any ProcessExecutor
     private let workers: OCRWorkerRegistry
     private let jobs: OCRWorkerJobStore
+    private let internalWorker: InternalOCRWorkerControl
     private let configuration: DistributedOCRConfiguration
 
     public init(
         local: any ProcessExecutor,
         workers: OCRWorkerRegistry,
         jobs: OCRWorkerJobStore,
+        internalWorker: InternalOCRWorkerControl = InternalOCRWorkerControl(),
         configuration: DistributedOCRConfiguration
     ) {
         self.local = local
         self.workers = workers
         self.jobs = jobs
+        self.internalWorker = internalWorker
         self.configuration = configuration
     }
 
     public func execute(_ request: ProcessRequest) async throws -> ProcessResult {
-        guard configuration.enabled,
-              request.executable == "ocrmypdf",
-              let remoteRequest = try? makeRemoteRequest(request),
-              await workers.hasPreferredWorker(ocrLanguages: remoteRequest.languages) else {
+        guard request.executable == "ocrmypdf",
+              let remoteRequest = try? makeRemoteRequest(request) else {
             return try await local.execute(request)
         }
 
-        do {
-            return try await executeRemotely(remoteRequest)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            JLog.warning("Remote OCR unavailable; falling back locally: \(error.localizedDescription)")
-            return try await local.execute(request)
+        while !Task.isCancelled {
+            let observedRevision = await internalWorker.webUpdates.currentRevision
+            if configuration.enabled,
+               await workers.hasPreferredWorker(
+                   ocrLanguages: remoteRequest.languages,
+                   requiredCapabilities: remoteRequest.cropConfiguration == nil
+                       ? []
+                       : [OCRWorkerCapability.cropPDFPages]
+               ) {
+                do {
+                    return try await executeRemotely(remoteRequest)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    JLog.warning("Remote OCR unavailable: \(error.localizedDescription)")
+                    if await internalWorker.isPaused {
+                        try await Task.sleep(for: .milliseconds(250))
+                        continue
+                    }
+                }
+            }
+
+            if await internalWorker.isPaused {
+                JLog.notice("Internal OCR worker is paused; waiting for remote capacity or resume")
+                try await internalWorker.waitForDispatchChange(after: observedRevision)
+                continue
+            }
+
+            switch try await executeLocallyUnlessPaused(request) {
+            case .completed(let result):
+                return result
+            case .paused:
+                try? FileManager.default.removeItem(
+                    at: URL(fileURLWithPath: remoteRequest.outputPath, isDirectory: false)
+                )
+                // Recheck remote eligibility before waiting so a worker that
+                // appeared while local cancellation completed cannot be missed.
+                continue
+            }
+        }
+        throw CancellationError()
+    }
+
+    private func executeLocallyUnlessPaused(
+        _ request: ProcessRequest
+    ) async throws -> LocalExecutionOutcome {
+        guard !(await internalWorker.isPaused) else { return .paused }
+
+        return try await withThrowingTaskGroup(of: LocalExecutionOutcome.self) { group in
+            group.addTask {
+                .completed(try await local.execute(request))
+            }
+            group.addTask {
+                try await internalWorker.waitUntilPaused()
+                return .paused
+            }
+            guard let outcome = try await group.next() else {
+                throw CancellationError()
+            }
+            group.cancelAll()
+            return outcome
         }
     }
 
@@ -110,7 +170,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             ocrLanguages: request.languages,
             ocrEnabled: true,
             removeBlankPages: false,
-            cropPages: false,
+            cropPages: request.cropConfiguration != nil,
+            cropConfiguration: request.cropConfiguration,
             containerArguments: request.containerArguments,
             metadata: request.metadata
         )
@@ -167,6 +228,7 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
         let languages: [String]
         let containerArguments: [String]
         let metadata: OCRWorkerJobMetadata?
+        let cropConfiguration: OCRWorkerCropConfiguration?
     }
 
     private func makeRemoteRequest(_ request: ProcessRequest) throws -> RemoteRequest {
@@ -189,7 +251,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             outputPath: outputPath,
             languages: languages,
             containerArguments: arguments,
-            metadata: request.ocrWorkerMetadata
+            metadata: request.ocrWorkerMetadata,
+            cropConfiguration: request.ocrWorkerCropConfiguration
         )
     }
 }

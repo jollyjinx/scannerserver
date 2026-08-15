@@ -135,10 +135,15 @@ docker run -d \
 ```
 
 Open **Workers** in scannerserver and approve it. New OCR PDFs are then dispatched automatically;
-the scanner host retains scanning, preprocessing, filenames, verification, and final publication.
-The worker detects the container CPU allowance and runs OCRmyPDF directly—no Docker socket or nested
-container is required. See [Distributed OCR workers](docs/ocr-workers.md) for native macOS mode,
-resource options, security, and failure behavior.
+for streaming ScanSnap scans, capable workers also autocrop each searchable page before returning
+it. The scanner host retains scanning, document-wide blank-page policy, filenames, verification,
+assembly, and final publication. The Workers page reports throughput in pages/minute and can pause
+or resume both remote workers and the internal fallback worker. Pausing active internal OCR returns
+that page to remote dispatch instead of continuing to consume scannerserver CPU. The worker detects
+the container CPU allowance and runs the job
+directly—no Docker socket or nested container is required. See
+[Distributed OCR workers](docs/ocr-workers.md) for native macOS mode, resource options, security,
+and failure behavior.
 
 ## Updating
 

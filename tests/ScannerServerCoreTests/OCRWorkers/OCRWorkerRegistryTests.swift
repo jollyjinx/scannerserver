@@ -16,6 +16,11 @@ struct OCRWorkerRegistryTests {
 
         let approved = try await registry.approve(workerID: registration.workerID, now: start)
         #expect(approved.availability == .online)
+        #expect(approved.capabilities == [OCRWorkerCapability.cropPDFPages])
+        #expect(await registry.hasPreferredWorker(
+            ocrLanguages: ["eng"],
+            requiredCapabilities: [OCRWorkerCapability.cropPDFPages]
+        ))
 
         let busy = try await registry.heartbeat(
             workerID: registration.workerID,
@@ -139,6 +144,7 @@ private func testRegistration() -> OCRWorkerRegistrationRequest {
         architecture: "arm64",
         cpuCount: 12,
         maxConcurrentJobs: 2,
-        ocrLanguages: ["deu", "eng"]
+        ocrLanguages: ["deu", "eng"],
+        capabilities: [OCRWorkerCapability.cropPDFPages]
     )
 }

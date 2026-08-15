@@ -293,7 +293,7 @@ public actor OCRQueueActor {
             workingDirectory: batch.request.workDirectory,
             ocrEnabled: true,
             removeBlankPages: false,
-            cropPages: false,
+            cropPages: batch.request.cropPages,
             deferredProcessing: nil,
             workerMetadata: OCRWorkerJobMetadata(
                 documentName: batch.request.documentName,
@@ -649,6 +649,9 @@ public actor OCRQueueActor {
     }
 
     private func execute(job: Job, outputPath: String, jobs: Int) async throws -> ProcessResult {
+        if job.streamingPageNumber != nil {
+            return try await executeStreamingPage(job: job, outputPath: outputPath, jobs: jobs)
+        }
         guard job.removeBlankPages || job.cropPages else {
             guard job.ocrEnabled else {
                 return ProcessResult(exitStatus: 0, standardOutput: job.inputPath + "\n")
@@ -719,6 +722,44 @@ public actor OCRQueueActor {
             with: stagedInput
         )
         return ProcessResult(exitStatus: 0, standardOutput: outputPath + "\n")
+    }
+
+    private func executeStreamingPage(
+        job: Job,
+        outputPath: String,
+        jobs: Int
+    ) async throws -> ProcessResult {
+        let environment = job.environment ?? [:]
+        let cropConfiguration = job.cropPages
+            ? OCRWorkerCropConfiguration(
+                request: try DocumentProcessingOptions(environment: environment)
+                    .cropPagesRequest(pdfPath: outputPath)
+            )
+            : nil
+        let result = try await executor.execute(ScanPipelineCommands.ocr(
+            inputPath: job.inputPath,
+            outputPath: outputPath,
+            environment: job.environment,
+            workingDirectory: job.workingDirectory,
+            jobs: jobs,
+            niceLevel: configuration.niceLevel(for: job.environment),
+            workerMetadata: workerMetadata(for: job),
+            workerCropConfiguration: cropConfiguration
+        ))
+        guard result.succeeded,
+              let cropConfiguration,
+              result.executionLocation == .local else {
+            return result
+        }
+
+        let cropResult = try await prioritizedDocumentExecutor(for: job).execute(
+            cropConfiguration.request(pdfPath: outputPath).command.processRequest(
+                environment: job.environment,
+                workingDirectory: job.workingDirectory
+            )
+        )
+        guard cropResult.succeeded else { return cropResult }
+        return result
     }
 
     private func runDeferredProcessing(
@@ -873,17 +914,6 @@ public actor OCRQueueActor {
         if batch.request.removeBlankPages {
             let result = try await documentExecutor.execute(
                 options.removeBlankPagesRequest(pdfPath: stagingURL.path).command.processRequest(
-                    environment: batch.request.environment,
-                    workingDirectory: batch.request.workDirectory
-                )
-            )
-            guard result.succeeded else {
-                throw StreamingScanError.assemblyFailed(result.standardError)
-            }
-        }
-        if batch.request.cropPages {
-            let result = try await documentExecutor.execute(
-                options.cropPagesRequest(pdfPath: stagingURL.path).command.processRequest(
                     environment: batch.request.environment,
                     workingDirectory: batch.request.workDirectory
                 )

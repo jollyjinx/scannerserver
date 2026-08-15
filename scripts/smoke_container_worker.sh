@@ -12,6 +12,7 @@ base_url="http://127.0.0.1:${port}"
 worker_server_url="http://host.docker.internal:${port}"
 scan_name="2026-08-15.120500.pdf"
 ocr_name="2026-08-15.120500.ocr.pdf"
+combined_name="result.pdf"
 
 cleanup() {
   docker rm --force "${worker_name}" >/dev/null 2>&1 || true
@@ -108,4 +109,28 @@ docker exec "${server_name}" qpdf --check "/scans/${ocr_name}" >/dev/null
 curl --fail --silent "${base_url}/workers" | grep -q '>Completed</dt><dd>1</dd>'
 curl --fail --silent "${base_url}/workers" | grep -q '2 CPUs · 1 job slot'
 docker logs "${worker_name}" 2>&1 | grep -q 'Completed remote OCR job'
+
+cp "${scan_dir}/${scan_name}" "${scan_dir}/source.pdf"
+docker run \
+  --rm \
+  --user "$(id -u):$(id -g)" \
+  --env HOME=/work \
+  --env SCAN_OUTPUT_DIR=/work \
+  --env TMPDIR=/work/.tmp \
+  --volume "${scan_dir}:/work" \
+  --workdir /work \
+  "${image}" \
+  scannerserver-worker process-job \
+  --crop-margin-points 2.5 \
+  -- \
+  --language eng \
+  --rotate-pages \
+  --rotate-pages-threshold 2.0 \
+  --deskew \
+  --optimize 1 \
+  --jobs 2 \
+  /work/source.pdf \
+  "/work/${combined_name}"
+test -s "${scan_dir}/${combined_name}"
+docker exec "${server_name}" qpdf --check "/scans/${combined_name}" >/dev/null
 printf 'Container worker smoke passed: %s -> %s\n' "${scan_name}" "${ocr_name}"

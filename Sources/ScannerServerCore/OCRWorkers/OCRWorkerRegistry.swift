@@ -210,25 +210,33 @@ public actor OCRWorkerRegistry {
 
     public func hasEligibleWorker(
         ocrLanguages: [String],
+        requiredCapabilities: [String] = [],
         now: Date = Date()
     ) -> Bool {
         let required = Set(ocrLanguages)
+        let capabilities = Set(requiredCapabilities)
         return workers.values.contains { worker in
             worker.approved
                 && worker.enabled
                 && worker.paused != true
                 && now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds
                 && required.isSubset(of: Set(worker.registration.ocrLanguages))
+                && capabilities.isSubset(of: Set(worker.registration.capabilities ?? []))
         }
     }
 
-    public func hasPreferredWorker(ocrLanguages: [String]) -> Bool {
+    public func hasPreferredWorker(
+        ocrLanguages: [String],
+        requiredCapabilities: [String] = []
+    ) -> Bool {
         let required = Set(ocrLanguages)
+        let capabilities = Set(requiredCapabilities)
         return workers.values.contains { worker in
             worker.approved
                 && worker.enabled
                 && worker.paused != true
                 && required.isSubset(of: Set(worker.registration.ocrLanguages))
+                && capabilities.isSubset(of: Set(worker.registration.capabilities ?? []))
         }
     }
 
@@ -251,6 +259,12 @@ public actor OCRWorkerRegistry {
               request.maxConcurrentJobs > 0,
               request.maxConcurrentJobs <= request.cpuCount else {
             throw OCRWorkerRegistryError.invalidCapacity
+        }
+        guard (request.capabilities ?? []).count <= 32,
+              !(request.capabilities ?? []).contains(where: {
+                  $0.isEmpty || $0.count > 128
+              }) else {
+            throw OCRWorkerRegistryError.invalidCapabilities
         }
     }
 
@@ -276,6 +290,7 @@ public actor OCRWorkerRegistry {
             maxConcurrentJobs: worker.registration.maxConcurrentJobs,
             runningJobs: worker.runningJobs,
             ocrLanguages: worker.registration.ocrLanguages,
+            capabilities: worker.registration.capabilities ?? [],
             approved: worker.approved,
             enabled: worker.enabled,
             paused: worker.paused ?? false,

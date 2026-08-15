@@ -28,6 +28,12 @@ scan while blank-page removal, crop, final-output conversion, or OCR is still ru
 the background queue processes an isolated multipage copy and atomically replaces the source PDF.
 With OCR, it leaves the source unchanged and publishes the processed `.ocr.pdf`.
 
+For OCR-enabled multipage ScanSnap Wi-Fi scans, each page is OCRed and autocropped before ordered
+assembly. A capable remote worker performs both operations; local fallback preserves the same
+crop settings. Document-wide blank-page removal, metadata, and atomic publication still happen on
+scannerserver. Other backends and output modes retain their established whole-document processing
+order.
+
 Deleting a source scan while processing is active cancels that document's work before removing the
 file. Matching queued work is removed as well, while jobs for other scans continue.
 
@@ -82,6 +88,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
 | `SCAN_OCR_WORKERS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-workers.json` | Registered OCR worker identities, approvals, and last-known state |
 | `SCAN_OCR_WORKER_JOBS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-jobs.json` | Durable remote OCR job manifests, lease state, and terminal results |
+| `SCAN_INTERNAL_OCR_WORKER_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-internal-ocr-worker.json` | Persisted pause state for scannerserver's internal OCR fallback worker |
 | `SCAN_OCR_REMOTE_ENABLED` | `true` | Dispatch OCRmyPDF work to approved compatible workers when available; local OCR remains the fallback |
 | `SCAN_OCR_REMOTE_ASSIGNMENT_WAIT_SECONDS` | `30` | Time an eligible remote job may remain unclaimed (including after lease expiry) before local fallback |
 | `SCAN_OCR_REMOTE_COMPLETION_TIMEOUT_SECONDS` | `3600` | Maximum total remote job duration before cancellation and local fallback |
@@ -133,6 +140,8 @@ The queue treats the resulting value as one shared CPU budget:
 
 - Multipage blank detection and crop analysis process several pages concurrently, bounded by the
   shared budget; operations within each page remain ordered.
+- Streaming ScanSnap pages can move OCR and autocrop to capability-compatible remote workers. Local
+  fallback consumes the scanner host's shared budget with the same per-page order and settings.
 
 - A multipage PDF reserves the full budget and passes it to OCRmyPDF with `--jobs` so its pages
   are processed in parallel.

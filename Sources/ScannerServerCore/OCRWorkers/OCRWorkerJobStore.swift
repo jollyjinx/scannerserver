@@ -97,6 +97,7 @@ public actor OCRWorkerJobStore {
     public func leaseNext(
         workerID: String,
         ocrLanguages: [String],
+        capabilities: [String] = [],
         maximumActiveLeases: Int? = nil,
         now: Date = Date()
     ) throws -> OCRWorkerJobLease? {
@@ -108,9 +109,12 @@ public actor OCRWorkerJobStore {
             return nil
         }
         let supportedLanguages = Set(ocrLanguages)
+        let supportedCapabilities = Set(capabilities)
         let candidates = jobs.values.filter { job in
             job.status == .queued
                 && job.manifest.ocrLanguages.allSatisfy(supportedLanguages.contains)
+                && (!job.manifest.cropPages
+                    || supportedCapabilities.contains(OCRWorkerCapability.cropPDFPages))
         }
         guard let jobID = candidates.sorted(by: jobOrder).first?.manifest.jobID else {
             if reclaimed > 0 { try persist() }

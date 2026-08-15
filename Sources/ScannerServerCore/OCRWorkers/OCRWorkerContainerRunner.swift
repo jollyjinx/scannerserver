@@ -73,6 +73,17 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
         guard !runtime.isEmpty, !image.isEmpty, !memory.isEmpty else {
             throw OCRWorkerContainerError.invalidJob
         }
+        let containerCommand: [String]
+        if lease.manifest.cropPages {
+            containerCommand = ["scannerserver-worker", "process-job"]
+                + cropCommandArguments(
+                    lease.manifest.cropConfiguration ?? OCRWorkerCropConfiguration()
+                )
+                + ["--"]
+                + arguments
+        } else {
+            containerCommand = ["ocrmypdf"] + arguments
+        }
         return ProcessRequest(
             executable: runtime,
             arguments: [
@@ -81,14 +92,33 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
                 "--memory", memory,
                 "--uid", String(userID),
                 "--gid", String(groupID),
+                "--env", "HOME=/work",
                 "--env", "SCAN_OUTPUT_DIR=/work",
                 "--env", "TMPDIR=/work/.tmp",
+                "--workdir", "/work",
                 "--volume", "\(workspace.path):/work",
                 image,
-                "ocrmypdf",
-            ] + arguments,
+            ] + containerCommand,
             workingDirectory: workspace
         )
+    }
+
+    private func cropCommandArguments(_ configuration: OCRWorkerCropConfiguration) -> [String] {
+        var arguments = [
+            "--crop-background-delta", String(configuration.backgroundDelta),
+            "--crop-border-pixels", String(configuration.borderPixels),
+            "--crop-margin-points", String(configuration.marginPoints),
+            "--crop-maximum-width-ratio", String(configuration.maximumWidthRatio),
+            "--crop-maximum-height-ratio", String(configuration.maximumHeightRatio),
+            "--crop-minimum-density", String(configuration.minimumDensity),
+        ]
+        if configuration.keepOriginalBoxes {
+            arguments.append("--crop-keep-original-boxes")
+        }
+        if configuration.debug {
+            arguments.append("--crop-debug")
+        }
+        return arguments
     }
 }
 
@@ -168,6 +198,10 @@ public struct OCRWorkerJobProcessor: Sendable {
             let request = try configuration.processRequest(lease: lease, workspace: workspace)
             let result = try await runWithLeaseRenewal(
                 request: request,
+                resultURL: resultURL,
+                cropConfiguration: configuration.directExecution && lease.manifest.cropPages
+                    ? lease.manifest.cropConfiguration ?? OCRWorkerCropConfiguration()
+                    : nil,
                 lease: lease,
                 workerID: workerID,
                 authenticationToken: authenticationToken
@@ -203,6 +237,8 @@ public struct OCRWorkerJobProcessor: Sendable {
 
     private func runWithLeaseRenewal(
         request: ProcessRequest,
+        resultURL: URL,
+        cropConfiguration: OCRWorkerCropConfiguration?,
         lease: OCRWorkerJobLease,
         workerID: String,
         authenticationToken: String
@@ -210,7 +246,11 @@ public struct OCRWorkerJobProcessor: Sendable {
         let renewalSeconds = max(5, Int(lease.expiresAt.timeIntervalSince(lease.leasedAt) / 3))
         return try await withThrowingTaskGroup(of: ProcessingEvent.self) { group in
             group.addTask {
-                .completed(try await executor.execute(request))
+                .completed(try await OCRWorkerJobPipeline(ocrExecutor: executor).execute(
+                    ocrRequest: request,
+                    resultURL: resultURL,
+                    cropConfiguration: cropConfiguration
+                ))
             }
             group.addTask {
                 do {
