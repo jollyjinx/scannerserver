@@ -17,7 +17,8 @@ do not need a fixed address or an inbound firewall rule.
 
 The first control-plane slice is implemented:
 
-- The `scannerserver-worker` Swift executable connects to an explicit scannerserver URL.
+- The `scannerserver-worker` Swift executable connects to an explicit scannerserver URL or discovers
+  `_scannerserver._tcp` through Bonjour on macOS.
 - Each worker creates a persistent ID and authentication token in
   `~/.config/scannerserver-worker/identity.json`.
 - Registration reports its name, hostname, architecture, CPU capacity, job slots, version, and OCR
@@ -45,6 +46,26 @@ swift run scannerserver-worker \
   --jobs 1
 ```
 
+When scannerserver advertises itself through Bonjour, omit `--server`:
+
+```sh
+swift run scannerserver-worker --name "Mac Studio" --cpus 11 --jobs 1
+```
+
+Set `SCAN_OCR_WORKER_BONJOUR_ENABLED=true` on scannerserver to start the optional
+`avahi-publish-service` publisher. Its Avahi daemon must already be reachable. Set
+`SCANNERSERVER_BONJOUR_URL` to the URL that Macs can use, particularly when scannerserver's
+container hostname is not resolvable on the LAN:
+
+```yaml
+environment:
+  SCAN_OCR_WORKER_BONJOUR_ENABLED: "true"
+  SCANNERSERVER_BONJOUR_URL: "http://scanner-host.local"
+```
+
+Bonjour publication is best-effort and does not affect the scanner service if Avahi is missing or
+unavailable. Passing `--server` to the worker bypasses discovery completely.
+
 Open the **Workers** page on scannerserver and approve the new worker. The command defaults to the
 active processor count minus one so macOS retains one processor for interactive work. The `--cpus`
 value describes future container capacity; no OCR container is started in the current slice.
@@ -68,15 +89,13 @@ The public listing contains worker metadata and status but never authentication 
 
 ## Next Vertical Slices
 
-1. Advertise scannerserver as `_scannerserver._tcp` and add Bonjour resolution to the macOS worker,
-   while retaining the explicit `--server` override.
-2. Add a durable server-side job manifest and lease state machine.
-3. Let workers hold a long poll for assignments and stream verified source files from scannerserver.
-4. Add a batch document-processing command to the existing container image and invoke it with an
+1. Add a durable server-side job manifest and lease state machine.
+2. Let workers hold a long poll for assignments and stream verified source files from scannerserver.
+3. Add a batch document-processing command to the existing container image and invoke it with an
    explicit CPU and memory allocation.
-5. Upload results to a temporary server path, verify their digest and expected type, and atomically
+4. Upload results to a temporary server path, verify their digest and expected type, and atomically
    publish them using the existing output names.
-6. Propagate cancellation, expire abandoned leases, and fall back to local processing.
+5. Propagate cancellation, expire abandoned leases, and fall back to local processing.
 
 Initially, one multipage document should be assigned to one worker. More workers increase throughput
 across queued documents. Cross-machine page sharding is a separate compatibility project because it

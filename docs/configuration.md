@@ -81,6 +81,10 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_OCR_NICE` | `false` | Run post-scan document-processing subprocesses with reduced CPU scheduling priority |
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
 | `SCAN_OCR_WORKERS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-workers.json` | Registered OCR worker identities, approvals, and last-known state |
+| `SCAN_OCR_WORKER_BONJOUR_ENABLED` | `false` | Publish `_scannerserver._tcp` for OCR worker discovery through `avahi-publish-service` |
+| `SCANNERSERVER_BONJOUR_NAME` | `scannerserver` | Bonjour service instance name |
+| `SCANNERSERVER_BONJOUR_HOST` | process hostname | Host used to derive the advertised URL when no complete URL is configured |
+| `SCANNERSERVER_BONJOUR_URL` | derived HTTP URL | Complete LAN-reachable HTTP(S) URL placed in the Bonjour TXT record |
 | `SCAN_CROP_PAGES` | `true` | Crop PDF pages to the detected paper or content bounds in background processing |
 | `SCAN_CROP_MARGIN_POINTS` | `1` | Extra margin around content-classified autocrops, in PDF points (1 point = 1/72 inch) |
 | `SCANNER_IP` | empty | Optional scanner IP override; web setup can persist this instead |

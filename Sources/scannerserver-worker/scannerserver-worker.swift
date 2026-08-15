@@ -12,8 +12,11 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
         abstract: "Register this computer as an OCR worker for scannerserver."
     )
 
-    @Option(help: "The scannerserver base URL, for example http://192.168.1.20.")
-    var server: String
+    @Option(help: "The scannerserver base URL. When omitted, discover scannerserver through Bonjour.")
+    var server: String?
+
+    @Option(help: "Seconds to wait for Bonjour discovery when --server is omitted.")
+    var discoveryTimeout: Int = 10
 
     @Option(help: "Name shown on the scannerserver Workers page.")
     var name: String = ProcessInfo.processInfo.hostName
@@ -39,13 +42,12 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
             throw ValidationError("--jobs must be positive and no greater than --cpus")
         }
         guard !languages.isEmpty else { throw ValidationError("At least one OCR language is required") }
+        guard discoveryTimeout > 0 else { throw ValidationError("--discovery-timeout must be positive") }
     }
 
     mutating func run() async throws {
         JLog.loglevel = logLevel
-        guard let serverURL = URL(string: server) else {
-            throw ValidationError("--server is not a valid URL")
-        }
+        let serverURL = try await resolveServerURL()
         let client = try OCRWorkerHTTPClient(serverURL: serverURL)
         let identity = try WorkerIdentity.loadOrCreate(
             at: URL(fileURLWithPath: identityFile, isDirectory: false)
@@ -92,6 +94,23 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
                 try await Task.sleep(for: .seconds(5))
             }
         }
+    }
+
+    private func resolveServerURL() async throws -> URL {
+        if let server {
+            guard let url = URL(string: server) else {
+                throw ValidationError("--server is not a valid URL")
+            }
+            return url
+        }
+        #if canImport(Network)
+        JLog.notice("Looking for scannerserver through Bonjour")
+        return try await BonjourScannerServerDiscovery().discover(
+            timeout: .seconds(discoveryTimeout)
+        )
+        #else
+        throw ValidationError("Bonjour discovery is only available on Apple platforms; pass --server")
+        #endif
     }
 
     private func log(_ availability: OCRWorkerAvailability) {

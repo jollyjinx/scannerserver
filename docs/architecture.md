@@ -74,6 +74,9 @@ persisted stores, reachability, and physical-button session state.
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
   snapshots. Remote job execution is not connected to `OCRQueueActor` yet; local processing remains
   authoritative until durable leases and verified document transfer are implemented.
+- `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
+  `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;
+  an explicit server URL remains available and takes precedence over Bonjour.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for
