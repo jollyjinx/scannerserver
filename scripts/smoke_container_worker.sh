@@ -46,7 +46,7 @@ docker run \
   --env SCAN_OUTPUT_DIR=/scans \
   --env SCAN_BACKEND=sane \
   --env SCAN_TIMESTAMP=2026-08-15.120500 \
-  --env SCAN_REMOVE_BLANK_PAGES=false \
+  --env SCAN_REMOVE_BLANK_PAGES=true \
   --env SCAN_CROP_PAGES=false \
   --env SCAN_OCR_ENABLED=true \
   --env SCAN_OCR_REMOTE_ASSIGNMENT_WAIT_SECONDS=30 \
@@ -102,6 +102,8 @@ done
 
 test -s "${scan_dir}/${scan_name}"
 test -s "${scan_dir}/${ocr_name}"
+grep -q '"sourcePath"' "${scan_dir}/.scannerserver-ocr-jobs.json"
+grep -q '\.ocr-work\.[^"]*source\.pdf' "${scan_dir}/.scannerserver-ocr-jobs.json"
 docker exec "${server_name}" qpdf --check "/scans/${ocr_name}" >/dev/null
 curl --fail --silent "${base_url}/workers" | grep -q '>Completed</dt><dd>1</dd>'
 curl --fail --silent "${base_url}/workers" | grep -q '2 CPUs · 1 job slot'

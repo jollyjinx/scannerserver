@@ -552,7 +552,8 @@ public enum ScannerServerApplication {
                 )
                 let sourceURL = try workerJobURL(
                     path: manifest.sourcePath,
-                    outputDirectory: dependencies.outputPathResolver.outputDirectory
+                    outputDirectory: dependencies.outputPathResolver.outputDirectory,
+                    allowSubdirectories: true
                 )
                 let data = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
                 guard data.count == manifest.sourceByteCount,
@@ -951,12 +952,23 @@ private func bearerToken(_ request: Request) -> String? {
     return token.isEmpty ? nil : token
 }
 
-private func workerJobURL(path: String, outputDirectory: URL) throws -> URL {
+private func workerJobURL(
+    path: String,
+    outputDirectory: URL,
+    allowSubdirectories: Bool = false
+) throws -> URL {
     let directory = outputDirectory.resolvingSymlinksInPath().standardizedFileURL
     let url = URL(fileURLWithPath: path, isDirectory: false)
         .resolvingSymlinksInPath()
         .standardizedFileURL
-    guard url.deletingLastPathComponent() == directory else {
+    let isAllowed = if allowSubdirectories {
+        url.pathComponents.count > directory.pathComponents.count
+            && Array(url.pathComponents.prefix(directory.pathComponents.count))
+                == directory.pathComponents
+    } else {
+        url.deletingLastPathComponent() == directory
+    }
+    guard isAllowed else {
         throw OCRWorkerTransferError.pathOutsideScanDirectory
     }
     return url

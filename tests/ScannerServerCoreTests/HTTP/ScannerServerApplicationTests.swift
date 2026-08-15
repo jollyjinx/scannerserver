@@ -243,7 +243,12 @@ struct ScannerServerApplicationTests {
         )
         let source = Data("%PDF-1.4\nsource\n".utf8)
         let result = Data("%PDF-1.4\nsearchable result\n".utf8)
-        let sourceURL = fixture.outputDirectory.appendingPathComponent("source.pdf")
+        let workspace = fixture.outputDirectory.appendingPathComponent(
+            ".ocr-work.test-transfer",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
+        let sourceURL = workspace.appendingPathComponent("source.pdf")
         let outputURL = fixture.outputDirectory.appendingPathComponent("source.ocr.pdf")
         try source.write(to: sourceURL)
         _ = try await fixture.ocrWorkerJobs.enqueue(OCRWorkerJobManifest(
@@ -325,6 +330,52 @@ struct ScannerServerApplicationTests {
             ) { response in
                 #expect(response.status == .ok)
                 #expect(String(buffer: response.body).contains(#""status":"succeeded""#))
+            }
+
+            let outsideURL = fixture.root.appendingPathComponent("outside.pdf")
+            try source.write(to: outsideURL)
+            let escapedSourceURL = workspace.appendingPathComponent("escaped-source.pdf")
+            try FileManager.default.createSymbolicLink(
+                at: escapedSourceURL,
+                withDestinationURL: outsideURL
+            )
+            _ = try await fixture.ocrWorkerJobs.enqueue(OCRWorkerJobManifest(
+                jobID: "escaped-source-job",
+                sourcePath: escapedSourceURL.path,
+                outputPath: fixture.outputDirectory.appendingPathComponent("escaped.ocr.pdf").path,
+                sourceByteCount: Int64(source.count),
+                sourceSHA256: OCRWorkerSHA256.hexDigest(source),
+                ocrLanguages: ["deu", "eng"],
+                ocrEnabled: true,
+                removeBlankPages: false,
+                cropPages: false
+            ))
+            var capturedEscapedLease: OCRWorkerJobLease?
+            try await client.execute(
+                uri: "/api/ocr-workers/transfer-worker/jobs/lease",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(data: try JSONEncoder().encode(poll))
+            ) { response in
+                #expect(response.status == .ok)
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                capturedEscapedLease = try decoder.decode(
+                    OCRWorkerJobLease.self,
+                    from: Data(response.body.readableBytesView)
+                )
+            }
+            let escapedLease = try #require(capturedEscapedLease)
+            try await client.execute(
+                uri: "/api/ocr-workers/transfer-worker/jobs/escaped-source-job/source",
+                method: .get,
+                headers: [
+                    .authorization: "Bearer \(token)",
+                    .ifMatch: escapedLease.leaseToken,
+                ]
+            ) { response in
+                #expect(response.status == .conflict)
+                #expect(String(buffer: response.body).contains("outside the scan directory"))
             }
         }
 
