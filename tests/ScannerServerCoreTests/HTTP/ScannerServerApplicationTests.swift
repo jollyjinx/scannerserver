@@ -234,6 +234,8 @@ struct ScannerServerApplicationTests {
             try await client.execute(uri: "/settings", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(body.contains("Scanner setup"))
+                #expect(body.contains(#"data-scanner-setup data-configured="true""#))
+                #expect(body.contains(#"scannerSetup.dataset.configured !== "true""#))
                 #expect(body.contains("action=\"/setup/scanners/clear\""))
             }
 
@@ -377,10 +379,13 @@ struct ScannerServerApplicationTests {
 
     @Test("An empty feeder is shown as an actionable scan notice")
     func emptyFeederNotice() async throws {
-        let executor = SlowCapturingExecutor(result: ProcessResult(
-            exitStatus: 2,
-            standardError: "No pages were scanned. Check that paper is loaded.\n"
-        ))
+        let executor = SlowCapturingExecutor(
+            delay: .zero,
+            result: ProcessResult(
+                exitStatus: 2,
+                standardError: "No pages were scanned. Check that paper is loaded.\n"
+            )
+        )
         let fixture = try HTTPFixture(
             environment: ["SCAN_BACKEND": "sane"],
             executor: executor

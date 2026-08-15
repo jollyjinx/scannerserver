@@ -965,7 +965,7 @@ private func renderScannerReachabilitySummary(
 }
 
 private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
-    "<section data-scanner-setup data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup))</section>"
+    "<section data-scanner-setup data-configured=\"\(setup.configured)\" data-needs-password=\"\(setup.needsPassword)\">\(renderScannerSetupContent(setup))</section>"
 }
 
 private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {

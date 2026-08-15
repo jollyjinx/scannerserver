@@ -154,7 +154,9 @@
           }
           window.setTimeout(pollScannerSetup, 2000);
         };
-        if (scannerSetup && scannerSetup.dataset.needsPassword !== "true") {
+        if (scannerSetup
+            && scannerSetup.dataset.configured !== "true"
+            && scannerSetup.dataset.needsPassword !== "true") {
           pollScannerSetup();
         }
 
