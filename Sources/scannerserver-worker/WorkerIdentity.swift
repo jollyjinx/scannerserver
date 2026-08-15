@@ -27,7 +27,12 @@ struct WorkerIdentity: Codable, Sendable {
     }
 
     static var defaultFileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        let configuredHome = ProcessInfo.processInfo.environment["HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let homeDirectory = configuredHome.flatMap { home in
+            home.isEmpty ? nil : URL(fileURLWithPath: home, isDirectory: true)
+        } ?? FileManager.default.homeDirectoryForCurrentUser
+        return homeDirectory
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("scannerserver-worker", isDirectory: true)
             .appendingPathComponent("identity.json", isDirectory: false)

@@ -13,6 +13,7 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
     public let workspaceRoot: URL
     public let userID: Int
     public let groupID: Int
+    public let directExecution: Bool
 
     public init(
         runtime: String = "container",
@@ -21,7 +22,8 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
         memory: String = "8G",
         workspaceRoot: URL = Self.defaultWorkspaceRoot,
         userID: Int = Int(getuid()),
-        groupID: Int = Int(getgid())
+        groupID: Int = Int(getgid()),
+        directExecution: Bool = false
     ) {
         self.runtime = runtime
         self.image = image
@@ -30,6 +32,7 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
         self.workspaceRoot = workspaceRoot
         self.userID = userID
         self.groupID = groupID
+        self.directExecution = directExecution
     }
 
     public static var defaultWorkspaceRoot: URL {
@@ -43,12 +46,31 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
         lease: OCRWorkerJobLease,
         workspace: URL
     ) throws -> ProcessRequest {
-        guard let arguments = lease.manifest.containerArguments,
-              arguments.contains("/work/source.pdf"),
-              arguments.contains("/work/result.pdf"),
-              !runtime.isEmpty,
-              !image.isEmpty,
-              !memory.isEmpty else {
+        guard var arguments = lease.manifest.containerArguments,
+              arguments.count >= 2,
+              Array(arguments.suffix(2)) == ["/work/source.pdf", "/work/result.pdf"] else {
+            throw OCRWorkerContainerError.invalidJob
+        }
+        if let jobsIndex = arguments.firstIndex(of: "--jobs") {
+            guard arguments.indices.contains(jobsIndex + 1) else {
+                throw OCRWorkerContainerError.invalidJob
+            }
+            arguments[jobsIndex + 1] = String(cpusPerJob)
+        } else {
+            arguments.insert(contentsOf: ["--jobs", String(cpusPerJob)], at: arguments.count - 2)
+        }
+
+        if directExecution {
+            arguments[arguments.count - 2] = workspace.appendingPathComponent("source.pdf").path
+            arguments[arguments.count - 1] = workspace.appendingPathComponent("result.pdf").path
+            return ProcessRequest(
+                executable: "ocrmypdf",
+                arguments: arguments,
+                workingDirectory: workspace
+            )
+        }
+
+        guard !runtime.isEmpty, !image.isEmpty, !memory.isEmpty else {
             throw OCRWorkerContainerError.invalidJob
         }
         return ProcessRequest(

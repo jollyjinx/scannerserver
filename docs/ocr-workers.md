@@ -39,31 +39,65 @@ do not need a fixed address or an inbound firewall rule.
 - No eligible worker, assignment timeout, or reported worker failure falls back to the existing
   local OCR executor. Cancellation invalidates the remote lease.
 
-## Run A Worker On macOS
+## Run A Worker Container
 
-Install and start Apple's Container system, then pull the same image used by scannerserver:
+The production image contains both `scannerserver` and `scannerserver-worker`. Start the worker by
+overriding the image's default command:
+
+```sh
+docker run -d \
+  --name scannerserver-worker \
+  --restart unless-stopped \
+  --cpus 11 \
+  --memory 8g \
+  --volume scannerserver-worker-state:/home/scansnap/.config/scannerserver-worker \
+  gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
+  scannerserver-worker \
+  --server http://SCANNERSERVER-IP \
+  --name "Mac Studio" \
+  --jobs 1
+```
+
+The image enables direct execution automatically: OCRmyPDF runs inside the worker container, so no
+Docker socket, privileged mode, or nested container is needed. The worker detects Docker's cgroup
+CPU allowance; `--cpus 11` therefore advertises and uses 11 CPUs. Its named volume retains the
+worker identity and scannerserver approval when the container is replaced.
+
+If scannerserver is another container on the same Docker network, use its service name in
+`--server`. To reach a scannerserver published on the Docker host, use
+`http://host.docker.internal:PORT` on Docker Desktop.
+
+Open the **Workers** page on scannerserver and approve the new worker. `--jobs` controls concurrent
+documents, and the detected CPUs are divided across those slots. With the recommended `--jobs 1`,
+one document can use the entire container CPU allowance. The page shows online capacity plus
+queued, running, completed, and failed remote jobs.
+
+## Native macOS Worker
+
+The native executable remains useful when Apple Container should isolate each OCR job. Start the
+Apple Container system, pull the OCR image, and run the worker from this repository:
 
 ```sh
 container system start
 container system kernel set --recommended  # only when no default kernel is configured
-container image pull ghcr.io/jollyjinx/scannerserver:latest
-```
-
-Build and start the worker from this repository:
-
-```sh
+container image pull gitmaster.jinx.eu/jnxpublic/scannerserver:jinx
 swift run -c release scannerserver-worker \
   --server http://SCANNERSERVER-IP \
   --name "Mac Studio" \
   --cpus 11 \
   --jobs 1 \
+  --container-image gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
   --memory-per-job 8G
 ```
 
 When scannerserver advertises itself through Bonjour, omit `--server`:
 
 ```sh
-swift run -c release scannerserver-worker --name "Mac Studio" --cpus 11 --jobs 1
+swift run -c release scannerserver-worker \
+  --name "Mac Studio" \
+  --cpus 11 \
+  --jobs 1 \
+  --container-image gitmaster.jinx.eu/jnxpublic/scannerserver:jinx
 ```
 
 Set `SCAN_OCR_WORKER_BONJOUR_ENABLED=true` on scannerserver to start the optional
@@ -80,21 +114,20 @@ environment:
 Bonjour publication is best-effort and does not affect the scanner service if Avahi is missing or
 unavailable. Passing `--server` to the worker bypasses discovery completely.
 
-Open the **Workers** page on scannerserver and approve the new worker. The command defaults to the
-active processor count minus one so macOS retains one processor for interactive work. `--cpus` is
-divided across `--jobs`; with the recommended `--jobs 1`, one document uses every advertised CPU.
-The page shows online capacity plus queued, running, completed, and failed remote jobs.
+The native command defaults to the active processor count minus one so macOS retains one processor
+for interactive work.
 
 Useful worker overrides:
 
 ```text
 --container-runtime container
---container-image ghcr.io/jollyjinx/scannerserver:latest
+--container-image gitmaster.jinx.eu/jnxpublic/scannerserver:jinx
 --memory-per-job 8G
 --workspace ~/Library/Caches/scannerserver-worker/jobs
+--direct-ocr
 ```
 
-Stop the worker with Control-C. Its identity remains in
+Stop a foreground native worker with Control-C. Its identity remains in
 `~/.config/scannerserver-worker/identity.json`, so it does not need approval again.
 
 The API accepts HTTP because the main service has no TLS termination contract. Worker and lease

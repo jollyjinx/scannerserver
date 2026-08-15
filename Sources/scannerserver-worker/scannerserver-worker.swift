@@ -5,6 +5,12 @@ import ScannerServerCore
 
 extension JLog.Level: @retroactive ExpressibleByArgument {}
 
+private let directOCRDefault = ProcessInfo.processInfo.environment["SCANNERSERVER_WORKER_DIRECT"]
+    .map { ["1", "true", "yes", "on"].contains($0.lowercased()) } ?? false
+private let workerCPUDefault = directOCRDefault
+    ? OCRQueueConfiguration.detectedProcessorCount
+    : max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
+
 @main
 struct ScannerServerWorkerCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -21,8 +27,8 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
     @Option(help: "Name shown on the scannerserver Workers page.")
     var name: String = ProcessInfo.processInfo.hostName
 
-    @Option(help: "CPUs advertised for containerized document processing.")
-    var cpus: Int = max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
+    @Option(help: "CPUs advertised and distributed across concurrent OCR jobs.")
+    var cpus: Int = workerCPUDefault
 
     @Option(help: "Maximum documents processed concurrently.")
     var jobs: Int = 1
@@ -45,6 +51,12 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
     @Option(help: "Directory used for temporary downloaded and processed documents.")
     var workspace: String = OCRWorkerContainerConfiguration.defaultWorkspaceRoot.path
 
+    @Flag(
+        inversion: .prefixedNo,
+        help: "Run OCRmyPDF directly instead of starting a nested container."
+    )
+    var directOCR: Bool = directOCRDefault
+
     @Option(help: "Set the log level.")
     var logLevel: JLog.Level = .notice
 
@@ -55,9 +67,11 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
         }
         guard !languages.isEmpty else { throw ValidationError("At least one OCR language is required") }
         guard discoveryTimeout > 0 else { throw ValidationError("--discovery-timeout must be positive") }
-        guard !containerRuntime.isEmpty else { throw ValidationError("--container-runtime must not be empty") }
-        guard !containerImage.isEmpty else { throw ValidationError("--container-image must not be empty") }
-        guard !memoryPerJob.isEmpty else { throw ValidationError("--memory-per-job must not be empty") }
+        if !directOCR {
+            guard !containerRuntime.isEmpty else { throw ValidationError("--container-runtime must not be empty") }
+            guard !containerImage.isEmpty else { throw ValidationError("--container-image must not be empty") }
+            guard !memoryPerJob.isEmpty else { throw ValidationError("--memory-per-job must not be empty") }
+        }
     }
 
     mutating func run() async throws {
@@ -144,7 +158,8 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
                         image: containerImage,
                         cpusPerJob: base + extra,
                         memory: memoryPerJob,
-                        workspaceRoot: URL(fileURLWithPath: workspace, isDirectory: true)
+                        workspaceRoot: URL(fileURLWithPath: workspace, isDirectory: true),
+                        directExecution: directOCR
                     )
                 )
                 group.addTask {

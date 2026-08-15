@@ -79,9 +79,10 @@ persisted stores, reachability, and physical-button session state.
   expired leases. Authenticated HTTP routes lease jobs and transfer digest-verified PDFs.
 - `DistributedOCRProcessExecutor` wraps only the `ocrmypdf` process boundary. It dispatches to an
   eligible worker and preserves the local process executor as the automatic fallback. The worker
-  runs the existing image with explicit CPU, memory, UID/GID, and one writable job mount; the server
-  verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before reporting
-  OCR completion.
+  either runs OCRmyPDF directly when the worker itself is the production container or starts the
+  existing image with Apple Container from the native macOS executable. Both modes isolate each
+  job in its own workspace and use the worker slot's CPU allowance. The server verifies results with
+  SHA-256 and `qpdf --check`, then atomically publishes them before reporting OCR completion.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
   `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;
   an explicit server URL remains available and takes precedence over Bonjour.

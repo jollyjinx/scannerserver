@@ -39,6 +39,10 @@ For example:
 docker pull gitmaster.jinx.eu/jnxpublic/scannerserver:development
 ```
 
+The image packages both executable products. Its default command runs `scannerserver`; overriding
+the command with `scannerserver-worker` starts a direct, non-privileged OCR worker from the same
+image without mounting the Docker socket.
+
 Gitmaster executes workflow steps inside a Linux job container while Docker Desktop runs the
 Docker daemon on the Mac host. Paths such as `/workspace/...` therefore exist only inside the
 job container and cannot be used as host bind mounts. The workflow copies Swift sources through

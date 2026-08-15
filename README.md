@@ -111,30 +111,34 @@ for an Ethernet/MAC address or generated pairing key.
 - Scan list grouped by day with previews and download/delete controls.
 - CPU-budgeted background blank-page removal, autocrop, and OCR, including automatic container CPU
   detection, bounded per-page concurrency, configurable caps, and optional reduced-priority nice mode.
-- Optional approved macOS OCR workers that run the same image through Apple `container`, use all
-  assigned Mac CPUs, and automatically fall back to local OCR when unavailable.
+- Optional approved OCR worker containers that use their assigned CPUs and automatically fall back
+  to local OCR when unavailable.
 - Runs as a non-root user while still binding the web UI to port `80`.
 
-## Optional macOS OCR Worker
+## Optional OCR Worker Container
 
-On a Mac with Apple's `container` command, start its container system and run the worker from this
-repository:
+Start a worker with the same image. The named volume preserves its identity and approval across
+container replacement:
 
 ```bash
-container system start
-container system kernel set --recommended  # only when no default kernel is configured
-container image pull ghcr.io/jollyjinx/scannerserver:latest
-swift run -c release scannerserver-worker \
+docker run -d \
+  --name scannerserver-worker \
+  --restart unless-stopped \
+  --cpus 11 \
+  --memory 8g \
+  -v scannerserver-worker-state:/home/scansnap/.config/scannerserver-worker \
+  gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
+  scannerserver-worker \
   --server http://YOUR_LINUX_HOST \
   --name "Mac OCR" \
-  --cpus 11 \
   --jobs 1
 ```
 
 Open **Workers** in scannerserver and approve it. New OCR PDFs are then dispatched automatically;
 the scanner host retains scanning, preprocessing, filenames, verification, and final publication.
-See [Distributed OCR workers](docs/ocr-workers.md) for Bonjour discovery, resource options, security,
-and failure behavior.
+The worker detects the container CPU allowance and runs OCRmyPDF directly—no Docker socket or nested
+container is required. See [Distributed OCR workers](docs/ocr-workers.md) for native macOS mode,
+resource options, security, and failure behavior.
 
 ## Updating
 

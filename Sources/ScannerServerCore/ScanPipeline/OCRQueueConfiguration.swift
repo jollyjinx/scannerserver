@@ -16,6 +16,11 @@ public struct OCRQueueConfiguration: Equatable, Sendable {
         )
     }
 
+    /// The processor allowance visible to this process after cgroup quota and cpuset limits.
+    public static var detectedProcessorCount: Int {
+        OCRSystemProcessorCount.detect()
+    }
+
     init(environment: [String: String], detectedProcessorCount: Int) {
         let detectedProcessorCount = max(1, detectedProcessorCount)
         let backgroundProcessorCount = max(1, detectedProcessorCount - 1)

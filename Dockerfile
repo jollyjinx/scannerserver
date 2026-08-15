@@ -10,9 +10,14 @@ COPY Sources Sources
 COPY tests/ScannerServerCoreTests tests/ScannerServerCoreTests
 RUN swift build -c release --jobs 1 --product scannerserver \
         -Xswiftc -num-threads -Xswiftc 1 \
+    && swift build -c release --jobs 1 --product scannerserver-worker \
+        -Xswiftc -num-threads -Xswiftc 1 \
     && binary_path="$(find /swift/.build -path '*/release/scannerserver' -type f | head -n 1)" \
+    && worker_binary_path="$(find /swift/.build -path '*/release/scannerserver-worker' -type f | head -n 1)" \
     && test -n "${binary_path}" \
-    && install -Dm755 "${binary_path}" /out/scannerserver
+    && test -n "${worker_binary_path}" \
+    && install -Dm755 "${binary_path}" /out/scannerserver \
+    && install -Dm755 "${worker_binary_path}" /out/scannerserver-worker
 RUN resource_path="$(find /swift/.build -type d -name '*_ScannerServerCore.resources' | head -n 1)" \
     && test -n "${resource_path}" \
     && cp -R "${resource_path}" /out/ScannerServer_ScannerServerCore.resources
@@ -64,11 +69,14 @@ RUN sed -i \
 
 WORKDIR /app
 
-RUN mkdir -p /app/sane.d /opt/scannerserver /scans /home/scansnap \
+RUN mkdir -p /app/sane.d /opt/scannerserver /scans \
+        /home/scansnap/.config/scannerserver-worker \
+        /home/scansnap/.cache/scannerserver-worker/jobs \
     && cp -a /etc/sane.d/. /app/sane.d/ \
     && chown -R "${APP_UID}:${APP_GID}" /app /scans /home/scansnap
 
 COPY --from=swift_build /out/scannerserver /opt/scannerserver/scannerserver
+COPY --from=swift_build /out/scannerserver-worker /opt/scannerserver/scannerserver-worker
 COPY --from=swift_build /out/ScannerServer_ScannerServerCore.resources /opt/scannerserver/ScannerServer_ScannerServerCore.resources
 COPY scripts/entrypoint.sh /usr/local/bin/scansnap-entrypoint
 
@@ -76,6 +84,7 @@ RUN chmod +x /usr/local/bin/scansnap-entrypoint \
     && setcap cap_net_bind_service=+ep /opt/scannerserver/scannerserver
 
 ENV PATH="${PATH}:/opt/scannerserver"
+ENV SCANNERSERVER_WORKER_DIRECT=true
 
 EXPOSE 8080
 EXPOSE 80

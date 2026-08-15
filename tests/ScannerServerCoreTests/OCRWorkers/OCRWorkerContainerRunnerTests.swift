@@ -39,6 +39,35 @@ struct OCRWorkerContainerRunnerTests {
         ])
         #expect(request.workingDirectory == workspace)
     }
+
+    @Test("Direct execution runs OCRmyPDF in the current worker container")
+    func directRequest() throws {
+        let workspace = URL(fileURLWithPath: "/var/lib/scannerserver-worker/jobs/job-1")
+        let configuration = OCRWorkerContainerConfiguration(
+            runtime: "",
+            image: "",
+            cpusPerJob: 6,
+            memory: "",
+            workspaceRoot: workspace.deletingLastPathComponent(),
+            directExecution: true
+        )
+
+        let request = try configuration.processRequest(
+            lease: testContainerLease(),
+            workspace: workspace
+        )
+
+        #expect(request == ProcessRequest(
+            executable: "ocrmypdf",
+            arguments: [
+                "--language", "deu+eng",
+                "--jobs", "6",
+                "/var/lib/scannerserver-worker/jobs/job-1/source.pdf",
+                "/var/lib/scannerserver-worker/jobs/job-1/result.pdf",
+            ],
+            workingDirectory: workspace
+        ))
+    }
 }
 
 private func testContainerLease() -> OCRWorkerJobLease {
@@ -56,7 +85,7 @@ private func testContainerLease() -> OCRWorkerJobLease {
             cropPages: false,
             containerArguments: [
                 "--language", "deu+eng",
-                "--jobs", "11",
+                "--jobs", "3",
                 "/work/source.pdf", "/work/result.pdf",
             ],
             createdAt: now
