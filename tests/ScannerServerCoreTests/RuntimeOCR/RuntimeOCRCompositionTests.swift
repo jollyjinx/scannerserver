@@ -62,9 +62,10 @@ struct RuntimeOCRCompositionTests {
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(response.status == .ok)
-                #expect(body.contains("<h2>Background processing</h2>"))
-                #expect(body.contains("<span class=\"status\">running</span> 1 queued"))
-                #expect(body.contains("CPU budget: 3; priority: nice +10"))
+                #expect(body.contains("<h3>Background processing</h3>"))
+                #expect(body.contains("<span class=\"status-pill working\">Running</span>"))
+                #expect(body.contains("1 queued"))
+                #expect(body.contains("CPU budget 3 · priority nice +10"))
                 #expect(body.contains("Input: /scans/&lt;first&gt;&amp;.pdf"))
                 #expect(!body.contains(firstInput))
             }
@@ -74,7 +75,7 @@ struct RuntimeOCRCompositionTests {
 
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains("<span class=\"status\">failed (9)</span>"))
+                #expect(body.contains("<span class=\"status-pill error\">Failed (9)</span>"))
                 #expect(body.contains("Input: /scans/&lt;second&gt;&amp;.pdf"))
                 #expect(body.contains("<pre>&lt;ocr-output&gt;&amp;</pre>"))
                 #expect(body.contains("<pre>&lt;ocr-error&gt;&amp;</pre>"))

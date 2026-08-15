@@ -134,8 +134,8 @@ configuration changes establish genuinely fresh sessions. Hardware traces establ
 not itself clear scanner ownership, and a duplicate registration causes status `-7`; for that
 reason periodic replacement of healthy sessions now defaults to disabled.
 
-The web UI renders that shared lifecycle reachability state in a summary at the top of the page,
-beside the configured scanner name rather than inside Advanced settings. Reachability transitions
+The web UI renders that shared lifecycle reachability state on the Scanner page, beside the
+configured scanner name rather than inside scanner connection management. Reachability transitions
 notify the existing browser long-poll, producing a green `Reachable` or grey `Not reachable`
 indicator without a second network probe or a new polling loop.
 
