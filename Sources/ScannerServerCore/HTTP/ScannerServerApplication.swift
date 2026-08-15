@@ -221,6 +221,7 @@ public struct ScannerServerDependencies: Sendable {
     public let scanJobs: ScanJobActor
     public let scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator
     public let ocrQueue: OCRQueueActor
+    public let ocrWorkerRegistry: OCRWorkerRegistry
     public let outputPathResolver: ScanOutputPathResolver
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
@@ -236,6 +237,7 @@ public struct ScannerServerDependencies: Sendable {
         scanJobs: ScanJobActor,
         scanSnapAcquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator(),
         ocrQueue: OCRQueueActor? = nil,
+        ocrWorkerRegistry: OCRWorkerRegistry? = nil,
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
@@ -257,6 +259,10 @@ public struct ScannerServerDependencies: Sendable {
         self.previewProvider = previewProvider
         let webUpdates = webUpdates ?? scanJobs.webUpdates
         self.webUpdates = webUpdates
+        self.ocrWorkerRegistry = ocrWorkerRegistry ?? OCRWorkerRegistry(
+            fileURL: OCRWorkerRegistry.defaultFileURL(environment: environment),
+            webUpdates: webUpdates
+        )
         self.scannerReachability = scannerReachability ?? ScanSnapReachabilityState(webUpdates: webUpdates)
         self.environment = environment
         self.buttonConfigurationChanges = buttonConfigurationChanges
@@ -277,6 +283,10 @@ public struct ScannerServerDependencies: Sendable {
             configuration: OCRQueueConfiguration(environment: environment),
             webUpdates: webUpdates
         )
+        let ocrWorkerRegistry = OCRWorkerRegistry(
+            fileURL: OCRWorkerRegistry.defaultFileURL(environment: environment),
+            webUpdates: webUpdates
+        )
         let settingsStore = ScanSettingsStore(environment: environment)
         let scannerStore = ScannerConfigStore(environment: environment)
         let buttonConfigurationChanges = ScanSnapButtonConfigurationChangeCoordinator()
@@ -295,6 +305,7 @@ public struct ScannerServerDependencies: Sendable {
             ),
             scanSnapAcquisitionSessions: scanSnapAcquisitionSessions,
             ocrQueue: ocrQueue,
+            ocrWorkerRegistry: ocrWorkerRegistry,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: ScanSnapSetupService(
                 environment: environment,
@@ -378,6 +389,15 @@ public enum ScannerServerApplication {
                 buildInformation: buildInformation
             )
         }
+        router.get("/workers") { request, _ in
+            await webPageResponse(
+                request: request,
+                page: .workers,
+                template: indexTemplate,
+                dependencies: dependencies,
+                buildInformation: buildInformation
+            )
+        }
         router.get("/health") { _, _ in "ok\n" }
         router.get("/version") { _, _ in "\(buildInformation.version)\n" }
         router.get("/updates") { request, _ -> Response in
@@ -419,6 +439,58 @@ public enum ScannerServerApplication {
         router.post("/ocr/cancel") { _, _ -> Response in
             await dependencies.ocrQueue.cancelAll()
             return .redirect(to: "/")
+        }
+
+        router.get("/api/ocr-workers") { _, _ -> Response in
+            jsonResponse(await dependencies.ocrWorkerRegistry.snapshots())
+        }
+        router.post("/api/ocr-workers/register") { request, context -> Response in
+            do {
+                let registration = try await decodeJSON(
+                    OCRWorkerRegistrationRequest.self,
+                    request: request,
+                    context: context
+                )
+                return jsonResponse(try await dependencies.ocrWorkerRegistry.register(registration))
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.post("/api/ocr-workers/:id/heartbeat") { request, context -> Response in
+            guard let workerID = workerID(context: context) else {
+                return textResponse("Missing worker ID\n", status: .badRequest)
+            }
+            do {
+                let heartbeat = try await decodeJSON(
+                    OCRWorkerHeartbeatRequest.self,
+                    request: request,
+                    context: context
+                )
+                return jsonResponse(try await dependencies.ocrWorkerRegistry.heartbeat(
+                    workerID: workerID,
+                    request: heartbeat
+                ))
+            } catch {
+                return workerAPIErrorResponse(error)
+            }
+        }
+        router.post("/workers/:id/approve") { _, context -> Response in
+            if let workerID = workerID(context: context) {
+                _ = try? await dependencies.ocrWorkerRegistry.approve(workerID: workerID)
+            }
+            return .redirect(to: "/workers")
+        }
+        router.post("/workers/:id/enable") { _, context -> Response in
+            if let workerID = workerID(context: context) {
+                _ = try? await dependencies.ocrWorkerRegistry.setEnabled(true, workerID: workerID)
+            }
+            return .redirect(to: "/workers")
+        }
+        router.post("/workers/:id/disable") { _, context -> Response in
+            if let workerID = workerID(context: context) {
+                _ = try? await dependencies.ocrWorkerRegistry.setEnabled(false, workerID: workerID)
+            }
+            return .redirect(to: "/workers")
         }
 
         router.post("/modes/default") { request, context -> Response in
@@ -615,6 +687,15 @@ private func decodeForm<Form: Decodable>(
     try await URLEncodedFormDecoder().decode(type, from: request, context: context)
 }
 
+private func decodeJSON<Value: Decodable>(
+    _ type: Value.Type,
+    request: Request,
+    context: some RequestContext
+) async throws -> Value {
+    let buffer = try await request.body.collect(upTo: context.maxUploadSize)
+    return try JSONDecoder().decode(type, from: Data(buffer.readableBytesView))
+}
+
 private func decodeRepeatedFormValue(
     named name: String,
     request: Request,
@@ -632,6 +713,10 @@ private func redirect(setup outcome: ScannerSetupOutcome, to path: String = "/")
 
 private func routeName(context: some RequestContext) -> String? {
     context.parameters.get("name")?.removingPercentEncoding
+}
+
+private func workerID(context: some RequestContext) -> String? {
+    context.parameters.get("id")?.removingPercentEncoding
 }
 
 private func resolvedFile(
@@ -693,6 +778,42 @@ private func textResponse(_ text: String, status: HTTPResponse.Status) -> Respon
     dataResponse(Data(text.utf8), status: status, contentType: "text/plain; charset=utf-8")
 }
 
+private struct WorkerAPIError: Encodable {
+    let error: String
+}
+
+private func jsonResponse<Value: Encodable>(
+    _ value: Value,
+    status: HTTPResponse.Status = .ok
+) -> Response {
+    do {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return dataResponse(
+            try encoder.encode(value),
+            status: status,
+            contentType: "application/json; charset=utf-8",
+            additionalHeaders: [.cacheControl: "no-store"]
+        )
+    } catch {
+        return textResponse("Could not encode response\n", status: .internalServerError)
+    }
+}
+
+private func workerAPIErrorResponse(_ error: any Error) -> Response {
+    let status: HTTPResponse.Status
+    if let registryError = error as? OCRWorkerRegistryError,
+       registryError == .authenticationFailed {
+        status = .unauthorized
+    } else {
+        status = .badRequest
+    }
+    return jsonResponse(
+        WorkerAPIError(error: error.localizedDescription),
+        status: status
+    )
+}
+
 private func scanDirectoryErrorResponse(
     template: String,
     issue: ScanDirectoryAccessIssue,
@@ -728,6 +849,7 @@ private enum ScannerServerPage: String, CaseIterable {
     case scan
     case documents
     case presets
+    case workers
     case settings
 
     var path: String {
@@ -794,6 +916,7 @@ private func indexResponse(
     let settings = try await dependencies.settingsStore.load()
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
+    let workers = await dependencies.ocrWorkerRegistry.snapshots()
     let setup = await dependencies.scannerSetup.state()
     let scannerIsReachable = await dependencies.scannerReachability.isReachable
     let localTime = ScannerServerLocalTime(environment: dependencies.environment)
@@ -813,11 +936,13 @@ private func indexResponse(
         wifiBackend: wifiBackend,
         job: job,
         ocr: ocr,
+        workers: workers,
         groups: groups,
         localTime: localTime
     )
+    let refresh = page == .workers ? "<meta http-equiv=\"refresh\" content=\"10\">" : ""
     let html = template
-        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: refresh)
         .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "\(webRevision)")
         .replacingOccurrences(
             of: "<!-- SCANNER_SERVER_VERSION -->",
@@ -853,6 +978,7 @@ private func renderIndexContent(
     wifiBackend: Bool,
     job: ScanJobState,
     ocr: OCRQueueState,
+    workers: [OCRWorkerSnapshot],
     groups: [ScanDayGroup],
     localTime: ScannerServerLocalTime
 ) -> String {
@@ -892,6 +1018,8 @@ private func renderIndexContent(
             selectedMode: selectedMode,
             maximumOCRCPUs: ocr.cpuLimit
         )
+    case .workers:
+        html += renderWorkers(workers, localTime: localTime)
     case .settings:
         if wifiBackend {
             html += renderScannerSetup(setup)
@@ -901,6 +1029,69 @@ private func renderIndexContent(
         }
     }
     return html
+}
+
+private func renderWorkers(
+    _ workers: [OCRWorkerSnapshot],
+    localTime: ScannerServerLocalTime
+) -> String {
+    var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
+    html += "<p class=\"eyebrow\">Distributed processing</p><h2>OCR workers</h2>"
+    html += "<p class=\"muted\">Register, approve, and monitor remote processing capacity. Document dispatch is not enabled yet.</p>"
+    html += "</div></div>"
+    guard !workers.isEmpty else {
+        html += "<div class=\"empty-state compact\"><h3>No workers registered</h3>"
+        html += "<p class=\"muted\">Start scannerserver-worker with this server's address. New workers will appear here for approval.</p></div></section>"
+        return html
+    }
+
+    html += "<div class=\"worker-list\">"
+    for worker in workers {
+        html += "<article class=\"worker-card\"><div class=\"worker-card-head\"><div>"
+        html += "<h3>\(htmlEscape(worker.displayName))</h3>"
+        html += "<p class=\"muted\">\(htmlEscape(worker.hostname)) · \(htmlEscape(worker.architecture))</p></div>"
+        html += workerStatusPill(worker.availability) + "</div>"
+        html += "<dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(worker.cpuCount) CPUs · \(worker.maxConcurrentJobs) job slot"
+        if worker.maxConcurrentJobs != 1 { html += "s" }
+        html += "</dd></div><div><dt>Running</dt><dd>\(worker.runningJobs)</dd></div>"
+        html += "<div><dt>Languages</dt><dd>\(htmlEscape(worker.ocrLanguages.joined(separator: ", ")))</dd></div>"
+        html += "<div><dt>Version</dt><dd>\(htmlEscape(worker.workerVersion))</dd></div></dl>"
+        html += "<p class=\"muted\">Last seen \(htmlEscape(localTime.statusTimestamp(for: worker.lastSeen)))</p>"
+        html += "<div class=\"button-row\">"
+        let encodedID = urlPathComponent(worker.workerID)
+        if !worker.approved {
+            html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/approve\"><button>Approve worker</button></form>"
+        } else if worker.enabled {
+            html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/disable\"><button class=\"secondary-button\">Disable</button></form>"
+        } else {
+            html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/enable\"><button>Enable</button></form>"
+        }
+        html += "</div></article>"
+    }
+    return html + "</div></section>"
+}
+
+private func workerStatusPill(_ availability: OCRWorkerAvailability) -> String {
+    let label: String
+    let cssClass: String
+    switch availability {
+    case .pendingApproval:
+        label = "Approval required"
+        cssClass = "working"
+    case .online:
+        label = "Online"
+        cssClass = "success"
+    case .busy:
+        label = "Processing"
+        cssClass = "working"
+    case .offline:
+        label = "Offline"
+        cssClass = "error"
+    case .disabled:
+        label = "Disabled"
+        cssClass = ""
+    }
+    return "<span class=\"status-pill \(cssClass)\">\(label)</span>"
 }
 
 private func renderNavigation(active: ScannerServerPage) -> String {

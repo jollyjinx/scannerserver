@@ -50,6 +50,7 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("name=\"mode_id\""))
                 #expect(body.contains("href=\"/documents\""))
                 #expect(body.contains("href=\"/presets\""))
+                #expect(body.contains("href=\"/workers\""))
                 #expect(body.contains("href=\"/settings\""))
                 #expect(body.contains("fetch(`/updates?since=${revision}`"))
                 #expect(!body.contains("SCANNER_SERVER_REVISION"))
@@ -141,6 +142,68 @@ struct ScannerServerApplicationTests {
             }
             try await client.execute(uri: "/updates?since=invalid", method: .get) { response in
                 #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("OCR workers register, appear for approval, and heartbeat through the worker API")
+    func ocrWorkers() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+        let registration = OCRWorkerRegistrationRequest(
+            workerID: "mac-studio-1",
+            authenticationToken: String(repeating: "a", count: 64),
+            displayName: "Mac Studio & OCR",
+            hostname: "mac-studio.local",
+            workerVersion: "development",
+            architecture: "arm64",
+            cpuCount: 12,
+            maxConcurrentJobs: 1,
+            ocrLanguages: ["deu", "eng"]
+        )
+
+        try await application.test(.router) { client in
+            try await client.execute(
+                uri: "/api/ocr-workers/register",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(data: try JSONEncoder().encode(registration))
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains(#""availability":"pending-approval""#))
+            }
+            try await client.execute(uri: "/workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("Mac Studio &amp; OCR"))
+                #expect(body.contains("Approval required"))
+                #expect(body.contains("action=\"/workers/mac-studio-1/approve\""))
+            }
+            try await client.execute(
+                uri: "/workers/mac-studio-1/approve",
+                method: .post
+            ) { response in
+                expectRedirect(response, to: "/workers")
+            }
+            let heartbeat = OCRWorkerHeartbeatRequest(
+                authenticationToken: registration.authenticationToken,
+                runningJobs: 1
+            )
+            try await client.execute(
+                uri: "/api/ocr-workers/mac-studio-1/heartbeat",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: ByteBuffer(data: try JSONEncoder().encode(heartbeat))
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(String(buffer: response.body).contains(#""availability":"busy""#))
+            }
+            try await client.execute(uri: "/api/ocr-workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains(#""workerID":"mac-studio-1""#))
+                #expect(!body.contains(registration.authenticationToken))
             }
         }
     }
@@ -635,6 +698,7 @@ private struct HTTPFixture: Sendable {
     let settingsStore: ScanSettingsStore
     let scanJobs: ScanJobActor
     let ocrQueue: OCRQueueActor
+    let ocrWorkerRegistry: OCRWorkerRegistry
     let executor: SlowCapturingExecutor
     let environment: [String: String]
 
@@ -657,6 +721,10 @@ private struct HTTPFixture: Sendable {
             webUpdates: webUpdates
         )
         ocrQueue = OCRQueueActor(executor: executor, webUpdates: webUpdates)
+        ocrWorkerRegistry = OCRWorkerRegistry(
+            fileURL: outputDirectory.appendingPathComponent(".test-ocr-workers.json"),
+            webUpdates: webUpdates
+        )
         self.executor = executor
     }
 
@@ -668,6 +736,7 @@ private struct HTTPFixture: Sendable {
             settingsStore: settingsStore,
             scanJobs: scanJobs,
             ocrQueue: ocrQueue,
+            ocrWorkerRegistry: ocrWorkerRegistry,
             outputPathResolver: ScanOutputPathResolver(outputDirectory: outputDirectory),
             scannerSetup: scannerSetup ?? StoredScannerSetupService(
                 store: ScannerConfigStore(environment: environment)

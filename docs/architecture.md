@@ -70,6 +70,10 @@ persisted stores, reachability, and physical-button session state.
   configured nice level to every external document-processing subprocess; the service and scanner
   acquisition remain at normal priority. The queue exposes aggregate running/queued state, targeted
   cancellation, and recent jobs.
+- `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It
+  owns registration authentication, explicit approval, enablement, heartbeat state, and UI
+  snapshots. Remote job execution is not connected to `OCRQueueActor` yet; local processing remains
+  authoritative until durable leases and verified document transfer are implemented.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for

@@ -173,6 +173,7 @@ container is not required.
 - [Current Swift architecture](docs/architecture.md)
 - [Deployment and builds](docs/deployment.md)
 - [Configuration and scan behavior](docs/configuration.md)
+- [Distributed OCR workers](docs/ocr-workers.md)
 - [ScanSnap protocol notes](docs/protocol.md)
 - [Swift hardware validation](docs/swift-hardware-validation.md)
 - [Completed Python-to-Swift migration history](docs/history/swift-migration.md)

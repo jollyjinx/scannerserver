@@ -14,6 +14,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "scannerserver", targets: ["scannerserver"]),
+        .executable(name: "scannerserver-worker", targets: ["scannerserver-worker"]),
         .library(name: "ScannerServerCore", targets: ["ScannerServerCore"]),
     ],
     dependencies: [
@@ -24,6 +25,15 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "scannerserver",
+            dependencies: [
+                "ScannerServerCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "JLog", package: "JLog"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "scannerserver-worker",
             dependencies: [
                 "ScannerServerCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),

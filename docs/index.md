@@ -17,6 +17,7 @@ Use this page as the entry point for repository documentation. The root [`README
 | [`../AI/README.md`](../AI/README.md) | Agent routing, package shape, compatibility boundaries, and validation baseline | Agents |
 | [`architecture.md`](architecture.md) | Current Swift architecture, scope guardrails, compatibility contracts, and validation | Maintainers and agents |
 | [`configuration.md`](configuration.md) | Environment variables, scan modes, output names, OCR, blank-page removal, and cropping | Operators |
+| [`ocr-workers.md`](ocr-workers.md) | Remote OCR worker registration, approval, status, and distributed-execution roadmap | Operators and maintainers |
 | [`deployment.md`](deployment.md) | Published images, host networking, Compose, local builds, and image publishing | Operators |
 | [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, directed port map, startup advertisements, heartbeat, and physical-button session lifecycle | Maintainers |
 | [`swift-hardware-validation.md`](swift-hardware-validation.md) | Manual acceptance testing with a real scanner | Maintainers |
