@@ -83,6 +83,27 @@ struct OCRWorkerRegistryTests {
         #expect(workers.first?.workerID == registration.workerID)
         #expect(workers.first?.approved == true)
     }
+
+    @Test("Deleting a worker removes its persisted approval")
+    func deletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = root.appendingPathComponent("workers.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let registration = testRegistration()
+        let registry = OCRWorkerRegistry(fileURL: fileURL)
+        _ = try await registry.register(registration)
+        _ = try await registry.approve(workerID: registration.workerID)
+
+        let removed = try await registry.remove(workerID: registration.workerID)
+        #expect(removed.workerID == registration.workerID)
+        #expect(await registry.snapshots().isEmpty)
+        #expect(await OCRWorkerRegistry(fileURL: fileURL).snapshots().isEmpty)
+
+        await #expect(throws: OCRWorkerRegistryError.unknownWorker) {
+            _ = try await registry.remove(workerID: registration.workerID)
+        }
+    }
 }
 
 private func testRegistration() -> OCRWorkerRegistrationRequest {

@@ -29,15 +29,17 @@ do not need a fixed address or an inbound firewall rule.
 - `OCRWorkerJobStore` provides an atomically persisted manifest and lease state machine at
   `/scans/.scannerserver-ocr-jobs.json`. It supports FIFO capability matching, opaque lease tokens,
   renewal, authenticated terminal transitions, cancellation, and restart-safe lease expiry.
-- `OCRQueueActor` sends compatible `ocrmypdf` commands to an approved online worker. Blank-page
-  removal, autocrop, scan acquisition, naming, and final publication stay on scannerserver.
-- The worker downloads a size- and SHA-256-verified PDF, starts the existing scannerserver image
-  with Apple `container`, and uploads the result through its authenticated lease.
+- `OCRQueueActor` gives approved, enabled, compatible workers first refusal on `ocrmypdf` commands,
+  including when a registered worker is temporarily offline. Blank-page removal, autocrop, scan
+  acquisition, naming, and final publication stay on scannerserver.
+- The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF directly in worker-container
+  mode or starts the existing image with Apple `container` in native macOS mode, and uploads the
+  result through its authenticated lease.
 - scannerserver requires a PDF result, calculates its SHA-256 digest, writes it to a same-directory
   staging file, validates it with `qpdf --check`, and atomically publishes the established
   `.ocr.pdf` output name.
-- No eligible worker, assignment timeout, or reported worker failure falls back to the existing
-  local OCR executor. Cancellation invalidates the remote lease.
+- No approved and enabled compatible worker, assignment timeout, or reported worker failure falls
+  back to the existing local OCR executor. Cancellation invalidates the remote lease.
 
 ## Run A Worker Container
 
@@ -71,6 +73,9 @@ Open the **Workers** page on scannerserver and approve the new worker. `--jobs` 
 documents, and the detected CPUs are divided across those slots. With the recommended `--jobs 1`,
 one document can use the entire container CPU allowance. The page shows online capacity plus
 queued, running, completed, and failed remote jobs.
+
+Deleting a worker removes its persisted registration and approval. If that worker process is still
+running, it registers again with the same identity and must be approved again.
 
 ## Native macOS Worker
 

@@ -706,6 +706,12 @@ public enum ScannerServerApplication {
             }
             return .redirect(to: "/workers")
         }
+        router.post("/workers/:id/delete") { _, context -> Response in
+            if let workerID = workerID(context: context) {
+                _ = try? await dependencies.ocrWorkerRegistry.remove(workerID: workerID)
+            }
+            return .redirect(to: "/workers")
+        }
 
         router.post("/modes/default") { request, context -> Response in
             let form = try await decodeForm(ModeIDForm.self, request: request, context: context)
@@ -1305,7 +1311,7 @@ private func renderWorkers(
 ) -> String {
     var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
     html += "<p class=\"eyebrow\">Distributed processing</p><h2>OCR workers</h2>"
-    html += "<p class=\"muted\">Register, approve, and monitor remote OCR capacity. Approved online workers automatically receive compatible queued PDFs.</p>"
+    html += "<p class=\"muted\">Register, approve, and monitor remote OCR capacity. Approved enabled workers get first refusal on compatible queued PDFs before local OCR.</p>"
     html += "</div></div>"
     let activeJobs = jobs.filter { $0.status == .queued || $0.status == .leased }
     let completedJobs = jobs.filter { $0.status == .succeeded }.count
@@ -1340,6 +1346,7 @@ private func renderWorkers(
         } else {
             html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/enable\"><button>Enable</button></form>"
         }
+        html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/delete\"><button class=\"danger-button\" data-confirm=\"Delete this worker registration? A running worker will register again and require approval.\">Delete</button></form>"
         html += "</div></article>"
     }
     return html + "</div>" + renderWorkerJobs(jobs, localTime: localTime) + "</section>"

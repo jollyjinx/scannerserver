@@ -138,6 +138,22 @@ public actor OCRWorkerRegistry {
         return snapshot
     }
 
+    @discardableResult
+    public func remove(workerID: String, now: Date = Date()) async throws -> OCRWorkerSnapshot {
+        guard let worker = workers.removeValue(forKey: workerID) else {
+            throw OCRWorkerRegistryError.unknownWorker
+        }
+        do {
+            try persist()
+        } catch {
+            workers[workerID] = worker
+            throw error
+        }
+        let snapshot = snapshot(worker, now: now)
+        await webUpdates.notify()
+        return snapshot
+    }
+
     public func snapshots(now: Date = Date()) -> [OCRWorkerSnapshot] {
         workers.values
             .map { snapshot($0, now: now) }
@@ -181,6 +197,15 @@ public actor OCRWorkerRegistry {
             worker.approved
                 && worker.enabled
                 && now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds
+                && required.isSubset(of: Set(worker.registration.ocrLanguages))
+        }
+    }
+
+    public func hasPreferredWorker(ocrLanguages: [String]) -> Bool {
+        let required = Set(ocrLanguages)
+        return workers.values.contains { worker in
+            worker.approved
+                && worker.enabled
                 && required.isSubset(of: Set(worker.registration.ocrLanguages))
         }
     }

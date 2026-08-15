@@ -77,6 +77,58 @@ struct DistributedOCRProcessExecutorTests {
         #expect(try await executor.execute(request) == localResult)
         #expect(await local.requests == [request])
     }
+
+    @Test("Approved enabled workers get first refusal after a stale heartbeat")
+    func staleWorkerStillGetsFirstRefusal() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inputURL = root.appendingPathComponent("scan.pdf")
+        let outputURL = root.appendingPathComponent("scan.ocr.pdf")
+        try Data("%PDF-1.4\ninput\n".utf8).write(to: inputURL)
+
+        let registry = OCRWorkerRegistry(offlineAfterSeconds: 1)
+        let registration = distributedTestRegistration()
+        let stale = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try await registry.register(registration, now: stale)
+        _ = try await registry.approve(workerID: registration.workerID, now: stale)
+        #expect(await registry.snapshots().first?.availability == .offline)
+
+        let jobs = OCRWorkerJobStore(leaseTokenProvider: { "lease-token" })
+        let local = DistributedTestExecutor()
+        let executor = DistributedOCRProcessExecutor(
+            local: local,
+            workers: registry,
+            jobs: jobs,
+            configuration: DistributedOCRConfiguration(
+                assignmentWaitSeconds: 2,
+                completionTimeoutSeconds: 5
+            )
+        )
+        let request = ScanPipelineCommands.ocr(
+            inputPath: inputURL.path,
+            outputPath: outputURL.path,
+            environment: ["SCAN_LANGUAGE": "deu+eng"]
+        )
+
+        async let execution = executor.execute(request)
+        let lease = try await requireLease(jobs: jobs, registration: registration)
+        let output = Data("%PDF-1.4\nremote searchable output\n".utf8)
+        try output.write(to: outputURL)
+        _ = try await jobs.succeed(
+            jobID: lease.manifest.jobID,
+            workerID: registration.workerID,
+            leaseToken: lease.leaseToken,
+            result: OCRWorkerJobResult(
+                outputByteCount: Int64(output.count),
+                outputSHA256: OCRWorkerSHA256.hexDigest(output)
+            )
+        )
+
+        #expect(try await execution.succeeded)
+        #expect(await local.requests.isEmpty)
+    }
 }
 
 private actor DistributedTestExecutor: ProcessExecutor {

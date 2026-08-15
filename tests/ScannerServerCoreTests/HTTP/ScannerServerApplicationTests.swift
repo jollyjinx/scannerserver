@@ -205,6 +205,22 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#""workerID":"mac-studio-1""#))
                 #expect(!body.contains(registration.authenticationToken))
             }
+            try await client.execute(uri: "/workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("action=\"/workers/mac-studio-1/delete\""))
+            }
+            try await client.execute(
+                uri: "/workers/mac-studio-1/delete",
+                method: .post
+            ) { response in
+                expectRedirect(response, to: "/workers")
+            }
+            try await client.execute(uri: "/api/ocr-workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(!body.contains(#""workerID":"mac-studio-1""#))
+            }
         }
     }
 

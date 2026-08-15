@@ -85,7 +85,7 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
         guard configuration.enabled,
               request.executable == "ocrmypdf",
               let remoteRequest = try? makeRemoteRequest(request),
-              await workers.hasEligibleWorker(ocrLanguages: remoteRequest.languages) else {
+              await workers.hasPreferredWorker(ocrLanguages: remoteRequest.languages) else {
             return try await local.execute(request)
         }
 
