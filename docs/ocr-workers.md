@@ -32,6 +32,13 @@ do not need a fixed address or an inbound firewall rule.
 - `OCRQueueActor` gives approved, enabled, compatible workers first refusal on `ocrmypdf` commands,
   including when a registered worker is temporarily offline. Blank-page removal, autocrop, scan
   acquisition, naming, and final publication stay on scannerserver.
+- Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is wrapped in a
+  one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR
+  results are uploaded immediately, retained in the scan workspace, and assembled in source order
+  after the feeder is empty. The raw `.pdf` remains independently published; blank removal,
+  trimming, creator metadata, and atomic `.ocr.pdf` publication happen after ordered assembly.
+  The SANE backend remains whole-document because `scanimage` does not expose the same page-arrival
+  callback.
 - The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF directly in worker-container
   mode or starts the existing image with Apple `container` in native macOS mode, and uploads the
   result through its authenticated lease.
@@ -70,9 +77,10 @@ If scannerserver is another container on the same Docker network, use its servic
 `http://host.docker.internal:PORT` on Docker Desktop.
 
 Open the **Workers** page on scannerserver and approve the new worker. `--jobs` controls concurrent
-documents, and the detected CPUs are divided across those slots. With the recommended `--jobs 1`,
-one document can use the entire container CPU allowance. The page shows online capacity plus
-queued, running, completed, and failed remote jobs.
+page or document jobs, and the detected CPUs are divided across those slots. With the recommended
+`--jobs 1`, one OCR page can use the entire container CPU allowance while additional network workers
+consume other queued pages. The page highlights processing workers and shows the source document,
+page number, requested operations, friendly worker name, start time, and terminal result.
 
 Deleting a worker removes its persisted registration and approval. If that worker process is still
 running, it registers again with the same identity and must be approved again.
@@ -157,6 +165,7 @@ GET  /api/ocr-workers
 The browser approval controls use server-rendered form routes under `/workers/{worker-id}/...`.
 The public listing contains worker metadata and status but never authentication tokens.
 
-Initially, one multipage document should be assigned to one worker. More workers increase throughput
-across queued documents. Cross-machine page sharding is a separate compatibility project because it
-must preserve page order, metadata, PDF/A behavior, and failure atomicity.
+Remote manifests may carry optional document, batch, page, and operation metadata. Older persisted
+jobs without these fields remain decodable. ScanSnap Wi-Fi page sharding preserves source order and
+publishes the assembled `.ocr.pdf` only when every page has completed successfully; cancellation or
+failure removes the private scan workspace without replacing the already published raw PDF.

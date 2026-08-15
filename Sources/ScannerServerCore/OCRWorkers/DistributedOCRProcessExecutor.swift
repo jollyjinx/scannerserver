@@ -111,7 +111,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             ocrEnabled: true,
             removeBlankPages: false,
             cropPages: false,
-            containerArguments: request.containerArguments
+            containerArguments: request.containerArguments,
+            metadata: request.metadata
         )
         _ = try await jobs.enqueue(manifest)
         JLog.notice("Queued remote OCR job \(manifest.jobID)")
@@ -164,6 +165,7 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
         let outputPath: String
         let languages: [String]
         let containerArguments: [String]
+        let metadata: OCRWorkerJobMetadata?
     }
 
     private func makeRemoteRequest(_ request: ProcessRequest) throws -> RemoteRequest {
@@ -185,7 +187,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             inputPath: inputPath,
             outputPath: outputPath,
             languages: languages,
-            containerArguments: arguments
+            containerArguments: arguments,
+            metadata: request.ocrWorkerMetadata
         )
     }
 }

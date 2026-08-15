@@ -31,7 +31,8 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
     }
 
     public func acquire(
-        _ request: ScanSnapWiFiAcquisitionRequest
+        _ request: ScanSnapWiFiAcquisitionRequest,
+        pageHandler: (@Sendable (ScanSnapAcquiredPage) async throws -> Void)? = nil
     ) async throws -> ScanSnapWiFiAcquisitionResult {
         let scannerIPAddress = try ScannerConfig.normalizeIPv4Address(request.scannerIPAddress)
         let clientIPAddress: String
@@ -86,14 +87,13 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
                 let batch = try await acquireBatch(
                     scanner: scanner,
                     sessionConfiguration: sessionConfiguration,
-                    debug: request.debug
+                    debug: request.debug,
+                    simplex: request.simplex,
+                    pageBase: pages.count,
+                    pageHandler: pageHandler
                 )
                 diagnostics.append(contentsOf: batch.diagnostics)
-                for (index, page) in batch.pages.enumerated()
-                    where !request.simplex || index.isMultiple(of: 2)
-                {
-                    pages.append(page)
-                }
+                pages.append(contentsOf: batch.pages)
                 if batch.feederEmpty || batch.pages.isEmpty { break }
             } catch is CancellationError {
                 throw CancellationError()
@@ -117,7 +117,10 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
     private func acquireBatch(
         scanner: ScanSnapButtonScannerConfiguration,
         sessionConfiguration: ScanSnapButtonConfiguration,
-        debug: Bool
+        debug: Bool,
+        simplex: Bool,
+        pageBase: Int,
+        pageHandler: (@Sendable (ScanSnapAcquiredPage) async throws -> Void)?
     ) async throws -> Batch {
         let connection = try await connectionFactory.connect(
             to: ScanSnapSocketAddress(host: scanner.scannerIPAddress, port: scanner.dataPort),
@@ -125,7 +128,14 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
             timeoutMilliseconds: 10_000
         )
         do {
-            let batch = try await transferBatch(connection: connection, scanner: scanner, debug: debug)
+            let batch = try await transferBatch(
+                connection: connection,
+                scanner: scanner,
+                debug: debug,
+                simplex: simplex,
+                pageBase: pageBase,
+                pageHandler: pageHandler
+            )
             await finishBatch(
                 connection: connection,
                 scanner: scanner,
@@ -145,7 +155,10 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
     private func transferBatch(
         connection: any ScanSnapTCPConnection,
         scanner: ScanSnapButtonScannerConfiguration,
-        debug: Bool
+        debug: Bool,
+        simplex: Bool,
+        pageBase: Int,
+        pageHandler: (@Sendable (ScanSnapAcquiredPage) async throws -> Void)?
     ) async throws -> Batch {
         _ = try await connection.readExactly(16, timeoutMilliseconds: 10_000)
         for command in ScanSnapAcquisitionPacketBuilder.setupCommands {
@@ -179,7 +192,16 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
                 if pages.isEmpty { throw error }
                 break
             }
-            pages.append(jpeg)
+            let rawSideIndex = Int(side)
+            if !simplex || rawSideIndex.isMultiple(of: 2) {
+                pages.append(jpeg)
+                if let pageHandler {
+                    try await pageHandler(ScanSnapAcquiredPage(
+                        pageNumber: pageBase + pages.count,
+                        jpegData: jpeg
+                    ))
+                }
+            }
             if debug {
                 let face = side.isMultiple(of: 2) ? "front" : "back"
                 diagnostics.append("sheet \(Int(side) / 2 + 1) \(face) \(jpeg.count / 1_024) KB")
@@ -247,7 +269,7 @@ public struct ScanSnapWiFiAcquisitionClient: ScanSnapWiFiAcquiring {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                diagnostics.append("scan transfer ended after \(pages.count) sides: \(error.localizedDescription)")
+                diagnostics.append("scan transfer ended after side \(Int(side) + 1): \(error.localizedDescription)")
                 break
             }
         }

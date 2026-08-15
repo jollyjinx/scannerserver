@@ -71,12 +71,21 @@ persisted stores, reachability, and physical-button session state.
   configured nice level to every external document-processing subprocess; the service and scanner
   acquisition remain at normal priority. The queue exposes aggregate running/queued state, targeted
   cancellation, and recent jobs.
+- For OCR-enabled multipage ScanSnap Wi-Fi scans, acquisition calls the queue after every accepted
+  JPEG side. The queue immediately creates and schedules a one-page PDF, owns the private scan
+  workspace after raw publication, receives each remote result independently, and assembles pages
+  in source order. Whole-document blank removal and crop then run on the assembled searchable PDF,
+  followed by creator metadata and exclusive `.ocr.pdf` publication. This streaming path retains
+  the raw PDF, local OCR fallback, cancellation, CPU budgeting, and failure atomicity contracts.
+  SANE acquisition still enters the established whole-document path.
 - `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
   snapshots.
 - `OCRWorkerJobStore` owns atomically persisted remote-job manifests and FIFO lease transitions,
   including capability filtering, renewal, authenticated completion, cancellation, and recovery of
-  expired leases. Authenticated HTTP routes lease jobs and transfer digest-verified PDFs.
+  expired leases. Authenticated HTTP routes lease jobs and transfer digest-verified PDFs. Optional
+  manifest metadata identifies the user-facing document, streaming batch, page number, and requested
+  operations without breaking persisted jobs from the original protocol shape.
 - `DistributedOCRProcessExecutor` wraps only the `ocrmypdf` process boundary. Approved, enabled,
   language-compatible worker registrations get first refusal even across a temporary heartbeat
   outage; assignment timeout or remote failure preserves the local process executor as the safety

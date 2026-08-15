@@ -50,8 +50,27 @@ public struct ScanSnapWiFiAcquisitionResult: Sendable, Hashable {
     }
 }
 
+public struct ScanSnapAcquiredPage: Sendable, Hashable {
+    public let pageNumber: Int
+    public let jpegData: Data
+
+    public init(pageNumber: Int, jpegData: Data) {
+        self.pageNumber = pageNumber
+        self.jpegData = jpegData
+    }
+}
+
 public protocol ScanSnapWiFiAcquiring: Sendable {
-    func acquire(_ request: ScanSnapWiFiAcquisitionRequest) async throws -> ScanSnapWiFiAcquisitionResult
+    func acquire(
+        _ request: ScanSnapWiFiAcquisitionRequest,
+        pageHandler: (@Sendable (ScanSnapAcquiredPage) async throws -> Void)?
+    ) async throws -> ScanSnapWiFiAcquisitionResult
+}
+
+public extension ScanSnapWiFiAcquiring {
+    func acquire(_ request: ScanSnapWiFiAcquisitionRequest) async throws -> ScanSnapWiFiAcquisitionResult {
+        try await acquire(request, pageHandler: nil)
+    }
 }
 
 public enum ScanSnapAcquisitionError: Error, Sendable, Equatable, LocalizedError {

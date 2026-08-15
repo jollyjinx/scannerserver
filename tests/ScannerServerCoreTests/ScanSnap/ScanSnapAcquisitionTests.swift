@@ -106,6 +106,7 @@ struct ScanSnapAcquisitionTests {
         let udp = FakeUDPTransport(boundPort: 55_264, receiveBehavior: .values([nil, nil, nil]))
         let armer = ButtonFakeArmer()
         let sleeper = RecordingSleeper()
+        let arrivals = AcquiredPageRecorder(outputURL: output)
         let client = ScanSnapWiFiAcquisitionClient(
             connectionFactory: connectionFactory,
             udpTransportFactory: FakeUDPTransportFactory([udp]),
@@ -122,7 +123,9 @@ struct ScanSnapAcquisitionTests {
             reusesArmedSession: true,
             debug: true,
             outputURL: output
-        ))
+        )) { page in
+            await arrivals.record(page)
+        }
 
         #expect(result.pageCount == 2)
         #expect(result.diagnostics.contains("sheet 1 front"))
@@ -133,6 +136,8 @@ struct ScanSnapAcquisitionTests {
         #expect(await udp.sends.count == 3)
         #expect(await connection.didShutdownWriting)
         #expect(await connection.isClosed)
+        #expect(await arrivals.pageNumbers == [1, 2])
+        #expect(await arrivals.outputExistedAtArrival == [false, false])
     }
 
     private func fixtureJPEG(width: Int, height: Int) -> Data {
@@ -156,5 +161,20 @@ struct ScanSnapAcquisitionTests {
         response.replaceSubrange(4..<8, with: Array("VENS".utf8))
         response.replaceSubrange(16..<response.count, with: payload)
         return response
+    }
+}
+
+private actor AcquiredPageRecorder {
+    let outputURL: URL
+    var pageNumbers: [Int] = []
+    var outputExistedAtArrival: [Bool] = []
+
+    init(outputURL: URL) {
+        self.outputURL = outputURL
+    }
+
+    func record(_ page: ScanSnapAcquiredPage) {
+        pageNumbers.append(page.pageNumber)
+        outputExistedAtArrival.append(FileManager.default.fileExists(atPath: outputURL.path))
     }
 }

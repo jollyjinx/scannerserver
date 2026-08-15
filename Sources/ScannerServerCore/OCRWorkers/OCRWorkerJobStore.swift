@@ -332,6 +332,7 @@ public actor OCRWorkerJobStore {
             status: job.status,
             attemptCount: job.attemptCount,
             leasedWorkerID: job.lease?.workerID,
+            leasedAt: job.lease?.leasedAt,
             leaseExpiresAt: job.lease?.expiresAt,
             result: job.result,
             failure: job.failure,

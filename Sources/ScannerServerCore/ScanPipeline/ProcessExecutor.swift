@@ -13,6 +13,7 @@ public struct ProcessRequest: Equatable, Sendable {
     public let workingDirectory: URL?
     public let timeoutMilliseconds: UInt64?
     public let niceLevel: Int?
+    public let ocrWorkerMetadata: OCRWorkerJobMetadata?
 
     public init(
         executable: String,
@@ -20,7 +21,8 @@ public struct ProcessRequest: Equatable, Sendable {
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil,
         timeoutMilliseconds: UInt64? = nil,
-        niceLevel: Int? = nil
+        niceLevel: Int? = nil,
+        ocrWorkerMetadata: OCRWorkerJobMetadata? = nil
     ) {
         self.executable = executable
         self.arguments = arguments
@@ -28,6 +30,7 @@ public struct ProcessRequest: Equatable, Sendable {
         self.workingDirectory = workingDirectory
         self.timeoutMilliseconds = timeoutMilliseconds
         self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
+        self.ocrWorkerMetadata = ocrWorkerMetadata
     }
 
     func applyingNiceLevel(_ niceLevel: Int) -> ProcessRequest {
@@ -37,7 +40,8 @@ public struct ProcessRequest: Equatable, Sendable {
             environment: environment,
             workingDirectory: workingDirectory,
             timeoutMilliseconds: timeoutMilliseconds,
-            niceLevel: niceLevel
+            niceLevel: niceLevel,
+            ocrWorkerMetadata: ocrWorkerMetadata
         )
     }
 
@@ -48,7 +52,8 @@ public struct ProcessRequest: Equatable, Sendable {
             arguments: ["-n", String(niceLevel), executable] + arguments,
             environment: environment,
             workingDirectory: workingDirectory,
-            timeoutMilliseconds: timeoutMilliseconds
+            timeoutMilliseconds: timeoutMilliseconds,
+            ocrWorkerMetadata: ocrWorkerMetadata
         )
     }
 }
@@ -58,17 +63,20 @@ public struct ProcessResult: Equatable, Sendable {
     public let standardOutput: String
     public let standardError: String
     public let deferredScanProcessing: DeferredScanProcessing?
+    public let postProcessingHandled: Bool
 
     public init(
         exitStatus: Int32,
         standardOutput: String = "",
         standardError: String = "",
-        deferredScanProcessing: DeferredScanProcessing? = nil
+        deferredScanProcessing: DeferredScanProcessing? = nil,
+        postProcessingHandled: Bool = false
     ) {
         self.exitStatus = exitStatus
         self.standardOutput = standardOutput
         self.standardError = standardError
         self.deferredScanProcessing = deferredScanProcessing
+        self.postProcessingHandled = postProcessingHandled
     }
 
     public var succeeded: Bool { exitStatus == 0 }

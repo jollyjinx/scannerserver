@@ -1,3 +1,4 @@
+import Foundation
 import ScannerServerCore
 
 enum FakeProcessError: Error, Sendable {
@@ -8,6 +9,7 @@ enum FakeProcessError: Error, Sendable {
 actor FakeProcessExecutor: ProcessExecutor {
     enum Stub: Sendable {
         case result(ProcessResult)
+        case materializeLastArgument(Data, ProcessResult)
         case failure(FakeProcessError)
         case suspended(ProcessResult)
         case suspendedIgnoringCancellation(ProcessResult)
@@ -37,6 +39,10 @@ actor FakeProcessExecutor: ProcessExecutor {
         let stub = stubs.removeFirst()
         switch stub {
         case .result(let result):
+            return result
+        case let .materializeLastArgument(data, result):
+            guard let path = request.arguments.last else { throw FakeProcessError.expectedFailure }
+            try data.write(to: URL(fileURLWithPath: path))
             return result
         case .failure(let error):
             throw error

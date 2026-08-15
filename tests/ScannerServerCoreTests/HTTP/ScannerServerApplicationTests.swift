@@ -249,7 +249,7 @@ struct ScannerServerApplicationTests {
         )
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
         let sourceURL = workspace.appendingPathComponent("source.pdf")
-        let outputURL = fixture.outputDirectory.appendingPathComponent("source.ocr.pdf")
+        let outputURL = workspace.appendingPathComponent("result.ocr.pdf")
         try source.write(to: sourceURL)
         _ = try await fixture.ocrWorkerJobs.enqueue(OCRWorkerJobManifest(
             jobID: "transfer-job",
@@ -261,7 +261,13 @@ struct ScannerServerApplicationTests {
             ocrEnabled: true,
             removeBlankPages: false,
             cropPages: false,
-            containerArguments: ["--language", "deu+eng", "/work/source.pdf", "/work/result.pdf"]
+            containerArguments: ["--language", "deu+eng", "/work/source.pdf", "/work/result.pdf"],
+            metadata: OCRWorkerJobMetadata(
+                documentName: "2026-08-15.143000.pdf",
+                batchID: "stream-batch",
+                pageNumber: 3,
+                operations: ["remove blank pages", "trim/crop", "OCR (deu+eng)"]
+            )
         ))
 
         try await application.test(.router) { client in
@@ -293,6 +299,16 @@ struct ScannerServerApplicationTests {
                 )
             }
             let lease = try #require(capturedLease)
+
+            try await client.execute(uri: "/workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("Processing now"))
+                #expect(body.contains("2026-08-15.143000.pdf · page 3"))
+                #expect(body.contains("remove blank pages · trim/crop · OCR (deu+eng)"))
+                #expect(body.contains("Worker Transfer Worker"))
+                #expect(!body.contains("<h3>source.pdf</h3>"))
+            }
 
             try await client.execute(
                 uri: "/api/ocr-workers/transfer-worker/jobs/transfer-job/source",

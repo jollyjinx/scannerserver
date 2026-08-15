@@ -318,6 +318,7 @@ public struct ScannerServerDependencies: Sendable {
             scanJobs: ScanJobActor(
                 nativeScanner: NativeScanPipeline(
                     executor: documentExecutor,
+                    ocrQueue: ocrQueue,
                     acquisitionSessions: scanSnapAcquisitionSessions
                 ),
                 ocrQueue: ocrQueue,
@@ -656,7 +657,8 @@ public enum ScannerServerApplication {
                 }
                 let outputURL = try workerJobURL(
                     path: manifest.outputPath,
-                    outputDirectory: dependencies.outputPathResolver.outputDirectory
+                    outputDirectory: dependencies.outputPathResolver.outputDirectory,
+                    allowSubdirectories: true
                 )
                 guard !FileManager.default.fileExists(atPath: outputURL.path) else {
                     throw OCRWorkerTransferError.outputExists
@@ -1334,12 +1336,14 @@ private func renderWorkers(
     guard !workers.isEmpty else {
         html += "<div class=\"empty-state compact\"><h3>No workers registered</h3>"
         html += "<p class=\"muted\">Start scannerserver-worker with this server's address. New workers will appear here for approval.</p></div></section>"
-        return html + renderWorkerJobs(jobs, localTime: localTime)
+        return html + renderWorkerJobs(jobs, workers: workers, localTime: localTime)
     }
 
     html += "<div class=\"worker-list\">"
     for worker in workers {
-        html += "<article class=\"worker-card\"><div class=\"worker-card-head\"><div>"
+        let workerJobs = activeJobs.filter { $0.leasedWorkerID == worker.workerID }
+        let busyClass = workerJobs.isEmpty ? "" : " worker-card-busy"
+        html += "<article class=\"worker-card\(busyClass)\"><div class=\"worker-card-head\"><div>"
         html += "<h3>\(htmlEscape(worker.displayName))</h3>"
         html += "<p class=\"muted\">\(htmlEscape(worker.hostname)) · \(htmlEscape(worker.architecture))</p></div>"
         html += workerStatusPill(worker.availability) + "</div>"
@@ -1349,6 +1353,16 @@ private func renderWorkers(
         html += "<div><dt>Languages</dt><dd>\(htmlEscape(worker.ocrLanguages.joined(separator: ", ")))</dd></div>"
         html += "<div><dt>Version</dt><dd>\(htmlEscape(worker.workerVersion))</dd></div></dl>"
         html += "<p class=\"muted\">Last seen \(htmlEscape(localTime.statusTimestamp(for: worker.lastSeen)))</p>"
+        if !workerJobs.isEmpty {
+            html += "<div class=\"worker-active-jobs\"><strong>Processing now</strong>"
+            for job in workerJobs {
+                html += "<p>\(htmlEscape(workerJobTitle(job)))"
+                let details = workerJobDetails(job)
+                if !details.isEmpty { html += "<br><span class=\"muted\">\(htmlEscape(details))</span>" }
+                html += "</p>"
+            }
+            html += "</div>"
+        }
         html += "<div class=\"button-row\">"
         let encodedID = urlPathComponent(worker.workerID)
         if !worker.approved {
@@ -1361,22 +1375,29 @@ private func renderWorkers(
         html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/delete\"><button class=\"danger-button\" data-confirm=\"Delete this worker registration? A running worker will register again and require approval.\">Delete</button></form>"
         html += "</div></article>"
     }
-    return html + "</div>" + renderWorkerJobs(jobs, localTime: localTime) + "</section>"
+    return html + "</div>" + renderWorkerJobs(jobs, workers: workers, localTime: localTime) + "</section>"
 }
 
 private func renderWorkerJobs(
     _ jobs: [OCRWorkerJobSnapshot],
+    workers: [OCRWorkerSnapshot],
     localTime: ScannerServerLocalTime
 ) -> String {
     guard !jobs.isEmpty else { return "" }
     var html = "<div class=\"section-heading\"><div><h3>Recent remote jobs</h3></div></div><div class=\"worker-list\">"
     for job in jobs.suffix(10).reversed() {
         html += "<article class=\"worker-card\"><div class=\"worker-card-head\"><div>"
-        html += "<h3>\(htmlEscape(URL(fileURLWithPath: job.manifest.sourcePath).lastPathComponent))</h3>"
+        html += "<h3>\(htmlEscape(workerJobTitle(job)))</h3>"
+        html += "<p class=\"muted\">\(htmlEscape(workerJobDetails(job)))</p>"
         html += "<p class=\"muted\">Attempt \(job.attemptCount) · updated \(htmlEscape(localTime.statusTimestamp(for: job.updatedAt)))</p>"
         html += "</div><span class=\"status-pill\">\(htmlEscape(job.status.rawValue.capitalized))</span></div>"
         if let workerID = job.leasedWorkerID {
-            html += "<p class=\"muted\">Worker \(htmlEscape(workerID))</p>"
+            let workerName = workers.first { $0.workerID == workerID }?.displayName ?? workerID
+            html += "<p class=\"muted\">Worker \(htmlEscape(workerName))"
+            if let leasedAt = job.leasedAt {
+                html += " · started \(htmlEscape(localTime.statusTimestamp(for: leasedAt)))"
+            }
+            html += "</p>"
         }
         if let failure = job.failure, !failure.isEmpty {
             html += "<p class=\"warning\">\(htmlEscape(failure))</p>"
@@ -1384,6 +1405,28 @@ private func renderWorkerJobs(
         html += "</article>"
     }
     return html + "</div>"
+}
+
+private func workerJobTitle(_ job: OCRWorkerJobSnapshot) -> String {
+    let documentName = job.manifest.metadata?.documentName
+        ?? URL(fileURLWithPath: job.manifest.sourcePath).lastPathComponent
+    if let pageNumber = job.manifest.metadata?.pageNumber {
+        return "\(documentName) · page \(pageNumber)"
+    }
+    return documentName
+}
+
+private func workerJobDetails(_ job: OCRWorkerJobSnapshot) -> String {
+    let operations = job.manifest.metadata?.operations ?? {
+        var values: [String] = []
+        if job.manifest.removeBlankPages { values.append("remove blank pages") }
+        if job.manifest.cropPages { values.append("trim/crop") }
+        if job.manifest.ocrEnabled {
+            values.append("OCR (\(job.manifest.ocrLanguages.joined(separator: "+")))")
+        }
+        return values
+    }()
+    return operations.joined(separator: " · ")
 }
 
 private func workerStatusPill(_ availability: OCRWorkerAvailability) -> String {

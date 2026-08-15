@@ -147,7 +147,7 @@ public actor ScanJobActor {
             return
         }
 
-        if result.succeeded, let ocrQueue {
+        if result.succeeded, let ocrQueue, !result.postProcessingHandled {
             if let deferredProcessing = result.deferredScanProcessing {
                 await ocrQueue.enqueue(deferredProcessing)
             }

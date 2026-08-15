@@ -8,6 +8,25 @@ public enum OCRWorkerJobStatus: String, Codable, Equatable, Sendable {
     case cancelled
 }
 
+public struct OCRWorkerJobMetadata: Codable, Equatable, Sendable {
+    public let documentName: String
+    public let batchID: String?
+    public let pageNumber: Int?
+    public let operations: [String]
+
+    public init(
+        documentName: String,
+        batchID: String? = nil,
+        pageNumber: Int? = nil,
+        operations: [String] = []
+    ) {
+        self.documentName = documentName
+        self.batchID = batchID
+        self.pageNumber = pageNumber
+        self.operations = operations
+    }
+}
+
 public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let jobID: String
     public let sourcePath: String
@@ -19,6 +38,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let removeBlankPages: Bool
     public let cropPages: Bool
     public let containerArguments: [String]?
+    public let metadata: OCRWorkerJobMetadata?
     public let createdAt: Date
 
     public init(
@@ -32,6 +52,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         removeBlankPages: Bool,
         cropPages: Bool,
         containerArguments: [String]? = nil,
+        metadata: OCRWorkerJobMetadata? = nil,
         createdAt: Date = Date()
     ) {
         self.jobID = jobID
@@ -44,6 +65,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         self.removeBlankPages = removeBlankPages
         self.cropPages = cropPages
         self.containerArguments = containerArguments
+        self.metadata = metadata
         self.createdAt = createdAt
     }
 }
@@ -120,6 +142,7 @@ public struct OCRWorkerJobSnapshot: Codable, Equatable, Sendable {
     public let status: OCRWorkerJobStatus
     public let attemptCount: Int
     public let leasedWorkerID: String?
+    public let leasedAt: Date?
     public let leaseExpiresAt: Date?
     public let result: OCRWorkerJobResult?
     public let failure: String?

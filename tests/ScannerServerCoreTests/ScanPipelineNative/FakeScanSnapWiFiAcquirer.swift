@@ -21,7 +21,8 @@ actor FakeScanSnapWiFiAcquirer: ScanSnapWiFiAcquiring {
     }
 
     func acquire(
-        _ request: ScanSnapWiFiAcquisitionRequest
+        _ request: ScanSnapWiFiAcquisitionRequest,
+        pageHandler: (@Sendable (ScanSnapAcquiredPage) async throws -> Void)? = nil
     ) async throws -> ScanSnapWiFiAcquisitionResult {
         recordedRequests.append(request)
         let waiters = requestWaiters
@@ -31,6 +32,11 @@ actor FakeScanSnapWiFiAcquirer: ScanSnapWiFiAcquiring {
 
         switch stubs.removeFirst() {
         case let .materialize(data, result):
+            if let pageHandler {
+                for pageNumber in 1...max(1, result.pageCount) {
+                    try await pageHandler(ScanSnapAcquiredPage(pageNumber: pageNumber, jpegData: data))
+                }
+            }
             try FileManager.default.createDirectory(
                 at: request.outputURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true

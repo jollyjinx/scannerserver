@@ -388,7 +388,8 @@ public struct NativeDocumentToolExecutor: ProcessExecutor, Sendable {
             arguments: arguments,
             environment: request.environment,
             workingDirectory: request.workingDirectory,
-            niceLevel: request.niceLevel
+            niceLevel: request.niceLevel,
+            ocrWorkerMetadata: request.ocrWorkerMetadata
         )
     }
 

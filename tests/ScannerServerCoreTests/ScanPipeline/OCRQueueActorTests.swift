@@ -4,6 +4,61 @@ import Testing
 
 @Suite("OCR queue actor")
 struct OCRQueueActorTests {
+    @Test("Streaming pages start OCR before acquisition finishes and assemble in order")
+    func streamingPages() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-ocr-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-15.143000.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdf = Data("%PDF-1.4\nstreamed\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 2)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-15.143000.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: ["SCAN_LANGUAGE": "deu+eng"],
+            removeBlankPages: false,
+            cropPages: false
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        await executor.waitForRequestCount(1)
+        #expect(await executor.requests().count == 1)
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 2, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 2)
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == ["ocrmypdf", "ocrmypdf", "qpdf", "set-pdf-creator"])
+        #expect(requests[0].ocrWorkerMetadata?.documentName == "2026-08-15.143000.pdf")
+        #expect(Set(requests.prefix(2).compactMap { $0.ocrWorkerMetadata?.pageNumber }) == Set([1, 2]))
+        #expect(requests[2].arguments.contains { $0.hasSuffix("page-0001.ocr.pdf") })
+        #expect(requests[2].arguments.contains { $0.hasSuffix("page-0002.ocr.pdf") })
+        #expect(try Data(contentsOf: final) == pdf)
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+    }
+
     @Test("Multipage jobs execute in FIFO order within one CPU budget")
     func fifo() async {
         let executor = FakeProcessExecutor(stubs: [
