@@ -4,7 +4,7 @@ import Testing
 
 @Suite("OCR worker registry")
 struct OCRWorkerRegistryTests {
-    @Test("Workers require approval and transition through online, busy, disabled, and offline")
+    @Test("Workers require approval and transition through online, busy, paused, disabled, and offline")
     func lifecycle() async throws {
         let registry = OCRWorkerRegistry(offlineAfterSeconds: 20)
         let start = Date(timeIntervalSince1970: 1_700_000_000)
@@ -26,6 +26,27 @@ struct OCRWorkerRegistryTests {
             now: start.addingTimeInterval(5)
         )
         #expect(busy.availability == .busy)
+
+        let paused = try await registry.setPaused(
+            true,
+            workerID: registration.workerID,
+            now: start.addingTimeInterval(5)
+        )
+        #expect(paused.availability == .paused)
+        #expect(paused.paused)
+        #expect(await registry.hasPreferredWorker(ocrLanguages: ["eng"]) == false)
+        await #expect(throws: OCRWorkerRegistryError.workerPaused) {
+            _ = try await registry.authorizeJobRequest(
+                workerID: registration.workerID,
+                authenticationToken: registration.authenticationToken,
+                now: start.addingTimeInterval(5)
+            )
+        }
+        _ = try await registry.setPaused(
+            false,
+            workerID: registration.workerID,
+            now: start.addingTimeInterval(5)
+        )
 
         let disabled = try await registry.setEnabled(
             false,
@@ -75,6 +96,7 @@ struct OCRWorkerRegistryTests {
         let first = OCRWorkerRegistry(fileURL: fileURL)
         _ = try await first.register(registration)
         _ = try await first.approve(workerID: registration.workerID)
+        _ = try await first.setPaused(true, workerID: registration.workerID)
 
         let reloaded = OCRWorkerRegistry(fileURL: fileURL)
         let workers = await reloaded.snapshots()
@@ -82,6 +104,7 @@ struct OCRWorkerRegistryTests {
         #expect(workers.count == 1)
         #expect(workers.first?.workerID == registration.workerID)
         #expect(workers.first?.approved == true)
+        #expect(workers.first?.paused == true)
     }
 
     @Test("Deleting a worker removes its persisted approval")

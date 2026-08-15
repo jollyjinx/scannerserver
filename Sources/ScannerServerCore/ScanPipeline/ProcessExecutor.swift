@@ -58,25 +58,33 @@ public struct ProcessRequest: Equatable, Sendable {
     }
 }
 
+public enum ProcessExecutionLocation: String, Equatable, Sendable {
+    case local
+    case remote
+}
+
 public struct ProcessResult: Equatable, Sendable {
     public let exitStatus: Int32
     public let standardOutput: String
     public let standardError: String
     public let deferredScanProcessing: DeferredScanProcessing?
     public let postProcessingHandled: Bool
+    public let executionLocation: ProcessExecutionLocation
 
     public init(
         exitStatus: Int32,
         standardOutput: String = "",
         standardError: String = "",
         deferredScanProcessing: DeferredScanProcessing? = nil,
-        postProcessingHandled: Bool = false
+        postProcessingHandled: Bool = false,
+        executionLocation: ProcessExecutionLocation = .local
     ) {
         self.exitStatus = exitStatus
         self.standardOutput = standardOutput
         self.standardError = standardError
         self.deferredScanProcessing = deferredScanProcessing
         self.postProcessingHandled = postProcessingHandled
+        self.executionLocation = executionLocation
     }
 
     public var succeeded: Bool { exitStatus == 0 }

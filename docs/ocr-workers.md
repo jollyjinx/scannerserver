@@ -23,7 +23,7 @@ do not need a fixed address or an inbound firewall rule.
   languages.
 - New workers require approval on the scannerserver **Workers** page.
 - Heartbeats report liveness and running-job count. Approved workers become offline after missed
-  heartbeats and can be disabled without forgetting their approval.
+  heartbeats. They can be paused temporarily or disabled without forgetting their approval.
 - Registrations and approvals are stored atomically in
   `/scans/.scannerserver-ocr-workers.json` by default.
 - `OCRWorkerJobStore` provides an atomically persisted manifest and lease state machine at
@@ -79,8 +79,16 @@ If scannerserver is another container on the same Docker network, use its servic
 Open the **Workers** page on scannerserver and approve the new worker. `--jobs` controls concurrent
 page or document jobs, and the detected CPUs are divided across those slots. With the recommended
 `--jobs 1`, one OCR page can use the entire container CPU allowance while additional network workers
-consume other queued pages. The page highlights processing workers and shows the source document,
-page number, requested operations, friendly worker name, start time, and terminal result.
+consume other queued pages. The page includes the scannerserver's internal fallback worker,
+highlights processing workers, reports successful page count and average seconds per page, and shows
+waiting, running, and recent terminal work in compact lists with document, page, operations, worker,
+timing, and result details.
+
+**Pause** temporarily removes a remote worker from dispatch and immediately returns its active
+leases to the queue. Another compatible worker can claim them without waiting for lease expiry. The
+paused process remains registered and continues heartbeating; if it is still processing an old
+lease, its next renewal or upload is rejected and that work is discarded. **Resume** makes it
+eligible again. **Disable** remains the administrative off switch.
 
 Deleting a worker removes its persisted registration and approval. If that worker process is still
 running, it registers again with the same identity and must be approved again.
@@ -162,7 +170,8 @@ POST /api/ocr-workers/{worker-id}/jobs/{job-id}/fail
 GET  /api/ocr-workers
 ```
 
-The browser approval controls use server-rendered form routes under `/workers/{worker-id}/...`.
+The browser approval, pause/resume, enable/disable, and delete controls use server-rendered form
+routes under `/workers/{worker-id}/...`.
 The public listing contains worker metadata and status but never authentication tokens.
 
 Remote manifests may carry optional document, batch, page, and operation metadata. Older persisted

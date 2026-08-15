@@ -8,6 +8,7 @@ public actor OCRWorkerRegistry {
         var runningJobs: Int
         var approved: Bool
         var enabled: Bool
+        var paused: Bool?
     }
 
     private struct StoredWorkers: Codable, Sendable {
@@ -76,7 +77,8 @@ public actor OCRWorkerRegistry {
                 lastSeen: now,
                 runningJobs: 0,
                 approved: false,
-                enabled: true
+                enabled: true,
+                paused: false
             )
         }
         try persist()
@@ -139,6 +141,23 @@ public actor OCRWorkerRegistry {
     }
 
     @discardableResult
+    public func setPaused(
+        _ paused: Bool,
+        workerID: String,
+        now: Date = Date()
+    ) async throws -> OCRWorkerSnapshot {
+        guard var worker = workers[workerID] else {
+            throw OCRWorkerRegistryError.unknownWorker
+        }
+        worker.paused = paused
+        workers[workerID] = worker
+        try persist()
+        let snapshot = snapshot(worker, now: now)
+        await webUpdates.notify()
+        return snapshot
+    }
+
+    @discardableResult
     public func remove(workerID: String, now: Date = Date()) async throws -> OCRWorkerSnapshot {
         guard let worker = workers.removeValue(forKey: workerID) else {
             throw OCRWorkerRegistryError.unknownWorker
@@ -179,6 +198,7 @@ public actor OCRWorkerRegistry {
         }
         guard worker.approved else { throw OCRWorkerRegistryError.approvalRequired }
         guard worker.enabled else { throw OCRWorkerRegistryError.workerDisabled }
+        guard worker.paused != true else { throw OCRWorkerRegistryError.workerPaused }
         guard now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds else {
             throw OCRWorkerRegistryError.workerOffline
         }
@@ -196,6 +216,7 @@ public actor OCRWorkerRegistry {
         return workers.values.contains { worker in
             worker.approved
                 && worker.enabled
+                && worker.paused != true
                 && now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds
                 && required.isSubset(of: Set(worker.registration.ocrLanguages))
         }
@@ -206,6 +227,7 @@ public actor OCRWorkerRegistry {
         return workers.values.contains { worker in
             worker.approved
                 && worker.enabled
+                && worker.paused != true
                 && required.isSubset(of: Set(worker.registration.ocrLanguages))
         }
     }
@@ -256,6 +278,7 @@ public actor OCRWorkerRegistry {
             ocrLanguages: worker.registration.ocrLanguages,
             approved: worker.approved,
             enabled: worker.enabled,
+            paused: worker.paused ?? false,
             availability: availability(worker, now: now),
             registeredAt: worker.registeredAt,
             lastSeen: worker.lastSeen
@@ -265,6 +288,7 @@ public actor OCRWorkerRegistry {
     private func availability(_ worker: StoredWorker, now: Date) -> OCRWorkerAvailability {
         guard worker.approved else { return .pendingApproval }
         guard worker.enabled else { return .disabled }
+        guard worker.paused != true else { return .paused }
         guard now.timeIntervalSince(worker.lastSeen) <= offlineAfterSeconds else { return .offline }
         return worker.runningJobs > 0 ? .busy : .online
     }
@@ -274,8 +298,9 @@ public actor OCRWorkerRegistry {
         case .pendingApproval: 0
         case .busy: 1
         case .online: 2
-        case .offline: 3
-        case .disabled: 4
+        case .paused: 3
+        case .offline: 4
+        case .disabled: 5
         }
     }
 

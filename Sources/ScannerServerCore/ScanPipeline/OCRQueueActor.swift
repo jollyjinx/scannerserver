@@ -5,13 +5,38 @@ public struct OCRJobTiming: Equatable, Sendable {
     public let output: String
     public let status: String
     public let duration: TimeInterval
+    public let metadata: OCRWorkerJobMetadata?
+    public let executionLocation: ProcessExecutionLocation?
 
-    public init(input: String, output: String, status: String, duration: TimeInterval) {
+    public init(
+        input: String,
+        output: String,
+        status: String,
+        duration: TimeInterval,
+        metadata: OCRWorkerJobMetadata? = nil,
+        executionLocation: ProcessExecutionLocation? = nil
+    ) {
         self.input = input
         self.output = output
         self.status = status
         self.duration = duration
+        self.metadata = metadata
+        self.executionLocation = executionLocation
     }
+}
+
+public enum OCRQueueJobPhase: String, Equatable, Sendable {
+    case waiting
+    case processing
+}
+
+public struct OCRQueueJobSnapshot: Equatable, Sendable {
+    public let input: String
+    public let documentName: String
+    public let pageNumber: Int?
+    public let operations: [String]
+    public let phase: OCRQueueJobPhase
+    public let started: Date?
 }
 
 public struct OCRQueueState: Equatable, Sendable {
@@ -26,6 +51,8 @@ public struct OCRQueueState: Equatable, Sendable {
     public var running: Int
     public var queued: Int
     public var recentJobs: [OCRJobTiming]
+    public var waitingJobs: [OCRQueueJobSnapshot]
+    public var processingJobs: [OCRQueueJobSnapshot]
 
     public init(
         started: Date? = nil,
@@ -38,7 +65,9 @@ public struct OCRQueueState: Equatable, Sendable {
         niceLevel: Int? = nil,
         running: Int = 0,
         queued: Int = 0,
-        recentJobs: [OCRJobTiming] = []
+        recentJobs: [OCRJobTiming] = [],
+        waitingJobs: [OCRQueueJobSnapshot] = [],
+        processingJobs: [OCRQueueJobSnapshot] = []
     ) {
         self.started = started
         self.finished = finished
@@ -51,6 +80,8 @@ public struct OCRQueueState: Equatable, Sendable {
         self.running = running
         self.queued = queued
         self.recentJobs = recentJobs
+        self.waitingJobs = waitingJobs
+        self.processingJobs = processingJobs
     }
 }
 
@@ -123,6 +154,7 @@ public actor OCRQueueActor {
         let error: String
         let publishedOutputPath: String
         let followUpJobs: [Job]
+        let executionLocation: ProcessExecutionLocation?
 
         init(
             finished: Date,
@@ -130,7 +162,8 @@ public actor OCRQueueActor {
             output: String,
             error: String,
             publishedOutputPath: String,
-            followUpJobs: [Job] = []
+            followUpJobs: [Job] = [],
+            executionLocation: ProcessExecutionLocation? = nil
         ) {
             self.finished = finished
             self.status = status
@@ -138,6 +171,7 @@ public actor OCRQueueActor {
             self.error = error
             self.publishedOutputPath = publishedOutputPath
             self.followUpJobs = followUpJobs
+            self.executionLocation = executionLocation
         }
     }
 
@@ -433,7 +467,8 @@ public actor OCRQueueActor {
                 status: result.succeeded ? "done" : "failed (\(result.exitStatus))",
                 output: result.succeeded && processOutput.isEmpty ? outputPath : processOutput,
                 error: result.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
-                publishedOutputPath: result.succeeded ? outputPath : ""
+                publishedOutputPath: result.succeeded ? outputPath : "",
+                executionLocation: result.executionLocation
             )
         } catch is CancellationError {
             return JobCompletion(
@@ -513,7 +548,9 @@ public actor OCRQueueActor {
                 input: job.inputPath,
                 output: completion.publishedOutputPath,
                 status: completion.status,
-                duration: max(0, completion.finished.timeIntervalSince(started))
+                duration: max(0, completion.finished.timeIntervalSince(started)),
+                metadata: job.workerMetadata,
+                executionLocation: completion.executionLocation
             ),
             at: 0
         )
@@ -556,7 +593,38 @@ public actor OCRQueueActor {
     private func publishQueueState() async {
         queueState.running = activeJobs.count
         queueState.queued = queue.count
+        queueState.waitingJobs = queue.map {
+            queueSnapshot(job: $0, phase: .waiting, started: nil)
+        }
+        queueState.processingJobs = activeJobs.values
+            .sorted { $0.started < $1.started }
+            .map { queueSnapshot(job: $0.job, phase: .processing, started: $0.started) }
         await webUpdates.notify()
+    }
+
+    private func queueSnapshot(
+        job: Job,
+        phase: OCRQueueJobPhase,
+        started: Date?
+    ) -> OCRQueueJobSnapshot {
+        var operations = job.workerMetadata?.operations ?? []
+        if operations.isEmpty {
+            if job.removeBlankPages { operations.append("remove blank pages") }
+            if job.cropPages { operations.append("trim/crop") }
+            if job.ocrEnabled {
+                let language = job.environment?["SCAN_LANGUAGE"] ?? "deu+eng"
+                operations.append("OCR (\(language))")
+            }
+        }
+        return OCRQueueJobSnapshot(
+            input: job.inputPath,
+            documentName: job.workerMetadata?.documentName
+                ?? URL(fileURLWithPath: job.inputPath).lastPathComponent,
+            pageNumber: job.workerMetadata?.pageNumber,
+            operations: operations,
+            phase: phase,
+            started: started
+        )
     }
 
     private func resumeIdleWaiters() {

@@ -89,11 +89,18 @@ persisted stores, reachability, and physical-button session state.
 - `DistributedOCRProcessExecutor` wraps only the `ocrmypdf` process boundary. Approved, enabled,
   language-compatible worker registrations get first refusal even across a temporary heartbeat
   outage; assignment timeout or remote failure preserves the local process executor as the safety
-  fallback. The worker either runs OCRmyPDF directly when the worker itself is the production
+  fallback. Paused workers are excluded from dispatch, and pausing immediately requeues their active
+  leases so another worker can claim them; stale renewals and results are rejected. Completed jobs
+  retain their worker and lease-start time for per-page throughput statistics. The worker either
+  runs OCRmyPDF directly when the worker itself is the production
   container or starts the existing image with Apple Container from the native macOS executable.
   Both modes isolate each job in its own workspace and use the worker slot's CPU allowance. The
   server verifies results with SHA-256 and `qpdf --check`, then atomically publishes them before
   reporting OCR completion.
+- The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
+  It always exposes the internal fallback worker, current waiting/running work, compact terminal
+  history, and successful seconds-per-page measurements without exposing authentication or lease
+  tokens.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
   `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;
   an explicit server URL remains available and takes precedence over Bonjour.

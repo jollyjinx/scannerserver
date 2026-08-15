@@ -236,6 +236,8 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
             JLog.notice("Worker is approved and online")
         case .busy:
             JLog.info("Worker is processing")
+        case .paused:
+            JLog.notice("Worker is paused in scannerserver")
         case .offline:
             JLog.warning("Worker is marked offline")
         case .disabled:

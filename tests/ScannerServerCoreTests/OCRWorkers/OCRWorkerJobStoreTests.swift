@@ -130,6 +130,48 @@ struct OCRWorkerJobStoreTests {
         #expect(try await store.leaseNext(workerID: "worker", ocrLanguages: ["eng"]) == nil)
     }
 
+    @Test("Pausing a worker returns only its leases to the queue and rejects stale tokens")
+    func workerLeaseRequeue() async throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let tokens = TokenSequence(["worker-one-token", "worker-two-token", "new-token"])
+        let store = OCRWorkerJobStore(leaseTokenProvider: { tokens.next() })
+        _ = try await store.enqueue(testManifest(jobID: "job-1", createdAt: start))
+        _ = try await store.enqueue(testManifest(
+            jobID: "job-2",
+            createdAt: start.addingTimeInterval(1)
+        ))
+        let first = try #require(try await store.leaseNext(
+            workerID: "worker-1",
+            ocrLanguages: ["eng"],
+            now: start.addingTimeInterval(2)
+        ))
+        let second = try #require(try await store.leaseNext(
+            workerID: "worker-2",
+            ocrLanguages: ["eng"],
+            now: start.addingTimeInterval(2)
+        ))
+
+        #expect(try await store.requeueLeases(
+            workerID: "worker-1",
+            now: start.addingTimeInterval(3)
+        ) == 1)
+        #expect(try await store.snapshot(jobID: first.manifest.jobID).status == .queued)
+        #expect(try await store.snapshot(jobID: second.manifest.jobID).leasedWorkerID == "worker-2")
+        await #expect(throws: OCRWorkerJobStoreError.invalidTransition(from: .queued, to: .leased)) {
+            _ = try await store.renew(
+                jobID: first.manifest.jobID,
+                workerID: first.workerID,
+                leaseToken: first.leaseToken,
+                now: start.addingTimeInterval(4)
+            )
+        }
+        #expect(try await store.leaseNext(
+            workerID: "worker-3",
+            ocrLanguages: ["eng"],
+            now: start.addingTimeInterval(4)
+        )?.manifest.jobID == "job-1")
+    }
+
     @Test("Workers can report a terminal failure without exposing the lease token")
     func terminalFailure() async throws {
         let store = OCRWorkerJobStore(leaseTokenProvider: { "private-token" })

@@ -17,6 +17,8 @@ public actor OCRWorkerJobStore {
         var lease: StoredLease?
         var result: OCRWorkerJobResult?
         var failure: String?
+        var completedWorkerID: String?
+        var startedAt: Date?
         var updatedAt: Date
     }
 
@@ -83,6 +85,8 @@ public actor OCRWorkerJobStore {
             lease: nil,
             result: nil,
             failure: nil,
+            completedWorkerID: nil,
+            startedAt: nil,
             updatedAt: manifest.createdAt
         )
         jobs[manifest.jobID] = job
@@ -125,6 +129,8 @@ public actor OCRWorkerJobStore {
         job.attemptCount += 1
         job.lease = lease
         job.failure = nil
+        job.completedWorkerID = nil
+        job.startedAt = now
         job.updatedAt = now
         jobs[jobID] = job
         try persist()
@@ -173,6 +179,7 @@ public actor OCRWorkerJobStore {
         job.lease = nil
         job.result = result
         job.failure = nil
+        job.completedWorkerID = workerID
         job.updatedAt = now
         jobs[jobID] = job
         try persist()
@@ -196,6 +203,7 @@ public actor OCRWorkerJobStore {
         job.status = .failed
         job.lease = nil
         job.failure = String(failure.prefix(4_096))
+        job.completedWorkerID = workerID
         job.updatedAt = now
         jobs[jobID] = job
         try persist()
@@ -221,6 +229,26 @@ public actor OCRWorkerJobStore {
     @discardableResult
     public func requeueExpiredLeases(now: Date = Date()) throws -> Int {
         let count = requeueExpiredLeasesWithoutPersisting(now: now)
+        if count > 0 { try persist() }
+        return count
+    }
+
+    @discardableResult
+    public func requeueLeases(workerID: String, now: Date = Date()) throws -> Int {
+        var count = 0
+        for jobID in jobs.keys {
+            guard var job = jobs[jobID],
+                  job.status == .leased,
+                  job.lease?.workerID == workerID else {
+                continue
+            }
+            job.status = .queued
+            job.lease = nil
+            job.failure = nil
+            job.updatedAt = now
+            jobs[jobID] = job
+            count += 1
+        }
         if count > 0 { try persist() }
         return count
     }
@@ -332,7 +360,8 @@ public actor OCRWorkerJobStore {
             status: job.status,
             attemptCount: job.attemptCount,
             leasedWorkerID: job.lease?.workerID,
-            leasedAt: job.lease?.leasedAt,
+            completedWorkerID: job.completedWorkerID,
+            leasedAt: job.lease?.leasedAt ?? job.startedAt,
             leaseExpiresAt: job.lease?.expiresAt,
             result: job.result,
             failure: job.failure,

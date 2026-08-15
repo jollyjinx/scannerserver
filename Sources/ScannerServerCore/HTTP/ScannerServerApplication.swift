@@ -709,6 +709,20 @@ public enum ScannerServerApplication {
             }
             return .redirect(to: "/workers")
         }
+        router.post("/workers/:id/pause") { _, context -> Response in
+            if let workerID = workerID(context: context),
+               (try? await dependencies.ocrWorkerRegistry.setPaused(true, workerID: workerID)) != nil {
+                _ = try? await dependencies.ocrWorkerJobs.requeueLeases(workerID: workerID)
+                await dependencies.webUpdates.notify()
+            }
+            return .redirect(to: "/workers")
+        }
+        router.post("/workers/:id/resume") { _, context -> Response in
+            if let workerID = workerID(context: context) {
+                _ = try? await dependencies.ocrWorkerRegistry.setPaused(false, workerID: workerID)
+            }
+            return .redirect(to: "/workers")
+        }
         router.post("/workers/:id/delete") { _, context -> Response in
             if let workerID = workerID(context: context) {
                 _ = try? await dependencies.ocrWorkerRegistry.remove(workerID: workerID)
@@ -1306,7 +1320,7 @@ private func renderIndexContent(
             maximumOCRCPUs: ocr.cpuLimit
         )
     case .workers:
-        html += renderWorkers(workers, jobs: workerJobs, localTime: localTime)
+        html += renderWorkers(workers, jobs: workerJobs, ocr: ocr, localTime: localTime)
     case .settings:
         if wifiBackend {
             html += renderScannerSetup(setup)
@@ -1321,6 +1335,7 @@ private func renderIndexContent(
 private func renderWorkers(
     _ workers: [OCRWorkerSnapshot],
     jobs: [OCRWorkerJobSnapshot],
+    ocr: OCRQueueState,
     localTime: ScannerServerLocalTime
 ) -> String {
     var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
@@ -1328,20 +1343,24 @@ private func renderWorkers(
     html += "<p class=\"muted\">Register, approve, and monitor remote OCR capacity. Approved enabled workers get first refusal on compatible queued PDFs before local OCR.</p>"
     html += "</div></div>"
     let activeJobs = jobs.filter { $0.status == .queued || $0.status == .leased }
-    let completedJobs = jobs.filter { $0.status == .succeeded }.count
-    let failedJobs = jobs.filter { $0.status == .failed }.count
-    html += "<dl class=\"worker-facts\"><div><dt>Queued</dt><dd>\(activeJobs.filter { $0.status == .queued }.count)</dd></div>"
-    html += "<div><dt>Remote running</dt><dd>\(activeJobs.filter { $0.status == .leased }.count)</dd></div>"
-    html += "<div><dt>Completed</dt><dd>\(completedJobs)</dd></div><div><dt>Failed</dt><dd>\(failedJobs)</dd></div></dl>"
-    guard !workers.isEmpty else {
-        html += "<div class=\"empty-state compact\"><h3>No workers registered</h3>"
-        html += "<p class=\"muted\">Start scannerserver-worker with this server's address. New workers will appear here for approval.</p></div></section>"
-        return html + renderWorkerJobs(jobs, workers: workers, localTime: localTime)
+    let localDone = ocr.recentJobs.filter {
+        $0.status == "done" && $0.executionLocation == .local
     }
+    html += "<dl class=\"worker-facts\"><div><dt>Waiting</dt><dd>\(ocr.waitingJobs.count + activeJobs.filter { $0.status == .queued }.count)</dd></div>"
+    html += "<div><dt>Remote running</dt><dd>\(activeJobs.filter { $0.status == .leased }.count)</dd></div>"
+    html += "<div><dt>Completed</dt><dd>\(jobs.filter { $0.status == .succeeded }.count + localDone.count)</dd></div>"
+    html += "<div><dt>Failed</dt><dd>\(jobs.filter { $0.status == .failed }.count)</dd></div></dl>"
 
     html += "<div class=\"worker-list\">"
+    html += renderInternalWorker(ocr: ocr, activeRemoteJobs: activeJobs)
     for worker in workers {
-        let workerJobs = activeJobs.filter { $0.leasedWorkerID == worker.workerID }
+        let workerJobs = activeJobs.filter { $0.workerID == worker.workerID }
+        let pageTimings = jobs.filter {
+            $0.status == .succeeded
+                && $0.completedWorkerID == worker.workerID
+                && $0.manifest.metadata?.pageNumber != nil
+                && $0.leasedAt != nil
+        }
         let busyClass = workerJobs.isEmpty ? "" : " worker-card-busy"
         html += "<article class=\"worker-card\(busyClass)\"><div class=\"worker-card-head\"><div>"
         html += "<h3>\(htmlEscape(worker.displayName))</h3>"
@@ -1350,6 +1369,7 @@ private func renderWorkers(
         html += "<dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(worker.cpuCount) CPUs · \(worker.maxConcurrentJobs) job slot"
         if worker.maxConcurrentJobs != 1 { html += "s" }
         html += "</dd></div><div><dt>Running</dt><dd>\(worker.runningJobs)</dd></div>"
+        html += "<div><dt>Speed</dt><dd>\(workerSpeed(pageTimings))</dd></div>"
         html += "<div><dt>Languages</dt><dd>\(htmlEscape(worker.ocrLanguages.joined(separator: ", ")))</dd></div>"
         html += "<div><dt>Version</dt><dd>\(htmlEscape(worker.workerVersion))</dd></div></dl>"
         html += "<p class=\"muted\">Last seen \(htmlEscape(localTime.statusTimestamp(for: worker.lastSeen)))</p>"
@@ -1368,6 +1388,11 @@ private func renderWorkers(
         if !worker.approved {
             html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/approve\"><button>Approve worker</button></form>"
         } else if worker.enabled {
+            if worker.paused {
+                html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/resume\"><button>Resume</button></form>"
+            } else {
+                html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/pause\"><button class=\"secondary-button\">Pause</button></form>"
+            }
             html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/disable\"><button class=\"secondary-button\">Disable</button></form>"
         } else {
             html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/enable\"><button>Enable</button></form>"
@@ -1375,36 +1400,160 @@ private func renderWorkers(
         html += "<form class=\"inline-form\" method=\"post\" action=\"/workers/\(encodedID)/delete\"><button class=\"danger-button\" data-confirm=\"Delete this worker registration? A running worker will register again and require approval.\">Delete</button></form>"
         html += "</div></article>"
     }
-    return html + "</div>" + renderWorkerJobs(jobs, workers: workers, localTime: localTime) + "</section>"
+    if workers.isEmpty {
+        html += "<div class=\"empty-state compact\"><h3>No remote workers registered</h3>"
+        html += "<p class=\"muted\">Start scannerserver-worker with this server's address. New workers will appear here for approval.</p></div>"
+    }
+    html += "</div>"
+    html += renderWorkerQueue(ocr: ocr, jobs: activeJobs, workers: workers, localTime: localTime)
+    html += renderWorkerHistory(ocr: ocr, jobs: jobs, workers: workers, localTime: localTime)
+    return html + "</section>"
 }
 
-private func renderWorkerJobs(
-    _ jobs: [OCRWorkerJobSnapshot],
+private func renderInternalWorker(
+    ocr: OCRQueueState,
+    activeRemoteJobs: [OCRWorkerJobSnapshot]
+) -> String {
+    let remoteKeys = Set(activeRemoteJobs.compactMap(workerJobKey))
+    let localRunning = ocr.processingJobs.filter { !remoteKeys.contains(queueJobKey($0)) }.count
+    let localPages = ocr.recentJobs.filter {
+        $0.status == "done"
+            && $0.executionLocation == .local
+            && $0.metadata?.pageNumber != nil
+    }
+    let busyClass = localRunning > 0 ? " worker-card-busy" : ""
+    var html = "<article class=\"worker-card\(busyClass)\"><div class=\"worker-card-head\"><div>"
+    html += "<h3>Internal worker</h3><p class=\"muted\">scannerserver · local fallback</p></div>"
+    html += localRunning > 0
+        ? "<span class=\"status-pill working\">Processing</span>"
+        : "<span class=\"status-pill success\">Available</span>"
+    html += "</div><dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(ocr.cpuLimit) CPUs</dd></div>"
+    html += "<div><dt>Running</dt><dd>\(localRunning)</dd></div>"
+    html += "<div><dt>Speed</dt><dd>\(localSpeed(localPages))</dd></div>"
+    html += "<div><dt>Priority</dt><dd>Remote workers first</dd></div></dl>"
+    html += "<p class=\"muted\">Always available when no compatible remote worker takes a job.</p></article>"
+    return html
+}
+
+private func renderWorkerQueue(
+    ocr: OCRQueueState,
+    jobs: [OCRWorkerJobSnapshot],
     workers: [OCRWorkerSnapshot],
     localTime: ScannerServerLocalTime
 ) -> String {
-    guard !jobs.isEmpty else { return "" }
-    var html = "<div class=\"section-heading\"><div><h3>Recent remote jobs</h3></div></div><div class=\"worker-list\">"
-    for job in jobs.suffix(10).reversed() {
-        html += "<article class=\"worker-card\"><div class=\"worker-card-head\"><div>"
-        html += "<h3>\(htmlEscape(workerJobTitle(job)))</h3>"
-        html += "<p class=\"muted\">\(htmlEscape(workerJobDetails(job)))</p>"
-        html += "<p class=\"muted\">Attempt \(job.attemptCount) · updated \(htmlEscape(localTime.statusTimestamp(for: job.updatedAt)))</p>"
-        html += "</div><span class=\"status-pill\">\(htmlEscape(job.status.rawValue.capitalized))</span></div>"
-        if let workerID = job.leasedWorkerID {
-            let workerName = workers.first { $0.workerID == workerID }?.displayName ?? workerID
-            html += "<p class=\"muted\">Worker \(htmlEscape(workerName))"
-            if let leasedAt = job.leasedAt {
-                html += " · started \(htmlEscape(localTime.statusTimestamp(for: leasedAt)))"
-            }
-            html += "</p>"
-        }
-        if let failure = job.failure, !failure.isEmpty {
-            html += "<p class=\"warning\">\(htmlEscape(failure))</p>"
-        }
-        html += "</article>"
+    let remoteKeys = Set(jobs.compactMap(workerJobKey))
+    let localProcessing = ocr.processingJobs.filter { !remoteKeys.contains(queueJobKey($0)) }
+    guard !ocr.waitingJobs.isEmpty || !localProcessing.isEmpty || !jobs.isEmpty else { return "" }
+    var html = "<div class=\"worker-job-section\"><h3>Waiting and running</h3><ul class=\"worker-job-list\">"
+    for job in localProcessing {
+        html += queueJobRow(job, assignment: "Internal worker", status: "Processing", localTime: localTime)
     }
-    return html + "</div>"
+    for job in ocr.waitingJobs {
+        html += queueJobRow(job, assignment: "OCR scheduler", status: "Waiting", localTime: localTime)
+    }
+    for job in jobs.sorted(by: { $0.manifest.createdAt < $1.manifest.createdAt }) {
+        let workerName = job.workerID.flatMap { id in workers.first { $0.workerID == id }?.displayName }
+        let assignment = workerName ?? (job.status == .queued ? "Waiting for worker" : "Remote worker")
+        html += workerJobRow(job, assignment: assignment, localTime: localTime)
+    }
+    return html + "</ul></div>"
+}
+
+private func renderWorkerHistory(
+    ocr: OCRQueueState,
+    jobs: [OCRWorkerJobSnapshot],
+    workers: [OCRWorkerSnapshot],
+    localTime: ScannerServerLocalTime
+) -> String {
+    let terminal = jobs.filter { $0.status != .queued && $0.status != .leased }.suffix(30).reversed()
+    let local = ocr.recentJobs.filter { $0.executionLocation == .local }.prefix(20)
+    guard !terminal.isEmpty || !local.isEmpty else { return "" }
+    var html = "<div class=\"worker-job-section\"><h3>Recent completed jobs</h3><ul class=\"worker-job-list\">"
+    for job in terminal {
+        let workerName = job.workerID.flatMap { id in workers.first { $0.workerID == id }?.displayName }
+            ?? "Remote worker"
+        html += workerJobRow(job, assignment: workerName, localTime: localTime)
+    }
+    for timing in local {
+        let title = timing.metadata.map { metadata in
+            metadata.pageNumber.map { "\(metadata.documentName) · page \($0)" } ?? metadata.documentName
+        } ?? URL(fileURLWithPath: timing.input).lastPathComponent
+        let operations = timing.metadata?.operations.joined(separator: " · ") ?? "Local processing"
+        html += "<li class=\"worker-job-row\"><strong>\(htmlEscape(title))</strong>"
+        html += "<span class=\"worker-job-operations\">\(htmlEscape(operations))</span>"
+        html += "<span class=\"worker-job-meta\">Internal worker</span>"
+        html += "<span class=\"worker-job-state\">\(htmlEscape(timing.status.capitalized)) · \(formatDuration(timing.duration))</span></li>"
+    }
+    return html + "</ul></div>"
+}
+
+private func queueJobRow(
+    _ job: OCRQueueJobSnapshot,
+    assignment: String,
+    status: String,
+    localTime: ScannerServerLocalTime
+) -> String {
+    let title = job.pageNumber.map { "\(job.documentName) · page \($0)" } ?? job.documentName
+    var detail = status
+    if let started = job.started {
+        detail += " · started \(localTime.statusTimestamp(for: started))"
+    }
+    return "<li class=\"worker-job-row\"><strong>\(htmlEscape(title))</strong>"
+        + "<span class=\"worker-job-operations\">\(htmlEscape(job.operations.joined(separator: " · ")))</span>"
+        + "<span class=\"worker-job-meta\">\(htmlEscape(assignment))</span>"
+        + "<span class=\"worker-job-state\">\(htmlEscape(detail))</span></li>"
+}
+
+private func workerJobRow(
+    _ job: OCRWorkerJobSnapshot,
+    assignment: String,
+    localTime: ScannerServerLocalTime
+) -> String {
+    var operations = workerJobDetails(job)
+    if let failure = job.failure, !failure.isEmpty {
+        if !operations.isEmpty { operations += " · " }
+        operations += failure
+    }
+    var status = job.status.rawValue.capitalized
+    if let leasedAt = job.leasedAt {
+        let duration = max(0, job.updatedAt.timeIntervalSince(leasedAt))
+        status += " · \(formatDuration(duration))"
+    } else {
+        status += " · \(localTime.statusTimestamp(for: job.updatedAt))"
+    }
+    return "<li class=\"worker-job-row\"><strong>\(htmlEscape(workerJobTitle(job)))</strong>"
+        + "<span class=\"worker-job-operations\">\(htmlEscape(operations))</span>"
+        + "<span class=\"worker-job-meta\">\(htmlEscape(assignment)) · attempt \(job.attemptCount)</span>"
+        + "<span class=\"worker-job-state\">\(htmlEscape(status))</span></li>"
+}
+
+private func workerSpeed(_ jobs: [OCRWorkerJobSnapshot]) -> String {
+    let durations = jobs.compactMap { job -> TimeInterval? in
+        guard let started = job.leasedAt else { return nil }
+        return max(0, job.updatedAt.timeIntervalSince(started))
+    }
+    guard !durations.isEmpty else { return "No page timings yet" }
+    let pageLabel = durations.count == 1 ? "page" : "pages"
+    return "\(formatDuration(durations.reduce(0, +) / Double(durations.count)))/page · \(durations.count) \(pageLabel)"
+}
+
+private func localSpeed(_ jobs: [OCRJobTiming]) -> String {
+    guard !jobs.isEmpty else { return "No page timings yet" }
+    let pageLabel = jobs.count == 1 ? "page" : "pages"
+    return "\(formatDuration(jobs.reduce(0) { $0 + $1.duration } / Double(jobs.count)))/page · \(jobs.count) \(pageLabel)"
+}
+
+private func formatDuration(_ duration: TimeInterval) -> String {
+    duration < 10 ? String(format: "%.1fs", duration) : "\(Int(duration.rounded()))s"
+}
+
+private func workerJobKey(_ job: OCRWorkerJobSnapshot) -> String? {
+    guard let metadata = job.manifest.metadata else { return nil }
+    return "\(metadata.documentName)#\(metadata.pageNumber ?? 0)"
+}
+
+private func queueJobKey(_ job: OCRQueueJobSnapshot) -> String {
+    "\(job.documentName)#\(job.pageNumber ?? 0)"
 }
 
 private func workerJobTitle(_ job: OCRWorkerJobSnapshot) -> String {
@@ -1441,6 +1590,9 @@ private func workerStatusPill(_ availability: OCRWorkerAvailability) -> String {
         cssClass = "success"
     case .busy:
         label = "Processing"
+        cssClass = "working"
+    case .paused:
+        label = "Paused"
         cssClass = "working"
     case .offline:
         label = "Offline"

@@ -138,7 +138,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
                     }
                     return ProcessResult(
                         exitStatus: 0,
-                        standardOutput: request.outputPath + "\n"
+                        standardOutput: request.outputPath + "\n",
+                        executionLocation: .remote
                     )
                 case .failed:
                     throw OCRRemoteDispatchError.remoteFailed(snapshot.failure ?? "unknown worker failure")

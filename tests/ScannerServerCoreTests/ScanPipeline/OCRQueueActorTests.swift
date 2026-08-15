@@ -57,6 +57,10 @@ struct OCRQueueActorTests {
         #expect(requests[2].arguments.contains { $0.hasSuffix("page-0002.ocr.pdf") })
         #expect(try Data(contentsOf: final) == pdf)
         #expect(!FileManager.default.fileExists(atPath: work.path))
+        let state = await queue.state
+        let pageTimings = state.recentJobs.filter { $0.metadata?.pageNumber != nil }
+        #expect(pageTimings.count == 2)
+        #expect(pageTimings.allSatisfy { $0.executionLocation == .local })
     }
 
     @Test("Multipage jobs execute in FIFO order within one CPU budget")
@@ -767,6 +771,8 @@ struct OCRQueueActorTests {
 
         #expect(await queue.state.running == 2)
         #expect(await queue.state.queued == 2)
+        #expect(await queue.state.processingJobs.count == 2)
+        #expect(await queue.state.waitingJobs.map(\.documentName) == ["three.pdf", "four.pdf"])
 
         await executor.resumeNextSuspendedExecution()
         await executor.waitForRequestCount(3)

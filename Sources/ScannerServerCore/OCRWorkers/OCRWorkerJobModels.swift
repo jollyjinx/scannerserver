@@ -142,11 +142,14 @@ public struct OCRWorkerJobSnapshot: Codable, Equatable, Sendable {
     public let status: OCRWorkerJobStatus
     public let attemptCount: Int
     public let leasedWorkerID: String?
+    public let completedWorkerID: String?
     public let leasedAt: Date?
     public let leaseExpiresAt: Date?
     public let result: OCRWorkerJobResult?
     public let failure: String?
     public let updatedAt: Date
+
+    public var workerID: String? { leasedWorkerID ?? completedWorkerID }
 }
 
 public enum OCRWorkerJobStoreError: Error, Equatable, LocalizedError, Sendable {

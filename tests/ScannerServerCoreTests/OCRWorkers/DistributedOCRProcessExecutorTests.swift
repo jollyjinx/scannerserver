@@ -55,6 +55,7 @@ struct DistributedOCRProcessExecutorTests {
 
         let result = try await execution
         #expect(result.succeeded)
+        #expect(result.executionLocation == .remote)
         #expect(result.standardOutput == outputURL.path + "\n")
         #expect(await local.requests.isEmpty)
     }
@@ -74,7 +75,9 @@ struct DistributedOCRProcessExecutorTests {
             outputPath: "/scans/input.ocr.pdf"
         )
 
-        #expect(try await executor.execute(request) == localResult)
+        let result = try await executor.execute(request)
+        #expect(result == localResult)
+        #expect(result.executionLocation == .local)
         #expect(await local.requests == [request])
     }
 

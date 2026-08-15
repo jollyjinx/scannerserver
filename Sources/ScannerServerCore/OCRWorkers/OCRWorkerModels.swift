@@ -55,6 +55,7 @@ public enum OCRWorkerAvailability: String, Codable, Equatable, Sendable {
     case pendingApproval = "pending-approval"
     case online
     case busy
+    case paused
     case offline
     case disabled
 }
@@ -90,6 +91,7 @@ public struct OCRWorkerSnapshot: Codable, Equatable, Sendable {
     public let ocrLanguages: [String]
     public let approved: Bool
     public let enabled: Bool
+    public let paused: Bool
     public let availability: OCRWorkerAvailability
     public let registeredAt: Date
     public let lastSeen: Date
@@ -104,6 +106,7 @@ public enum OCRWorkerRegistryError: Error, Equatable, LocalizedError, Sendable {
     case unknownWorker
     case approvalRequired
     case workerDisabled
+    case workerPaused
     case workerOffline
     case workerAtCapacity
 
@@ -125,6 +128,8 @@ public enum OCRWorkerRegistryError: Error, Equatable, LocalizedError, Sendable {
             "OCR worker is waiting for approval."
         case .workerDisabled:
             "OCR worker is disabled."
+        case .workerPaused:
+            "OCR worker is paused."
         case .workerOffline:
             "OCR worker heartbeat is stale."
         case .workerAtCapacity:

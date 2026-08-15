@@ -176,6 +176,7 @@ struct ScannerServerApplicationTests {
             try await client.execute(uri: "/workers", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(response.status == .ok)
+                #expect(body.contains("Internal worker"))
                 #expect(body.contains("Mac Studio &amp; OCR"))
                 #expect(body.contains("Approval required"))
                 #expect(body.contains("action=\"/workers/mac-studio-1/approve\""))
@@ -208,7 +209,25 @@ struct ScannerServerApplicationTests {
             try await client.execute(uri: "/workers", method: .get) { response in
                 let body = String(buffer: response.body)
                 #expect(response.status == .ok)
+                #expect(body.contains("action=\"/workers/mac-studio-1/pause\""))
                 #expect(body.contains("action=\"/workers/mac-studio-1/delete\""))
+            }
+            try await client.execute(
+                uri: "/workers/mac-studio-1/pause",
+                method: .post
+            ) { response in
+                expectRedirect(response, to: "/workers")
+            }
+            try await client.execute(uri: "/workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Paused"))
+                #expect(body.contains("action=\"/workers/mac-studio-1/resume\""))
+            }
+            try await client.execute(
+                uri: "/workers/mac-studio-1/resume",
+                method: .post
+            ) { response in
+                expectRedirect(response, to: "/workers")
             }
             try await client.execute(
                 uri: "/workers/mac-studio-1/delete",
@@ -306,7 +325,7 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("Processing now"))
                 #expect(body.contains("2026-08-15.143000.pdf · page 3"))
                 #expect(body.contains("remove blank pages · trim/crop · OCR (deu+eng)"))
-                #expect(body.contains("Worker Transfer Worker"))
+                #expect(body.contains("Transfer Worker · attempt 1"))
                 #expect(!body.contains("<h3>source.pdf</h3>"))
             }
 
@@ -346,6 +365,12 @@ struct ScannerServerApplicationTests {
             ) { response in
                 #expect(response.status == .ok)
                 #expect(String(buffer: response.body).contains(#""status":"succeeded""#))
+            }
+            try await client.execute(uri: "/workers", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("/page · 1 page"))
+                #expect(body.contains("Recent completed jobs"))
+                #expect(body.contains("Succeeded"))
             }
 
             let outsideURL = fixture.root.appendingPathComponent("outside.pdf")
