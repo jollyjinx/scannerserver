@@ -84,7 +84,9 @@ persisted stores, reachability, and physical-button session state.
   snapshot. Workers advertising the crop capability run the same native autocrop after OCR
   on each page; an unavailable or failed remote worker falls back to local OCR and the same per-page
   crop. Whole-document blank removal, creator metadata, and exclusive `.ocr.pdf` publication remain
-  on scannerserver. This streaming path retains the raw PDF, local fallback, cancellation, CPU
+  on scannerserver. The Workers page reports this document-finalization phase separately instead
+  of continuing to show the already completed final OCR page as worker activity. This streaming
+  path retains the raw PDF, local fallback, cancellation, CPU
   budgeting, crop settings, and failure atomicity contracts. SANE acquisition still enters the
   established whole-document path.
 - `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It

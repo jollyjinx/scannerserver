@@ -1563,7 +1563,11 @@ private func renderWorkerQueue(
 ) -> String {
     let remoteKeys = Set(jobs.compactMap(workerJobKey))
     let localProcessing = ocr.processingJobs.filter { !remoteKeys.contains(queueJobKey($0)) }
-    guard !ocr.waitingJobs.isEmpty || !localProcessing.isEmpty || !jobs.isEmpty else { return "" }
+    guard !ocr.waitingJobs.isEmpty
+            || !localProcessing.isEmpty
+            || !ocr.finalizingJobs.isEmpty
+            || !jobs.isEmpty
+    else { return "" }
     var html = "<div class=\"worker-job-section\"><h3>Waiting and running</h3><ul class=\"worker-job-list\">"
     for job in localProcessing {
         html += queueJobRow(
@@ -1575,6 +1579,14 @@ private func renderWorkerQueue(
     }
     for job in ocr.waitingJobs {
         html += queueJobRow(job, assignment: "OCR scheduler", status: "Waiting", localTime: localTime)
+    }
+    for job in ocr.finalizingJobs {
+        html += queueJobRow(
+            job,
+            assignment: "Scanner server",
+            status: "Finalizing OCR document",
+            localTime: localTime
+        )
     }
     for job in jobs.sorted(by: { $0.manifest.createdAt < $1.manifest.createdAt }) {
         let workerName = job.workerID.flatMap { id in workers.first { $0.workerID == id }?.displayName }

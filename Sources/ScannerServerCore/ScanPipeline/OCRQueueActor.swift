@@ -28,6 +28,7 @@ public struct OCRJobTiming: Equatable, Sendable {
 public enum OCRQueueJobPhase: String, Equatable, Sendable {
     case waiting
     case processing
+    case finalizing
 }
 
 public struct OCRQueueJobSnapshot: Equatable, Sendable {
@@ -53,6 +54,7 @@ public struct OCRQueueState: Equatable, Sendable {
     public var recentJobs: [OCRJobTiming]
     public var waitingJobs: [OCRQueueJobSnapshot]
     public var processingJobs: [OCRQueueJobSnapshot]
+    public var finalizingJobs: [OCRQueueJobSnapshot]
 
     public init(
         started: Date? = nil,
@@ -67,7 +69,8 @@ public struct OCRQueueState: Equatable, Sendable {
         queued: Int = 0,
         recentJobs: [OCRJobTiming] = [],
         waitingJobs: [OCRQueueJobSnapshot] = [],
-        processingJobs: [OCRQueueJobSnapshot] = []
+        processingJobs: [OCRQueueJobSnapshot] = [],
+        finalizingJobs: [OCRQueueJobSnapshot] = []
     ) {
         self.started = started
         self.finished = finished
@@ -82,6 +85,7 @@ public struct OCRQueueState: Equatable, Sendable {
         self.recentJobs = recentJobs
         self.waitingJobs = waitingJobs
         self.processingJobs = processingJobs
+        self.finalizingJobs = finalizingJobs
     }
 }
 
@@ -155,6 +159,7 @@ public actor OCRQueueActor {
         var pages: [Int: StreamingPage]
         var acquisitionFinished: Bool
         var expectedPageCount: Int?
+        var finalizationStarted: Date?
     }
 
     private struct ActiveJob: Sendable {
@@ -294,7 +299,8 @@ public actor OCRQueueActor {
             request: request,
             pages: [:],
             acquisitionFinished: false,
-            expectedPageCount: nil
+            expectedPageCount: nil,
+            finalizationStarted: nil
         )
         return batchID
     }
@@ -795,6 +801,21 @@ public actor OCRQueueActor {
         queueState.processingJobs = activeJobs.values
             .sorted { $0.started < $1.started }
             .map { queueSnapshot(job: $0.job, phase: .processing, started: $0.started) }
+        queueState.finalizingJobs = streamingBatches.values.compactMap { batch in
+            guard let started = batch.finalizationStarted else { return nil }
+            var operations = ["assemble OCR pages"]
+            if batch.request.removeBlankPages { operations.append("remove blank pages") }
+            operations.append("publish searchable PDF")
+            return OCRQueueJobSnapshot(
+                input: batch.request.finalOutputPath,
+                documentName: batch.request.documentName,
+                pageNumber: nil,
+                operations: operations,
+                phase: .finalizing,
+                started: started
+            )
+        }
+        .sorted { ($0.started ?? .distantPast) < ($1.started ?? .distantPast) }
         await webUpdates.notify()
     }
 
@@ -1101,11 +1122,12 @@ public actor OCRQueueActor {
     }
 
     private func finalizeStreamingBatchIfReady(_ batchID: UUID) async throws {
-        guard let batch = streamingBatches[batchID],
+        guard var batch = streamingBatches[batchID],
               batch.acquisitionFinished,
               let expectedPageCount = batch.expectedPageCount,
               batch.pages.count == expectedPageCount,
-              batch.pages.values.allSatisfy({ $0.status != nil })
+              batch.pages.values.allSatisfy({ $0.status != nil }),
+              batch.finalizationStarted == nil
         else { return }
 
         let failedPages = batch.pages
@@ -1121,6 +1143,10 @@ public actor OCRQueueActor {
         guard outputPaths.count == expectedPageCount else {
             throw StreamingScanError.pageProcessingFailed(Array(1...expectedPageCount))
         }
+
+        batch.finalizationStarted = Date()
+        streamingBatches[batchID] = batch
+        await publishQueueState()
 
         let stagingURL = batch.request.workDirectory.appendingPathComponent("assembled.ocr.pdf")
         let merge = try await documentExecutor.execute(ProcessRequest(

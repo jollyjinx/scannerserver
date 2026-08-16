@@ -133,6 +133,63 @@ struct OCRQueueActorTests {
         await queue.cancelAll()
     }
 
+    @Test("A completed final page is not reported as processing during document assembly")
+    func streamingFinalPageStateDuringAssembly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-finalization-state-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-16.072935.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdf = Data("%PDF-1.4\nstreamed\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .suspendedMaterializeLastArgument(pdf, ProcessResult(
+                exitStatus: 0,
+                executionLocation: .remote
+            )),
+            .suspendedMaterializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-16.072935.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: ["SCAN_LANGUAGE": "deu"],
+            removeBlankPages: false,
+            cropPages: true
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 62, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        await executor.waitForRequestCount(1)
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 1)
+
+        await executor.resumeNextSuspendedExecution()
+        await executor.waitForRequestCount(2)
+
+        let assemblingState = await queue.state
+        #expect(assemblingState.recentJobs.first?.status == "done")
+        #expect(assemblingState.processingJobs.isEmpty)
+        #expect(assemblingState.finalizingJobs.count == 1)
+        #expect(assemblingState.finalizingJobs.first?.documentName == "2026-08-16.072935.pdf")
+        #expect(assemblingState.finalizingJobs.first?.operations == [
+            "assemble OCR pages", "publish searchable PDF",
+        ])
+
+        await executor.resumeNextSuspendedExecution()
+        await queue.waitUntilIdle()
+        #expect(FileManager.default.fileExists(atPath: final.path))
+    }
+
     @Test("Streaming autocrop is requested from the remote worker and not repeated after assembly")
     func streamingRemoteAutocrop() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
