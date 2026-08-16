@@ -10,6 +10,7 @@ actor FakeProcessExecutor: ProcessExecutor {
     enum Stub: Sendable {
         case result(ProcessResult)
         case materializeLastArgument(Data, ProcessResult)
+        case suspendedMaterializeLastArgument(Data, ProcessResult)
         case failure(FakeProcessError)
         case suspended(ProcessResult)
         case suspendedIgnoringCancellation(ProcessResult)
@@ -41,6 +42,18 @@ actor FakeProcessExecutor: ProcessExecutor {
         case .result(let result):
             return result
         case let .materializeLastArgument(data, result):
+            guard let path = request.arguments.last else { throw FakeProcessError.expectedFailure }
+            try data.write(to: URL(fileURLWithPath: path))
+            return result
+        case let .suspendedMaterializeLastArgument(data, result):
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    suspendedExecutions.append(continuation)
+                }
+            } onCancel: {
+                Task { await self.cancelNextSuspendedExecution() }
+            }
+            try Task.checkCancellation()
             guard let path = request.arguments.last else { throw FakeProcessError.expectedFailure }
             try data.write(to: URL(fileURLWithPath: path))
             return result

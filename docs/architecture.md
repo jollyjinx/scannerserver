@@ -79,7 +79,9 @@ persisted stores, reachability, and physical-button session state.
 - For OCR-enabled multipage ScanSnap Wi-Fi scans, acquisition calls the queue after every accepted
   JPEG side. The queue immediately creates and schedules a one-page PDF, owns the private scan
   workspace after raw publication, receives each remote result independently, and assembles pages
-  in source order. Workers advertising the crop capability run the same native autocrop after OCR
+  in source order. It reserves each page in actor-isolated batch state before the asynchronous PDF
+  writer runs, so an earlier page completion cannot be overwritten by a stale pre-suspension batch
+  snapshot. Workers advertising the crop capability run the same native autocrop after OCR
   on each page; an unavailable or failed remote worker falls back to local OCR and the same per-page
   crop. Whole-document blank removal, creator metadata, and exclusive `.ocr.pdf` publication remain
   on scannerserver. This streaming path retains the raw PDF, local fallback, cancellation, CPU

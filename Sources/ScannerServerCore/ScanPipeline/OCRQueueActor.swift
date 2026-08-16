@@ -120,6 +120,12 @@ public struct OCRQueueWorkerCapacity: Equatable, Sendable {
     }
 }
 
+public protocol StreamingPagePDFWriting: Sendable {
+    func write(pages: [Data], to outputURL: URL) async throws
+}
+
+extension ScanSnapPDFWriter: StreamingPagePDFWriting {}
+
 public actor OCRQueueActor {
     public typealias WorkspaceSuffixProvider = @Sendable () -> String
     public typealias WorkerCapacityProvider = @Sendable () async -> OCRQueueWorkerCapacity
@@ -197,6 +203,7 @@ public actor OCRQueueActor {
 
     private let executor: any ProcessExecutor
     private let documentExecutor: any ProcessExecutor
+    private let streamingPageWriter: any StreamingPagePDFWriting
     private let workspaceSuffixProvider: WorkspaceSuffixProvider
     private let configuration: OCRQueueConfiguration
     private let localCapacity: OCRLocalCapacityPool
@@ -211,6 +218,7 @@ public actor OCRQueueActor {
     public init(
         executor: any ProcessExecutor,
         documentExecutor: (any ProcessExecutor)? = nil,
+        streamingPageWriter: any StreamingPagePDFWriting = ScanSnapPDFWriter(),
         workspaceSuffixProvider: @escaping WorkspaceSuffixProvider = { UUID().uuidString },
         configuration: OCRQueueConfiguration = OCRQueueConfiguration(),
         localCapacity: OCRLocalCapacityPool? = nil,
@@ -221,6 +229,7 @@ public actor OCRQueueActor {
     ) {
         self.executor = executor
         self.documentExecutor = documentExecutor ?? NativeDocumentToolExecutor(executor: executor)
+        self.streamingPageWriter = streamingPageWriter
         self.workspaceSuffixProvider = workspaceSuffixProvider
         self.configuration = configuration
         self.localCapacity = localCapacity ?? OCRLocalCapacityPool(
@@ -304,7 +313,7 @@ public actor OCRQueueActor {
             String(format: "page-%04d.pdf", page.pageNumber),
             isDirectory: false
         )
-        try await ScanSnapPDFWriter().write(pages: [page.jpegData], to: inputURL)
+        let request = batch.request
         batch.pages[page.pageNumber] = StreamingPage(
             inputPath: inputURL.path,
             outputPath: nil,
@@ -312,22 +321,39 @@ public actor OCRQueueActor {
         )
         streamingBatches[batchID] = batch
 
+        do {
+            try await streamingPageWriter.write(pages: [page.jpegData], to: inputURL)
+            try Task.checkCancellation()
+        } catch {
+            removeStreamingPageReservation(
+                batchID: batchID,
+                pageNumber: page.pageNumber,
+                inputPath: inputURL.path
+            )
+            try? FileManager.default.removeItem(at: inputURL)
+            throw error
+        }
+        guard streamingBatches[batchID]?.pages[page.pageNumber]?.inputPath == inputURL.path else {
+            try? FileManager.default.removeItem(at: inputURL)
+            throw StreamingScanError.unknownBatch
+        }
+
         var operations: [String] = []
-        if batch.request.removeBlankPages { operations.append("remove blank pages") }
-        if batch.request.cropPages { operations.append("trim/crop") }
-        let language = batch.request.environment["SCAN_LANGUAGE"] ?? "deu+eng"
+        if request.removeBlankPages { operations.append("remove blank pages") }
+        if request.cropPages { operations.append("trim/crop") }
+        let language = request.environment["SCAN_LANGUAGE"] ?? "deu+eng"
         operations.append("OCR (\(language))")
         queue.append(Job(
             inputPath: inputURL.path,
             batchID: batchID,
-            environment: batch.request.environment,
-            workingDirectory: batch.request.workDirectory,
+            environment: request.environment,
+            workingDirectory: request.workDirectory,
             ocrEnabled: true,
             removeBlankPages: false,
-            cropPages: batch.request.cropPages,
+            cropPages: request.cropPages,
             deferredProcessing: nil,
             workerMetadata: OCRWorkerJobMetadata(
-                documentName: batch.request.documentName,
+                documentName: request.documentName,
                 batchID: batchID.uuidString.lowercased(),
                 pageNumber: page.pageNumber,
                 operations: operations
@@ -336,6 +362,21 @@ public actor OCRQueueActor {
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
+    }
+
+    private func removeStreamingPageReservation(
+        batchID: UUID,
+        pageNumber: Int,
+        inputPath: String
+    ) {
+        guard var batch = streamingBatches[batchID],
+              let page = batch.pages[pageNumber],
+              page.inputPath == inputPath,
+              page.status == nil else {
+            return
+        }
+        batch.pages.removeValue(forKey: pageNumber)
+        streamingBatches[batchID] = batch
     }
 
     public func finishStreamingScan(batchID: UUID, pageCount: Int) async throws {

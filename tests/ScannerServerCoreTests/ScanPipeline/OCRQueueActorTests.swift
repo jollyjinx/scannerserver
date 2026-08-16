@@ -63,6 +63,76 @@ struct OCRQueueActorTests {
         #expect(pageTimings.allSatisfy { $0.executionLocation == .local })
     }
 
+    @Test("Submitting a page cannot erase an earlier page completion across suspension")
+    func streamingPageSubmissionReentrancy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-reentrancy-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-15.222202.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdf = Data("%PDF-1.4\nstreamed\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .suspendedMaterializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .suspendedMaterializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let pageWriter = SuspendingStreamingPagePDFWriter()
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            streamingPageWriter: pageWriter,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-15.222202.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: ["SCAN_LANGUAGE": "deu+eng"],
+            removeBlankPages: false,
+            cropPages: false
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        await executor.waitForRequestCount(1)
+
+        let secondSubmission = Task {
+            try await queue.submitStreamingPage(
+                batchID: batchID,
+                page: ScanSnapAcquiredPage(
+                    pageNumber: 2,
+                    jpegData: Data([0xff, 0xd8, 0xff, 0xd9])
+                )
+            )
+        }
+        await pageWriter.waitUntilSecondWriteIsSuspended()
+
+        let firstCompletionRevision = await queue.webUpdates.currentRevision
+        await executor.resumeNextSuspendedExecution()
+        _ = await queue.webUpdates.wait(after: firstCompletionRevision)
+
+        await pageWriter.resumeSecondWrite()
+        try await secondSubmission.value
+        await executor.waitForRequestCount(2)
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 2)
+
+        let secondCompletionRevision = await queue.webUpdates.currentRevision
+        await executor.resumeNextSuspendedExecution()
+        _ = await queue.webUpdates.wait(after: secondCompletionRevision)
+
+        #expect(FileManager.default.fileExists(atPath: final.path))
+        #expect(await executor.requests().map(\.executable) == [
+            "ocrmypdf", "ocrmypdf", "qpdf", "set-pdf-creator",
+        ])
+        await queue.cancelAll()
+    }
+
     @Test("Streaming autocrop is requested from the remote worker and not repeated after assembly")
     func streamingRemoteAutocrop() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -958,6 +1028,39 @@ struct OCRQueueActorTests {
         #expect(await queue.state.queued == 1)
 
         await queue.cancelAll()
+    }
+}
+
+private actor SuspendingStreamingPagePDFWriter: StreamingPagePDFWriting {
+    private var writeCount = 0
+    private var secondWriteIsSuspended = false
+    private var secondWriteContinuation: CheckedContinuation<Void, Never>?
+    private var secondWriteWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func write(pages: [Data], to outputURL: URL) async throws {
+        try await ScanSnapPDFWriter().write(pages: pages, to: outputURL)
+        writeCount += 1
+        guard writeCount == 2 else { return }
+        await withCheckedContinuation { continuation in
+            secondWriteContinuation = continuation
+            secondWriteIsSuspended = true
+            let waiters = secondWriteWaiters
+            secondWriteWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+    }
+
+    func waitUntilSecondWriteIsSuspended() async {
+        guard !secondWriteIsSuspended else { return }
+        await withCheckedContinuation { continuation in
+            secondWriteWaiters.append(continuation)
+        }
+    }
+
+    func resumeSecondWrite() {
+        secondWriteContinuation?.resume()
+        secondWriteContinuation = nil
+        secondWriteIsSuspended = false
     }
 }
 
