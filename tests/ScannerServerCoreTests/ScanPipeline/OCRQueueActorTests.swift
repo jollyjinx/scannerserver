@@ -988,10 +988,11 @@ struct OCRQueueActorTests {
         await queue.cancelJobs(referencing: "/scans/one.pdf")
         await queue.waitUntilIdle()
 
+        let state = await queue.state
         #expect(await executor.requests().count == 2)
-        #expect(await queue.state.status == "done")
-        #expect(await queue.state.input == "/scans/two.pdf")
-        #expect(await queue.state.recentJobs.map(\.status) == ["done", "cancelled"])
+        #expect(state.status == "done")
+        #expect(state.input == "/scans/two.pdf")
+        #expect(state.recentJobs.map(\.status) == ["done", "cancelled"])
     }
 
     @Test("Cancelling a queued job by its output path leaves the active job running")

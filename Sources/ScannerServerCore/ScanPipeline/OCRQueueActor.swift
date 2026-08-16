@@ -246,6 +246,8 @@ public actor OCRQueueActor {
     private var streamingBatches: [UUID: StreamingBatch] = [:]
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var isCancellingAll = false
+    private var finishingJobCount = 0
+    private var latestCompletionStatus: String?
     private var queueState: OCRQueueState
 
     public init(
@@ -551,7 +553,10 @@ public actor OCRQueueActor {
     }
 
     public func waitUntilIdle() async {
-        guard !queue.isEmpty || !activeJobs.isEmpty || !streamingBatches.isEmpty else { return }
+        guard !queue.isEmpty
+                || !activeJobs.isEmpty
+                || !streamingBatches.isEmpty
+                || finishingJobCount > 0 else { return }
         await withCheckedContinuation { continuation in
             idleWaiters.append(continuation)
         }
@@ -758,10 +763,10 @@ public actor OCRQueueActor {
 
     private func finish(identifier: UUID, completion: JobCompletion) async {
         guard let activeJob = activeJobs.removeValue(forKey: identifier) else { return }
-        var streamingFinalizationFailed = false
+        finishingJobCount += 1
         let effectiveCompletion = isCancellingAll || Task.isCancelled
             ? JobCompletion(
-                finished: Date(),
+                finished: completion.finished,
                 status: "cancelled",
                 output: "",
                 error: "",
@@ -773,10 +778,13 @@ public actor OCRQueueActor {
             started: activeJob.started,
             completion: effectiveCompletion
         )
-        queueState.finished = effectiveCompletion.finished
-        queueState.input = activeJob.job.inputPath
-        queueState.output = effectiveCompletion.output
-        queueState.error = effectiveCompletion.error
+        if queueState.finished.map({ effectiveCompletion.finished >= $0 }) ?? true {
+            latestCompletionStatus = effectiveCompletion.status
+            queueState.finished = effectiveCompletion.finished
+            queueState.input = activeJob.job.inputPath
+            queueState.output = effectiveCompletion.output
+            queueState.error = effectiveCompletion.error
+        }
         queue.append(contentsOf: effectiveCompletion.followUpJobs)
         if activeJob.localReservationCPUs > 0 {
             await localCapacity.release(activeJob.localReservationCPUs)
@@ -795,7 +803,7 @@ public actor OCRQueueActor {
             do {
                 try await finalizeStreamingBatchIfReady(activeJob.job.batchID)
             } catch {
-                streamingFinalizationFailed = true
+                latestCompletionStatus = "failed"
                 queueState.status = "failed"
                 queueState.error = error.localizedDescription
                 if let failedBatch = streamingBatches.removeValue(forKey: activeJob.job.batchID) {
@@ -803,10 +811,12 @@ public actor OCRQueueActor {
                 }
             }
         }
-        if activeJobs.isEmpty, queue.isEmpty, streamingBatches.isEmpty {
-            if !streamingFinalizationFailed {
-                queueState.status = effectiveCompletion.status
-            }
+        finishingJobCount -= 1
+        if activeJobs.isEmpty,
+           queue.isEmpty,
+           streamingBatches.isEmpty,
+           finishingJobCount == 0 {
+            queueState.status = latestCompletionStatus ?? effectiveCompletion.status
             resumeIdleWaiters()
         }
         await publishQueueState()
@@ -1363,7 +1373,10 @@ public actor OCRQueueActor {
     }
 
     private func resumeIdleWaitersIfIdle() {
-        if queue.isEmpty, activeJobs.isEmpty, streamingBatches.isEmpty {
+        if queue.isEmpty,
+           activeJobs.isEmpty,
+           streamingBatches.isEmpty,
+           finishingJobCount == 0 {
             resumeIdleWaiters()
         }
     }
