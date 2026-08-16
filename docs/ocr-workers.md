@@ -50,6 +50,9 @@ do not need a fixed address or an inbound firewall rule.
   happen after ordered assembly.
   The SANE backend remains whole-document because `scanimage` does not expose the same page-arrival
   callback.
+- PDFs dropped onto the Documents page are split into one-page jobs and dispatched through the same
+  aggregate remote capacity. The uploaded source remains unchanged while completed pages are
+  reassembled in order as the sibling `.ocr.pdf`.
 - The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF plus the native autocrop and
   blank-page implementations directly in worker-container mode or inside the existing image with Apple
   `container` in native macOS mode, and uploads the result through its authenticated lease.

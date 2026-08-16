@@ -114,6 +114,34 @@ public struct StreamingScanRequest: Sendable {
     }
 }
 
+public struct ImportedPDFOCRRequest: Sendable {
+    public let sourcePath: String
+    public let documentName: String
+    public let finalOutputPath: String
+    public let workDirectory: URL
+    public let environment: [String: String]
+    public let removeBlankPages: Bool
+    public let cropPages: Bool
+
+    public init(
+        sourcePath: String,
+        documentName: String,
+        finalOutputPath: String,
+        workDirectory: URL,
+        environment: [String: String],
+        removeBlankPages: Bool,
+        cropPages: Bool
+    ) {
+        self.sourcePath = sourcePath
+        self.documentName = documentName
+        self.finalOutputPath = finalOutputPath
+        self.workDirectory = workDirectory
+        self.environment = environment
+        self.removeBlankPages = removeBlankPages
+        self.cropPages = cropPages
+    }
+}
+
 public struct OCRQueueWorkerCapacity: Equatable, Sendable {
     public let remoteJobSlots: Int
     public let internalOCREnabled: Bool
@@ -305,6 +333,77 @@ public actor OCRQueueActor {
         return batchID
     }
 
+    public func enqueueImportedPDF(_ imported: ImportedPDFOCRRequest) async throws -> Int {
+        try FileManager.default.createDirectory(
+            at: imported.workDirectory,
+            withIntermediateDirectories: false
+        )
+        let batchID = beginStreamingScan(StreamingScanRequest(
+            documentName: imported.documentName,
+            finalOutputPath: imported.finalOutputPath,
+            workDirectory: imported.workDirectory,
+            environment: imported.environment,
+            removeBlankPages: imported.removeBlankPages,
+            cropPages: imported.cropPages
+        ))
+
+        do {
+            let pageCountResult = try await documentExecutor.execute(ProcessRequest(
+                executable: "qpdf",
+                arguments: ["--show-npages", imported.sourcePath],
+                environment: imported.environment,
+                workingDirectory: imported.workDirectory
+            ))
+            guard pageCountResult.succeeded,
+                  let pageCount = Int(
+                    pageCountResult.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                  ),
+                  pageCount > 0 else {
+                throw StreamingScanError.importPreparationFailed(
+                    pageCountResult.standardError.isEmpty
+                        ? "The uploaded PDF has no readable pages."
+                        : pageCountResult.standardError
+                )
+            }
+
+            for pageNumber in 1...pageCount {
+                try Task.checkCancellation()
+                let pageURL = imported.workDirectory.appendingPathComponent(
+                    String(format: "page-%04d.pdf", pageNumber),
+                    isDirectory: false
+                )
+                let splitResult = try await documentExecutor.execute(ProcessRequest(
+                    executable: "qpdf",
+                    arguments: [
+                        imported.sourcePath,
+                        "--pages", ".", String(pageNumber), "--", pageURL.path,
+                    ],
+                    environment: imported.environment,
+                    workingDirectory: imported.workDirectory
+                ))
+                guard splitResult.succeeded,
+                      FileManager.default.fileExists(atPath: pageURL.path) else {
+                    throw StreamingScanError.importPreparationFailed(
+                        splitResult.standardError.isEmpty
+                            ? "Could not extract page \(pageNumber)."
+                            : splitResult.standardError
+                    )
+                }
+                try await submitPreparedStreamingPage(
+                    batchID: batchID,
+                    pageNumber: pageNumber,
+                    inputURL: pageURL
+                )
+            }
+
+            try await finishStreamingScan(batchID: batchID, pageCount: pageCount)
+            return pageCount
+        } catch {
+            await cancelStreamingScan(batchID: batchID)
+            throw error
+        }
+    }
+
     public func submitStreamingPage(
         batchID: UUID,
         page: ScanSnapAcquiredPage
@@ -319,7 +418,6 @@ public actor OCRQueueActor {
             String(format: "page-%04d.pdf", page.pageNumber),
             isDirectory: false
         )
-        let request = batch.request
         batch.pages[page.pageNumber] = StreamingPage(
             inputPath: inputURL.path,
             outputPath: nil,
@@ -344,6 +442,46 @@ public actor OCRQueueActor {
             throw StreamingScanError.unknownBatch
         }
 
+        try await enqueueReservedStreamingPage(
+            batchID: batchID,
+            pageNumber: page.pageNumber,
+            inputURL: inputURL
+        )
+    }
+
+    private func submitPreparedStreamingPage(
+        batchID: UUID,
+        pageNumber: Int,
+        inputURL: URL
+    ) async throws {
+        guard var batch = streamingBatches[batchID], !batch.acquisitionFinished else {
+            throw StreamingScanError.unknownBatch
+        }
+        guard pageNumber > 0, batch.pages[pageNumber] == nil else {
+            throw StreamingScanError.invalidPageNumber
+        }
+        batch.pages[pageNumber] = StreamingPage(
+            inputPath: inputURL.path,
+            outputPath: nil,
+            status: nil
+        )
+        streamingBatches[batchID] = batch
+        try await enqueueReservedStreamingPage(
+            batchID: batchID,
+            pageNumber: pageNumber,
+            inputURL: inputURL
+        )
+    }
+
+    private func enqueueReservedStreamingPage(
+        batchID: UUID,
+        pageNumber: Int,
+        inputURL: URL
+    ) async throws {
+        guard let request = streamingBatches[batchID]?.request,
+              streamingBatches[batchID]?.pages[pageNumber]?.inputPath == inputURL.path else {
+            throw StreamingScanError.unknownBatch
+        }
         var operations: [String] = []
         if request.removeBlankPages { operations.append("remove blank pages") }
         if request.cropPages { operations.append("trim/crop") }
@@ -361,10 +499,10 @@ public actor OCRQueueActor {
             workerMetadata: OCRWorkerJobMetadata(
                 documentName: request.documentName,
                 batchID: batchID.uuidString.lowercased(),
-                pageNumber: page.pageNumber,
+                pageNumber: pageNumber,
                 operations: operations
             ),
-            streamingPageNumber: page.pageNumber
+            streamingPageNumber: pageNumber
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
@@ -1245,6 +1383,7 @@ public enum StreamingScanError: Error, LocalizedError, Sendable {
     case pageCountMismatch(expected: Int, received: Int)
     case pageProcessingFailed([Int])
     case assemblyFailed(String)
+    case importPreparationFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -1256,6 +1395,8 @@ public enum StreamingScanError: Error, LocalizedError, Sendable {
             "Streaming scan page processing failed for page(s): \(pages.map(String.init).joined(separator: ", "))."
         case .assemblyFailed(let diagnostic):
             "Could not assemble the streamed OCR PDF: \(diagnostic)"
+        case .importPreparationFailed(let diagnostic):
+            "Could not prepare the imported PDF for distributed OCR: \(diagnostic)"
         }
     }
 }

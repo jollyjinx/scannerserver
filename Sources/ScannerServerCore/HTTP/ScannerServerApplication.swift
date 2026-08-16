@@ -526,17 +526,37 @@ public enum ScannerServerApplication {
             var environment = dependencies.environment
             environment.merge(mode.environment(trigger: "pdf-import")) { _, selected in selected }
             environment["SCAN_FORMAT"] = "pdf"
-            environment["SCAN_PAGE_MODE"] = "single"
+            environment["SCAN_PAGE_MODE"] = "multi"
             environment["SCAN_OCR_ENABLED"] = "true"
-            environment["SCAN_REMOVE_BLANK_PAGES"] = "false"
-            environment["SCAN_CROP_PAGES"] = "false"
-            await dependencies.ocrQueue.enqueue(
-                inputURL.path,
-                environment: environment,
-                ocrEnabled: true
+            let workDirectory = outputDirectory.appendingPathComponent(
+                ".pdf-import-work.\(UUID().uuidString)",
+                isDirectory: true
             )
+            let pageCount: Int
+            do {
+                pageCount = try await dependencies.ocrQueue.enqueueImportedPDF(
+                    ImportedPDFOCRRequest(
+                        sourcePath: inputURL.path,
+                        documentName: fileName.rawValue,
+                        finalOutputPath: outputPath,
+                        workDirectory: workDirectory,
+                        environment: environment,
+                        removeBlankPages: mode.settings.removeBlankPages,
+                        cropPages: mode.settings.cropPages
+                    )
+                )
+            } catch {
+                try? FileManager.default.removeItem(at: inputURL)
+                return textResponse(
+                    "Could not prepare PDF for OCR: \(error.localizedDescription)\n",
+                    status: HTTPResponse.Status(code: 422, reasonPhrase: "Unprocessable Content")
+                )
+            }
             await dependencies.webUpdates.notify()
-            return jsonResponse(PDFImportResponse(filename: fileName.rawValue), status: .accepted)
+            return jsonResponse(
+                PDFImportResponse(filename: fileName.rawValue, pages: pageCount),
+                status: .accepted
+            )
         }
         router.get("/presets") { request, _ in
             await webPageResponse(
@@ -1083,6 +1103,7 @@ private struct ScannerManualForm: Decodable {
 
 private struct PDFImportResponse: Encodable {
     let filename: String
+    let pages: Int
 }
 
 private func importedPDFFileName(_ requestedName: String) throws -> ScanOutputFileName {
@@ -2193,7 +2214,7 @@ private func renderFiles(_ groups: [ScanDayGroup], settings: ScanSettings) -> St
     html += "<p class=\"muted\">Open completed scans, download source files, or remove documents.</p></div></div>"
     html += "<div class=\"pdf-drop-zone\" data-pdf-drop-zone tabindex=\"0\" role=\"button\" aria-label=\"Import PDFs for OCR\">"
     html += "<input type=\"file\" accept=\"application/pdf,.pdf\" multiple hidden data-pdf-file-input>"
-    html += "<div><h3>Drop PDFs here for OCR</h3><p class=\"muted\">The original PDF is kept and an OCR PDF appears beside it. Language and CPU settings come from the selected preset; scanner-only blank-page removal and cropping are skipped.</p></div>"
+    html += "<div><h3>Drop PDFs here for OCR</h3><p class=\"muted\">The original PDF is kept and an OCR PDF appears beside it. Pages are distributed across available workers using the selected preset's OCR, blank-page, and crop settings.</p></div>"
     html += "<div class=\"pdf-import-controls\"><label>OCR preset<select data-pdf-preset>"
     for mode in settings.modes {
         html += option(value: mode.id, label: mode.name, selected: mode.id == settings.defaultModeID)

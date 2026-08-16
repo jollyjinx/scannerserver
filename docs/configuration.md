@@ -34,6 +34,10 @@ fallback preserves the same settings. Scannerserver performs only ordered assemb
 keep-one safeguard, metadata, and atomic publication. Other backends and output modes retain their
 established whole-document processing order.
 
+PDFs imported on the Documents page use the same page-oriented path: scannerserver preserves the
+uploaded source, splits a private working copy into one-page jobs, fills the aggregate capacity of
+all compatible remote workers, and assembles the resulting `.ocr.pdf` in source order.
+
 Deleting a source scan while processing is active cancels that document's work before removing the
 file. Matching queued work is removed as well, while jobs for other scans continue.
 
@@ -144,6 +148,8 @@ The queue treats the resulting value as one shared CPU budget:
 - Streaming ScanSnap pages can move OCR, autocrop, and blank-page filtering to capability-compatible
   remote workers. Local fallback consumes the scanner host's shared budget with the same per-page
   order and settings.
+- PDFs imported on the Documents page are split into page jobs and use the same distributed worker
+  capacity and ordered finalization as a streaming scan.
 - A multipage PDF reserves the full budget and passes it to OCRmyPDF with `--jobs` so its pages
   are processed in parallel.
 - Single-page PDF mode starts one OCRmyPDF process per page, up to the budget, and gives each
@@ -154,8 +160,8 @@ The queue treats the resulting value as one shared CPU budget:
 Remote workers use a page-oriented capacity model: their detected CPU count becomes the default
 number of concurrent leases, and every job runs with one CPU and OCRmyPDF `--jobs 1`. The optional
 worker CLI `--max-concurrent-jobs` lowers concurrency for memory- or thermally constrained hosts.
-Whole-document remote jobs remain supported but use one CPU per document; the ScanSnap Wi-Fi path
-avoids that limitation by streaming individual pages.
+Whole-document remote jobs remain supported but use one CPU per document; streaming ScanSnap scans
+and imported PDFs avoid that limitation by scheduling individual pages.
 
 Post-scan processing runs at normal process priority by default so a busy service host cannot starve
 background work. Reduced-priority mode remains available as an explicit opt-in, globally through

@@ -957,12 +957,14 @@ struct ScannerServerApplicationTests {
         }
     }
 
-    @Test("PDF import preserves the source and queues OCR")
-    func importsPDFAndQueuesOCR() async throws {
+    @Test("PDF import preserves the source and queues every page independently")
+    func importsPDFAndQueuesEveryPage() async throws {
         let executor = SlowCapturingExecutor(delay: .seconds(30))
+        let documentExecutor = ImportedPDFDocumentExecutor(pageCount: 3)
         let fixture = try HTTPFixture(
             environment: ["SCAN_BACKEND": "sane", "SCAN_LANGUAGE": "eng"],
-            executor: executor
+            executor: executor,
+            documentExecutor: documentExecutor
         )
         defer { fixture.remove() }
         let application = try fixture.application()
@@ -981,14 +983,16 @@ struct ScannerServerApplicationTests {
             ) { response in
                 #expect(response.status == .accepted)
                 #expect(String(buffer: response.body).contains(#""filename":"Quarterly Report.pdf""#))
+                #expect(String(buffer: response.body).contains(#""pages":3"#))
             }
         }
 
         let importedURL = fixture.outputDirectory.appendingPathComponent("Quarterly Report.pdf")
         #expect(try Data(contentsOf: importedURL) == pdf)
         let state = await fixture.ocrQueue.state
-        #expect(state.running == 1)
-        #expect(state.input == importedURL.path)
+        let pageJobs = state.processingJobs + state.waitingJobs
+        #expect(pageJobs.count == 3)
+        #expect(Set(pageJobs.compactMap(\.pageNumber)) == Set([1, 2, 3]))
         await fixture.ocrQueue.cancelAll()
     }
 
@@ -1046,7 +1050,8 @@ private struct HTTPFixture: Sendable {
 
     init(
         environment additions: [String: String],
-        executor: SlowCapturingExecutor = SlowCapturingExecutor(delay: .zero)
+        executor: SlowCapturingExecutor = SlowCapturingExecutor(delay: .zero),
+        documentExecutor: (any ProcessExecutor)? = nil
     ) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         outputDirectory = root.appendingPathComponent("scans", isDirectory: true)
@@ -1062,7 +1067,11 @@ private struct HTTPFixture: Sendable {
             nativeScanner: ProcessBackedTestScanner(executor),
             webUpdates: webUpdates
         )
-        ocrQueue = OCRQueueActor(executor: executor, webUpdates: webUpdates)
+        ocrQueue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: documentExecutor,
+            webUpdates: webUpdates
+        )
         internalOCRWorker = InternalOCRWorkerControl(
             fileURL: outputDirectory.appendingPathComponent(".test-internal-ocr-worker.json"),
             webUpdates: webUpdates
@@ -1193,6 +1202,26 @@ private actor SlowCapturingExecutor: ProcessExecutor {
             try await Task.sleep(for: delay)
         }
         return result
+    }
+}
+
+private actor ImportedPDFDocumentExecutor: ProcessExecutor {
+    private let pageCount: Int
+
+    init(pageCount: Int) {
+        self.pageCount = pageCount
+    }
+
+    func execute(_ request: ProcessRequest) async throws -> ProcessResult {
+        if request.executable == "qpdf", request.arguments.first == "--show-npages" {
+            return ProcessResult(exitStatus: 0, standardOutput: "\(pageCount)\n")
+        }
+        if request.executable == "qpdf", request.arguments.count >= 6,
+           let outputPath = request.arguments.last {
+            try Data("%PDF-1.7\npage\n".utf8).write(to: URL(fileURLWithPath: outputPath))
+            return ProcessResult(exitStatus: 0)
+        }
+        return ProcessResult(exitStatus: 64, standardError: "Unexpected document request")
     }
 }
 
