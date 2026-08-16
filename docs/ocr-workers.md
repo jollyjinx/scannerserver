@@ -32,9 +32,10 @@ do not need a fixed address or an inbound firewall rule.
   cancelled at scannerserver startup because their owning in-memory queue tasks do not survive a
   restart; this prevents abandoned pages from being leased again.
 - `OCRQueueActor` gives approved, enabled, compatible workers first refusal on streaming OCR jobs,
-  including when a registered worker is temporarily offline. Capability-aware workers run OCR and
-  the configured autocrop on each page. Scan acquisition, document-wide blank-page policy, naming,
-  ordered assembly, verification, and final publication stay on scannerserver.
+  including when a registered worker is temporarily offline. Capability-aware workers run OCR,
+  configured autocrop, and blank-page filtering on each page. Scan acquisition, the all-blank
+  keep-one safeguard, naming, ordered assembly, verification, and final publication stay on
+  scannerserver.
 - The OCR scheduler fills the aggregate page capacity announced by all online, approved, enabled,
   unpaused workers. When the internal worker is enabled, its local CPU allowance is added to that
   total after remote slots are filled; pausing it removes those slower scanner-host slots without
@@ -42,15 +43,15 @@ do not need a fixed address or an inbound firewall rule.
   Local fallback has its own shared CPU permit pool, so a worker outage cannot start more local OCR
   processes than the scanner host allows.
 - Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is wrapped in a
-  one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR
-  and cropped results are uploaded immediately, retained in the scan workspace, and assembled in
-  source order after the feeder is empty. The raw `.pdf` remains independently published;
-  document-wide blank removal, creator metadata, and atomic `.ocr.pdf` publication happen after
-  ordered assembly.
+  one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR,
+  crop, and blank-filter results are uploaded immediately, retained in the scan workspace, and
+  assembled in source order after the feeder is empty. The raw `.pdf` remains independently
+  published; only the all-blank safeguard, creator metadata, and atomic `.ocr.pdf` publication
+  happen after ordered assembly.
   The SANE backend remains whole-document because `scanimage` does not expose the same page-arrival
   callback.
-- The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF and the native autocrop
-  implementation directly in worker-container mode or inside the existing image with Apple
+- The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF plus the native autocrop and
+  blank-page implementations directly in worker-container mode or inside the existing image with Apple
   `container` in native macOS mode, and uploads the result through its authenticated lease.
 - scannerserver requires a PDF result, calculates its SHA-256 digest, writes it to a same-directory
   staging file, validates it with `qpdf --check`, and atomically publishes the established

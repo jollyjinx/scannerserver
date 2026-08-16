@@ -115,6 +115,8 @@ public actor OCRWorkerJobStore {
                 && job.manifest.ocrLanguages.allSatisfy(supportedLanguages.contains)
                 && (!job.manifest.cropPages
                     || supportedCapabilities.contains(OCRWorkerCapability.cropPDFPages))
+                && (!job.manifest.removeBlankPages
+                    || supportedCapabilities.contains(OCRWorkerCapability.removeBlankPDFPages))
         }
         guard let jobID = candidates.sorted(by: jobOrder).first?.manifest.jobID else {
             if reclaimed > 0 { try persist() }

@@ -6,6 +6,7 @@ public enum OCRWorkerProtocol {
 
 public enum OCRWorkerCapability {
     public static let cropPDFPages = "crop-pdf-pages-v1"
+    public static let removeBlankPDFPages = "remove-blank-pdf-pages-v1"
 }
 
 public struct OCRWorkerRegistrationRequest: Codable, Equatable, Sendable {

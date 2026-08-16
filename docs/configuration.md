@@ -28,11 +28,11 @@ scan while blank-page removal, crop, final-output conversion, or OCR is still ru
 the background queue processes an isolated multipage copy and atomically replaces the source PDF.
 With OCR, it leaves the source unchanged and publishes the processed `.ocr.pdf`.
 
-For OCR-enabled multipage ScanSnap Wi-Fi scans, each page is OCRed and autocropped before ordered
-assembly. A capable remote worker performs both operations; local fallback preserves the same
-crop settings. Document-wide blank-page removal, metadata, and atomic publication still happen on
-scannerserver. Other backends and output modes retain their established whole-document processing
-order.
+For OCR-enabled multipage ScanSnap Wi-Fi scans, each page is OCRed, autocropped, and blank-filtered
+before ordered assembly. A capable remote worker performs those CPU-heavy operations; local
+fallback preserves the same settings. Scannerserver performs only ordered assembly, the all-blank
+keep-one safeguard, metadata, and atomic publication. Other backends and output modes retain their
+established whole-document processing order.
 
 Deleting a source scan while processing is active cancels that document's work before removing the
 file. Matching queued work is removed as well, while jobs for other scans continue.
@@ -140,8 +140,9 @@ The queue treats the resulting value as one shared CPU budget:
 
 - Multipage blank detection and crop analysis process several pages concurrently, bounded by the
   shared budget; operations within each page remain ordered.
-- Streaming ScanSnap pages can move OCR and autocrop to capability-compatible remote workers. Local
-  fallback consumes the scanner host's shared budget with the same per-page order and settings.
+- Streaming ScanSnap pages can move OCR, autocrop, and blank-page filtering to capability-compatible
+  remote workers. Local fallback consumes the scanner host's shared budget with the same per-page
+  order and settings.
 - A multipage PDF reserves the full budget and passes it to OCRmyPDF with `--jobs` so its pages
   are processed in parallel.
 - Single-page PDF mode starts one OCRmyPDF process per page, up to the budget, and gives each

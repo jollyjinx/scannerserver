@@ -10,6 +10,7 @@ public enum ScanPipelineCommands {
         niceLevel: Int? = nil,
         workerMetadata: OCRWorkerJobMetadata? = nil,
         workerCropConfiguration: OCRWorkerCropConfiguration? = nil,
+        workerBlankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil,
         executionPreference: OCRExecutionPreference = .automatic
     ) -> ProcessRequest {
         let language = environment?["SCAN_LANGUAGE"] ?? "deu+eng"
@@ -36,6 +37,7 @@ public enum ScanPipelineCommands {
             niceLevel: niceLevel,
             ocrWorkerMetadata: workerMetadata,
             ocrWorkerCropConfiguration: workerCropConfiguration,
+            ocrWorkerBlankPageConfiguration: workerBlankPageConfiguration,
             ocrExecutionPreference: executionPreference
         )
     }

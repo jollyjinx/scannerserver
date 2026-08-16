@@ -3,12 +3,19 @@
 FROM swift:6.3.2-noble AS swift_build
 
 WORKDIR /swift
+ARG TARGETARCH
 COPY Package.swift Package.resolved ./
-RUN swift package resolve
+RUN --mount=type=cache,id=scannerserver-swift-build-${TARGETARCH},target=/swift/.build,sharing=locked \
+    --mount=type=cache,id=scannerserver-swiftpm-${TARGETARCH},target=/root/.cache,sharing=locked \
+    --mount=type=cache,id=scannerserver-swiftpm-config-${TARGETARCH},target=/root/.swiftpm,sharing=locked \
+    swift package resolve
 
 COPY Sources Sources
 COPY tests/ScannerServerCoreTests tests/ScannerServerCoreTests
-RUN swift build -c release --jobs 1 --product scannerserver \
+RUN --mount=type=cache,id=scannerserver-swift-build-${TARGETARCH},target=/swift/.build,sharing=locked \
+    --mount=type=cache,id=scannerserver-swiftpm-${TARGETARCH},target=/root/.cache,sharing=locked \
+    --mount=type=cache,id=scannerserver-swiftpm-config-${TARGETARCH},target=/root/.swiftpm,sharing=locked \
+    swift build -c release --jobs 1 --product scannerserver \
         -Xswiftc -num-threads -Xswiftc 1 \
     && swift build -c release --jobs 1 --product scannerserver-worker \
         -Xswiftc -num-threads -Xswiftc 1 \
@@ -18,7 +25,8 @@ RUN swift build -c release --jobs 1 --product scannerserver \
     && test -n "${worker_binary_path}" \
     && install -Dm755 "${binary_path}" /out/scannerserver \
     && install -Dm755 "${worker_binary_path}" /out/scannerserver-worker
-RUN resource_path="$(find /swift/.build -type d -name '*_ScannerServerCore.resources' | head -n 1)" \
+RUN --mount=type=cache,id=scannerserver-swift-build-${TARGETARCH},target=/swift/.build,sharing=locked \
+    resource_path="$(find /swift/.build -type d -name '*_ScannerServerCore.resources' | head -n 1)" \
     && test -n "${resource_path}" \
     && cp -R "${resource_path}" /out/ScannerServer_ScannerServerCore.resources
 

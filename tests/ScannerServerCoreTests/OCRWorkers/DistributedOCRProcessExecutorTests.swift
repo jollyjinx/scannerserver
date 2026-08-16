@@ -113,6 +113,61 @@ struct DistributedOCRProcessExecutorTests {
         #expect(await local.requests.isEmpty)
     }
 
+    @Test("Remote blank-page configuration is included only for a capable worker")
+    func remoteBlankPageExecution() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inputURL = root.appendingPathComponent("page.pdf")
+        let outputURL = root.appendingPathComponent("page.ocr.pdf")
+        try Data("%PDF-1.4\ninput\n".utf8).write(to: inputURL)
+
+        let registry = OCRWorkerRegistry()
+        let registration = distributedTestRegistration(capabilities: [
+            OCRWorkerCapability.cropPDFPages,
+            OCRWorkerCapability.removeBlankPDFPages,
+        ])
+        _ = try await registry.register(registration)
+        _ = try await registry.approve(workerID: registration.workerID)
+        let jobs = OCRWorkerJobStore(leaseTokenProvider: { "lease-token" })
+        let local = DistributedTestExecutor()
+        let executor = DistributedOCRProcessExecutor(
+            local: local,
+            workers: registry,
+            jobs: jobs,
+            configuration: DistributedOCRConfiguration(
+                assignmentWaitSeconds: 2,
+                completionTimeoutSeconds: 5
+            )
+        )
+        let blank = OCRWorkerBlankPageConfiguration(whiteThreshold: 240)
+        let request = ScanPipelineCommands.ocr(
+            inputPath: inputURL.path,
+            outputPath: outputURL.path,
+            workerBlankPageConfiguration: blank
+        )
+
+        async let execution = executor.execute(request)
+        let lease = try await requireLease(jobs: jobs, registration: registration)
+        #expect(lease.manifest.removeBlankPages)
+        #expect(lease.manifest.blankPageConfiguration == blank)
+        let output = Data("%PDF-1.4\nremote filtered output\n".utf8)
+        try output.write(to: outputURL)
+        _ = try await jobs.succeed(
+            jobID: lease.manifest.jobID,
+            workerID: registration.workerID,
+            leaseToken: lease.leaseToken,
+            result: OCRWorkerJobResult(
+                outputByteCount: Int64(output.count),
+                outputSHA256: OCRWorkerSHA256.hexDigest(output)
+            )
+        )
+
+        #expect(try await execution.executionLocation == .remote)
+        #expect(await local.requests.isEmpty)
+    }
+
     @Test("No eligible worker preserves the local OCR executor")
     func localFallback() async throws {
         let localResult = ProcessResult(exitStatus: 0, standardOutput: "local\n")
@@ -350,7 +405,9 @@ private actor CancellableDistributedTestExecutor: ProcessExecutor {
     }
 }
 
-private func distributedTestRegistration() -> OCRWorkerRegistrationRequest {
+private func distributedTestRegistration(
+    capabilities: [String] = [OCRWorkerCapability.cropPDFPages]
+) -> OCRWorkerRegistrationRequest {
     OCRWorkerRegistrationRequest(
         workerID: "remote-worker",
         authenticationToken: String(repeating: "a", count: 64),
@@ -361,7 +418,7 @@ private func distributedTestRegistration() -> OCRWorkerRegistrationRequest {
         cpuCount: 8,
         maxConcurrentJobs: 1,
         ocrLanguages: ["deu", "eng"],
-        capabilities: [OCRWorkerCapability.cropPDFPages]
+        capabilities: capabilities
     )
 }
 

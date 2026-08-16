@@ -47,6 +47,22 @@ struct OCRWorkerJobStoreTests {
         )?.manifest.jobID == "job-1")
     }
 
+    @Test("Blank-removal jobs lease only to workers that advertise blank-page support")
+    func blankCapabilityLeasing() async throws {
+        let store = OCRWorkerJobStore(leaseTokenProvider: { "lease-token" })
+        _ = try await store.enqueue(testManifest(removeBlankPages: true))
+
+        #expect(try await store.leaseNext(
+            workerID: "ocr-only",
+            ocrLanguages: ["eng"]
+        ) == nil)
+        #expect(try await store.leaseNext(
+            workerID: "ocr-and-blank",
+            ocrLanguages: ["eng"],
+            capabilities: [OCRWorkerCapability.removeBlankPDFPages]
+        )?.manifest.jobID == "job-1")
+    }
+
     @Test("Only the lease owner can renew and complete a live lease")
     func authenticatedTransitions() async throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
@@ -335,6 +351,7 @@ private func testManifest(
     jobID: String = "job-1",
     languages: [String] = ["eng"],
     cropPages: Bool = false,
+    removeBlankPages: Bool = false,
     sourcePath: String = "/scans/input.pdf",
     outputPath: String = "/scans/input.ocr.pdf",
     metadata: OCRWorkerJobMetadata? = nil,
@@ -348,7 +365,8 @@ private func testManifest(
         sourceSHA256: String(repeating: "a", count: 64),
         ocrLanguages: languages,
         ocrEnabled: true,
-        removeBlankPages: false,
+        removeBlankPages: removeBlankPages,
+        blankPageConfiguration: removeBlankPages ? OCRWorkerBlankPageConfiguration() : nil,
         cropPages: cropPages,
         metadata: metadata,
         createdAt: createdAt

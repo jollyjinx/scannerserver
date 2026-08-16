@@ -99,9 +99,10 @@ struct OCRWorkerContainerRunnerTests {
             workspace: workspace
         )
 
-        #expect(request.arguments.suffix(24) == [
+        #expect(request.arguments.suffix(25) == [
             "scannerserver:test",
             "scannerserver-worker", "process-job",
+            "--crop-pages",
             "--crop-background-delta", "9",
             "--crop-border-pixels", "50",
             "--crop-margin-points", "2.5",
@@ -116,10 +117,41 @@ struct OCRWorkerContainerRunnerTests {
             "/work/source.pdf", "/work/result.pdf",
         ])
     }
+
+    @Test("Apple container runs per-page blank removal inside the isolated worker job")
+    func blankPageRequest() throws {
+        let workspace = URL(fileURLWithPath: "/tmp/worker-job", isDirectory: true)
+        let configuration = OCRWorkerContainerConfiguration(
+            runtime: "container",
+            image: "scannerserver:test",
+            cpuLimitPerJob: 1,
+            memory: "8G",
+            workspaceRoot: workspace.deletingLastPathComponent(),
+            userID: 501,
+            groupID: 20
+        )
+        let blank = OCRWorkerBlankPageConfiguration(
+            whiteThreshold: 240,
+            contentRatioThreshold: 0.004,
+            meanThreshold: 249,
+            debug: true
+        )
+        let request = try configuration.processRequest(
+            lease: testContainerLease(blankPageConfiguration: blank),
+            workspace: workspace
+        )
+
+        #expect(request.arguments.contains("--remove-blank-pages"))
+        #expect(request.arguments.contains("--blank-white-threshold"))
+        #expect(request.arguments.contains("240"))
+        #expect(request.arguments.contains("--blank-debug"))
+        #expect(!request.arguments.contains("--crop-pages"))
+    }
 }
 
 private func testContainerLease(
-    cropConfiguration: OCRWorkerCropConfiguration? = nil
+    cropConfiguration: OCRWorkerCropConfiguration? = nil,
+    blankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil
 ) -> OCRWorkerJobLease {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     return OCRWorkerJobLease(
@@ -131,7 +163,8 @@ private func testContainerLease(
             sourceSHA256: String(repeating: "a", count: 64),
             ocrLanguages: ["deu", "eng"],
             ocrEnabled: true,
-            removeBlankPages: false,
+            removeBlankPages: blankPageConfiguration != nil,
+            blankPageConfiguration: blankPageConfiguration,
             cropPages: cropConfiguration != nil,
             cropConfiguration: cropConfiguration,
             containerArguments: [

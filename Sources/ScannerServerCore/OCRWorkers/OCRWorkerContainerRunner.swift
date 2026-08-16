@@ -77,10 +77,17 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
             throw OCRWorkerContainerError.invalidJob
         }
         let containerCommand: [String]
-        if lease.manifest.cropPages {
+        if lease.manifest.cropPages || lease.manifest.removeBlankPages {
             containerCommand = ["scannerserver-worker", "process-job"]
+                + blankPageCommandArguments(
+                    lease.manifest.removeBlankPages
+                        ? lease.manifest.blankPageConfiguration ?? OCRWorkerBlankPageConfiguration()
+                        : nil
+                )
                 + cropCommandArguments(
-                    lease.manifest.cropConfiguration ?? OCRWorkerCropConfiguration()
+                    lease.manifest.cropPages
+                        ? lease.manifest.cropConfiguration ?? OCRWorkerCropConfiguration()
+                        : nil
                 )
                 + ["--"]
                 + arguments
@@ -106,8 +113,24 @@ public struct OCRWorkerContainerConfiguration: Equatable, Sendable {
         )
     }
 
-    private func cropCommandArguments(_ configuration: OCRWorkerCropConfiguration) -> [String] {
+    private func blankPageCommandArguments(
+        _ configuration: OCRWorkerBlankPageConfiguration?
+    ) -> [String] {
+        guard let configuration else { return [] }
         var arguments = [
+            "--remove-blank-pages",
+            "--blank-white-threshold", String(configuration.whiteThreshold),
+            "--blank-content-ratio-threshold", String(configuration.contentRatioThreshold),
+            "--blank-mean-threshold", String(configuration.meanThreshold),
+        ]
+        if configuration.debug { arguments.append("--blank-debug") }
+        return arguments
+    }
+
+    private func cropCommandArguments(_ configuration: OCRWorkerCropConfiguration?) -> [String] {
+        guard let configuration else { return [] }
+        var arguments = [
+            "--crop-pages",
             "--crop-background-delta", String(configuration.backgroundDelta),
             "--crop-border-pixels", String(configuration.borderPixels),
             "--crop-margin-points", String(configuration.marginPoints),
@@ -252,7 +275,11 @@ public struct OCRWorkerJobProcessor: Sendable {
                 .completed(try await OCRWorkerJobPipeline(ocrExecutor: executor).execute(
                     ocrRequest: request,
                     resultURL: resultURL,
-                    cropConfiguration: cropConfiguration
+                    cropConfiguration: cropConfiguration,
+                    blankPageConfiguration: configuration.directExecution
+                        && lease.manifest.removeBlankPages
+                        ? lease.manifest.blankPageConfiguration ?? OCRWorkerBlankPageConfiguration()
+                        : nil
                 ))
             }
             group.addTask {

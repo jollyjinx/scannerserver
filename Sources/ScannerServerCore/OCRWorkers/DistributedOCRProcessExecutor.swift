@@ -111,9 +111,7 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
                configuration.enabled,
                await workers.hasPreferredWorker(
                    ocrLanguages: remoteRequest.languages,
-                   requiredCapabilities: remoteRequest.cropConfiguration == nil
-                       ? []
-                       : [OCRWorkerCapability.cropPDFPages]
+                   requiredCapabilities: remoteRequest.requiredCapabilities
                ) {
                 do {
                     return try await executeRemotely(remoteRequest)
@@ -213,7 +211,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             sourceSHA256: OCRWorkerSHA256.hexDigest(source),
             ocrLanguages: request.languages,
             ocrEnabled: true,
-            removeBlankPages: false,
+            removeBlankPages: request.blankPageConfiguration != nil,
+            blankPageConfiguration: request.blankPageConfiguration,
             cropPages: request.cropConfiguration != nil,
             cropConfiguration: request.cropConfiguration,
             containerArguments: request.containerArguments,
@@ -273,6 +272,16 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
         let containerArguments: [String]
         let metadata: OCRWorkerJobMetadata?
         let cropConfiguration: OCRWorkerCropConfiguration?
+        let blankPageConfiguration: OCRWorkerBlankPageConfiguration?
+
+        var requiredCapabilities: [String] {
+            var capabilities: [String] = []
+            if cropConfiguration != nil { capabilities.append(OCRWorkerCapability.cropPDFPages) }
+            if blankPageConfiguration != nil {
+                capabilities.append(OCRWorkerCapability.removeBlankPDFPages)
+            }
+            return capabilities
+        }
     }
 
     private func makeRemoteRequest(_ request: ProcessRequest) throws -> RemoteRequest {
@@ -296,7 +305,8 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             languages: languages,
             containerArguments: arguments,
             metadata: request.ocrWorkerMetadata,
-            cropConfiguration: request.ocrWorkerCropConfiguration
+            cropConfiguration: request.ocrWorkerCropConfiguration,
+            blankPageConfiguration: request.ocrWorkerBlankPageConfiguration
         )
     }
 }

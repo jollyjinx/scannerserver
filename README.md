@@ -134,9 +134,9 @@ docker run -d \
 ```
 
 Open **Workers** in scannerserver and approve it. New OCR PDFs are then dispatched automatically;
-for streaming ScanSnap scans, capable workers also autocrop each searchable page before returning
-it. The scanner host retains scanning, document-wide blank-page policy, filenames, verification,
-assembly, and final publication. The Workers page reports throughput in pages/minute and can pause
+for streaming ScanSnap scans, capable workers also autocrop and blank-filter each searchable page
+before returning it. The scanner host retains scanning, the all-blank keep-one safeguard, filenames,
+verification, ordered assembly, and final publication. The Workers page reports throughput in pages/minute and can pause
 or resume both remote workers and the internal fallback worker. Pausing active internal OCR returns
 that page to remote dispatch instead of continuing to consume scannerserver CPU. The worker detects
 the container CPU allowance and runs the job

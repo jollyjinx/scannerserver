@@ -355,7 +355,7 @@ public actor OCRQueueActor {
             environment: request.environment,
             workingDirectory: request.workDirectory,
             ocrEnabled: true,
-            removeBlankPages: false,
+            removeBlankPages: request.removeBlankPages,
             cropPages: request.cropPages,
             deferredProcessing: nil,
             workerMetadata: OCRWorkerJobMetadata(
@@ -804,7 +804,6 @@ public actor OCRQueueActor {
         queueState.finalizingJobs = streamingBatches.values.compactMap { batch in
             guard let started = batch.finalizationStarted else { return nil }
             var operations = ["assemble OCR pages"]
-            if batch.request.removeBlankPages { operations.append("remove blank pages") }
             operations.append("publish searchable PDF")
             return OCRQueueJobSnapshot(
                 input: batch.request.finalOutputPath,
@@ -978,6 +977,12 @@ public actor OCRQueueActor {
                     .cropPagesRequest(pdfPath: outputPath)
             )
             : nil
+        let blankPageConfiguration = job.removeBlankPages
+            ? OCRWorkerBlankPageConfiguration(
+                request: try DocumentProcessingOptions(environment: environment)
+                    .removeBlankPagesRequest(pdfPath: outputPath)
+            )
+            : nil
         let result = try await executor.execute(ScanPipelineCommands.ocr(
             inputPath: job.inputPath,
             outputPath: outputPath,
@@ -987,21 +992,32 @@ public actor OCRQueueActor {
             niceLevel: configuration.niceLevel(for: job.environment),
             workerMetadata: workerMetadata(for: job),
             workerCropConfiguration: cropConfiguration,
+            workerBlankPageConfiguration: blankPageConfiguration,
             executionPreference: executionPreference
         ))
-        guard result.succeeded,
-              let cropConfiguration,
-              result.executionLocation == .local else {
+        guard result.succeeded, result.executionLocation == .local else {
             return result
         }
 
-        let cropResult = try await prioritizedDocumentExecutor(for: job).execute(
-            cropConfiguration.request(pdfPath: outputPath).command.processRequest(
-                environment: job.environment,
-                workingDirectory: job.workingDirectory
+        let documentExecutor = prioritizedDocumentExecutor(for: job)
+        if let cropConfiguration {
+            let cropResult = try await documentExecutor.execute(
+                cropConfiguration.request(pdfPath: outputPath).command.processRequest(
+                    environment: job.environment,
+                    workingDirectory: job.workingDirectory
+                )
             )
-        )
-        guard cropResult.succeeded else { return cropResult }
+            guard cropResult.succeeded else { return cropResult }
+        }
+        if let blankPageConfiguration {
+            let blankResult = try await documentExecutor.execute(
+                blankPageConfiguration.request(pdfPath: outputPath).command.processRequest(
+                    environment: job.environment,
+                    workingDirectory: job.workingDirectory
+                )
+            )
+            guard blankResult.succeeded else { return blankResult }
+        }
         return result
     }
 
@@ -1139,7 +1155,7 @@ public actor OCRQueueActor {
             try? FileManager.default.removeItem(at: batch.request.workDirectory)
             throw StreamingScanError.pageProcessingFailed(failedPages)
         }
-        let outputPaths = batch.pages.keys.sorted().compactMap { batch.pages[$0]?.outputPath }
+        var outputPaths = batch.pages.keys.sorted().compactMap { batch.pages[$0]?.outputPath }
         guard outputPaths.count == expectedPageCount else {
             throw StreamingScanError.pageProcessingFailed(Array(1...expectedPageCount))
         }
@@ -1149,27 +1165,47 @@ public actor OCRQueueActor {
         await publishQueueState()
 
         let stagingURL = batch.request.workDirectory.appendingPathComponent("assembled.ocr.pdf")
-        let merge = try await documentExecutor.execute(ProcessRequest(
-            executable: "qpdf",
-            arguments: ["--empty", "--pages"] + outputPaths + ["--", stagingURL.path],
-            environment: batch.request.environment,
-            workingDirectory: batch.request.workDirectory
-        ))
-        guard merge.succeeded else {
-            throw StreamingScanError.assemblyFailed(merge.standardError)
-        }
-        let options = try DocumentProcessingOptions(environment: batch.request.environment)
         if batch.request.removeBlankPages {
-            let result = try await documentExecutor.execute(
-                options.removeBlankPagesRequest(pdfPath: stagingURL.path).command.processRequest(
+            var retainedOutputPaths: [String] = []
+            for outputPath in outputPaths {
+                let pageCount = try await documentExecutor.execute(ProcessRequest(
+                    executable: "qpdf",
+                    arguments: ["--show-npages", outputPath],
                     environment: batch.request.environment,
                     workingDirectory: batch.request.workDirectory
-                )
+                ))
+                guard pageCount.succeeded,
+                      let count = Int(
+                        pageCount.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                      ) else {
+                    throw StreamingScanError.assemblyFailed(pageCount.standardError)
+                }
+                if count > 0 { retainedOutputPaths.append(outputPath) }
+            }
+            outputPaths = retainedOutputPaths
+        }
+        if outputPaths.isEmpty {
+            guard batch.request.removeBlankPages,
+               let firstPageNumber = batch.pages.keys.min(),
+               let firstPage = batch.pages[firstPageNumber] else {
+                throw StreamingScanError.pageProcessingFailed(Array(1...expectedPageCount))
+            }
+            try FileManager.default.copyItem(
+                at: URL(fileURLWithPath: firstPage.inputPath),
+                to: stagingURL
             )
-            guard result.succeeded else {
-                throw StreamingScanError.assemblyFailed(result.standardError)
+        } else {
+            let merge = try await documentExecutor.execute(ProcessRequest(
+                executable: "qpdf",
+                arguments: ["--empty", "--pages"] + outputPaths + ["--", stagingURL.path],
+                environment: batch.request.environment,
+                workingDirectory: batch.request.workDirectory
+            ))
+            guard merge.succeeded else {
+                throw StreamingScanError.assemblyFailed(merge.standardError)
             }
         }
+        let options = try DocumentProcessingOptions(environment: batch.request.environment)
         let metadata = try await documentExecutor.execute(
             SetPDFCreatorRequest(pdfPath: stagingURL.path, creator: options.creator).command.processRequest(
                 environment: batch.request.environment,

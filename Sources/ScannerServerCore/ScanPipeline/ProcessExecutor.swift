@@ -20,6 +20,7 @@ public struct ProcessRequest: Equatable, Sendable {
     public let niceLevel: Int?
     public let ocrWorkerMetadata: OCRWorkerJobMetadata?
     public let ocrWorkerCropConfiguration: OCRWorkerCropConfiguration?
+    public let ocrWorkerBlankPageConfiguration: OCRWorkerBlankPageConfiguration?
     public let ocrExecutionPreference: OCRExecutionPreference
 
     public init(
@@ -31,6 +32,7 @@ public struct ProcessRequest: Equatable, Sendable {
         niceLevel: Int? = nil,
         ocrWorkerMetadata: OCRWorkerJobMetadata? = nil,
         ocrWorkerCropConfiguration: OCRWorkerCropConfiguration? = nil,
+        ocrWorkerBlankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil,
         ocrExecutionPreference: OCRExecutionPreference = .automatic
     ) {
         self.executable = executable
@@ -41,6 +43,7 @@ public struct ProcessRequest: Equatable, Sendable {
         self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
         self.ocrWorkerMetadata = ocrWorkerMetadata
         self.ocrWorkerCropConfiguration = ocrWorkerCropConfiguration
+        self.ocrWorkerBlankPageConfiguration = ocrWorkerBlankPageConfiguration
         self.ocrExecutionPreference = ocrExecutionPreference
     }
 
@@ -54,6 +57,7 @@ public struct ProcessRequest: Equatable, Sendable {
             niceLevel: niceLevel,
             ocrWorkerMetadata: ocrWorkerMetadata,
             ocrWorkerCropConfiguration: ocrWorkerCropConfiguration,
+            ocrWorkerBlankPageConfiguration: ocrWorkerBlankPageConfiguration,
             ocrExecutionPreference: ocrExecutionPreference
         )
     }
@@ -68,6 +72,7 @@ public struct ProcessRequest: Equatable, Sendable {
             timeoutMilliseconds: timeoutMilliseconds,
             ocrWorkerMetadata: ocrWorkerMetadata,
             ocrWorkerCropConfiguration: ocrWorkerCropConfiguration,
+            ocrWorkerBlankPageConfiguration: ocrWorkerBlankPageConfiguration,
             ocrExecutionPreference: ocrExecutionPreference
         )
     }

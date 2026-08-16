@@ -125,6 +125,7 @@ struct OCRQueueActorTests {
         let secondCompletionRevision = await queue.webUpdates.currentRevision
         await executor.resumeNextSuspendedExecution()
         _ = await queue.webUpdates.wait(after: secondCompletionRevision)
+        await queue.waitUntilIdle()
 
         #expect(FileManager.default.fileExists(atPath: final.path))
         #expect(await executor.requests().map(\.executable) == [
@@ -278,6 +279,107 @@ struct OCRQueueActorTests {
             "ocrmypdf", "crop-pdf-pages", "qpdf", "set-pdf-creator",
         ])
         #expect(try Data(contentsOf: final) == pdf)
+    }
+
+    @Test("Streaming blank removal runs per page and is not repeated after assembly")
+    func streamingBlankRemoval() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-blank-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-16.082110.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let pdf = Data("%PDF-1.4\npage filtered on worker\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0, standardOutput: "Removed 0 blank pages.\n")),
+            .result(ProcessResult(exitStatus: 0, standardOutput: "1\n")),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-16.082110.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: [
+                "SCAN_BLANK_WHITE_THRESHOLD": "240",
+                "SCAN_BLANK_CONTENT_RATIO_THRESHOLD": "0.004",
+                "SCAN_BLANK_MEAN_THRESHOLD": "249",
+            ],
+            removeBlankPages: true,
+            cropPages: false
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 1)
+        await queue.waitUntilIdle()
+
+        let requests = await executor.requests()
+        #expect(requests.map(\.executable) == [
+            "ocrmypdf", "remove-blank-pages", "qpdf", "qpdf", "set-pdf-creator",
+        ])
+        #expect(requests[0].ocrWorkerBlankPageConfiguration == OCRWorkerBlankPageConfiguration(
+            whiteThreshold: 240,
+            contentRatioThreshold: 0.004,
+            meanThreshold: 249
+        ))
+        #expect(requests[1].arguments.contains("--no-keep-one"))
+        #expect(requests[2].arguments.first == "--show-npages")
+        #expect(try Data(contentsOf: final) == pdf)
+    }
+
+    @Test("An entirely blank streaming scan keeps its first source page")
+    func streamingAllBlankKeepsOnePage() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "streaming-all-blank-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let final = root.appendingPathComponent("2026-08-16.082111.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let emptyPDF = Data("%PDF-1.4\nzero pages\n".utf8)
+        let executor = FakeProcessExecutor(stubs: [
+            .materializeLastArgument(emptyPDF, ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0, standardOutput: "Removed 1 blank page.\n")),
+            .result(ProcessResult(exitStatus: 0, standardOutput: "0\n")),
+            .result(ProcessResult(exitStatus: 0)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1)
+        )
+        let batchID = await queue.beginStreamingScan(StreamingScanRequest(
+            documentName: "2026-08-16.082111.pdf",
+            finalOutputPath: final.path,
+            workDirectory: work,
+            environment: [:],
+            removeBlankPages: true,
+            cropPages: false
+        ))
+
+        try await queue.submitStreamingPage(
+            batchID: batchID,
+            page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
+        )
+        try await queue.finishStreamingScan(batchID: batchID, pageCount: 1)
+        await queue.waitUntilIdle()
+
+        #expect(FileManager.default.fileExists(atPath: final.path))
+        #expect(await executor.requests().map(\.executable) == [
+            "ocrmypdf", "remove-blank-pages", "qpdf", "set-pdf-creator",
+        ])
     }
 
     @Test("Deleting a raw document cancels its active and queued streaming pages")

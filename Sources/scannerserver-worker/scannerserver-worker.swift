@@ -112,7 +112,10 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
             cpuCount: capacity.cpuCount,
             maxConcurrentJobs: capacity.maximumConcurrentJobs,
             ocrLanguages: languages.sorted(),
-            capabilities: [OCRWorkerCapability.cropPDFPages]
+            capabilities: [
+                OCRWorkerCapability.cropPDFPages,
+                OCRWorkerCapability.removeBlankPDFPages,
+            ]
         )
 
         JLog.notice("Connecting OCR worker \(name) to \(serverURL.absoluteString)")
@@ -329,6 +332,9 @@ private struct ProcessWorkerJobCommand: AsyncParsableCommand {
         abstract: "Run one OCR and autocrop job inside the worker image."
     )
 
+    @Flag(name: .customLong("crop-pages"))
+    var cropPages = false
+
     @Option(name: .customLong("crop-background-delta"))
     var backgroundDelta: Int = 8
 
@@ -352,6 +358,21 @@ private struct ProcessWorkerJobCommand: AsyncParsableCommand {
 
     @Flag(name: .customLong("crop-debug"))
     var cropDebug = false
+
+    @Flag(name: .customLong("remove-blank-pages"))
+    var removeBlankPages = false
+
+    @Option(name: .customLong("blank-white-threshold"))
+    var blankWhiteThreshold: Int = 230
+
+    @Option(name: .customLong("blank-content-ratio-threshold"))
+    var blankContentRatioThreshold: Double = 0.003
+
+    @Option(name: .customLong("blank-mean-threshold"))
+    var blankMeanThreshold: Double = 248.0
+
+    @Flag(name: .customLong("blank-debug"))
+    var blankDebug = false
 
     @Argument(parsing: .captureForPassthrough)
     var ocrArguments: [String] = []
@@ -380,16 +401,26 @@ private struct ProcessWorkerJobCommand: AsyncParsableCommand {
                 workingDirectory: URL(fileURLWithPath: "/work", isDirectory: true)
             ),
             resultURL: resultURL,
-            cropConfiguration: OCRWorkerCropConfiguration(
-                backgroundDelta: backgroundDelta,
-                borderPixels: borderPixels,
-                marginPoints: marginPoints,
-                maximumWidthRatio: maximumWidthRatio,
-                maximumHeightRatio: maximumHeightRatio,
-                minimumDensity: minimumDensity,
-                keepOriginalBoxes: keepOriginalBoxes,
-                debug: cropDebug
-            )
+            cropConfiguration: cropPages
+                ? OCRWorkerCropConfiguration(
+                    backgroundDelta: backgroundDelta,
+                    borderPixels: borderPixels,
+                    marginPoints: marginPoints,
+                    maximumWidthRatio: maximumWidthRatio,
+                    maximumHeightRatio: maximumHeightRatio,
+                    minimumDensity: minimumDensity,
+                    keepOriginalBoxes: keepOriginalBoxes,
+                    debug: cropDebug
+                )
+                : nil,
+            blankPageConfiguration: removeBlankPages
+                ? OCRWorkerBlankPageConfiguration(
+                    whiteThreshold: blankWhiteThreshold,
+                    contentRatioThreshold: blankContentRatioThreshold,
+                    meanThreshold: blankMeanThreshold,
+                    debug: blankDebug
+                )
+                : nil
         )
         guard result.succeeded else {
             let diagnostic = result.standardError.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -81,10 +81,11 @@ persisted stores, reachability, and physical-button session state.
   workspace after raw publication, receives each remote result independently, and assembles pages
   in source order. It reserves each page in actor-isolated batch state before the asynchronous PDF
   writer runs, so an earlier page completion cannot be overwritten by a stale pre-suspension batch
-  snapshot. Workers advertising the crop capability run the same native autocrop after OCR
-  on each page; an unavailable or failed remote worker falls back to local OCR and the same per-page
-  crop. Whole-document blank removal, creator metadata, and exclusive `.ocr.pdf` publication remain
-  on scannerserver. The Workers page reports this document-finalization phase separately instead
+  snapshot. Workers advertising the relevant capabilities run the same native autocrop and blank
+  filtering after OCR on each page; an unavailable or failed remote worker falls back to local OCR
+  and the same per-page operations. The scanner host retains the all-blank keep-one safeguard,
+  creator metadata, and exclusive `.ocr.pdf` publication. The Workers page reports this
+  document-finalization phase separately instead
   of continuing to show the already completed final OCR page as worker activity. This streaming
   path retains the raw PDF, local fallback, cancellation, CPU
   budgeting, crop settings, and failure atomicity contracts. SANE acquisition still enters the
@@ -105,8 +106,9 @@ persisted stores, reachability, and physical-button session state.
   registrations get first refusal even across a temporary heartbeat outage; assignment timeout or
   remote failure preserves local OCR plus local per-page crop as the safety fallback. The persisted
   internal-worker control can pause that fallback, cancel active local OCR, and keep the same work
-  dispatchable so newly available remote capacity can take over. Older OCR-only
-  workers cannot lease crop jobs. Paused workers are excluded from dispatch, and pausing immediately requeues their active
+  dispatchable so newly available remote capacity can take over. Older OCR-only workers cannot lease
+  crop or blank-filter jobs unless they advertise the matching capability. Paused workers are
+  excluded from dispatch, and pausing immediately requeues their active
   leases so another worker can claim them; stale renewals and results are rejected. Completed jobs
   retain their worker and lease-start time for per-page throughput statistics. The worker either
   runs OCRmyPDF followed by the native crop implementation when the worker itself is the production

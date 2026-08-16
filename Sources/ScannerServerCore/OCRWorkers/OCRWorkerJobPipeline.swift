@@ -16,16 +16,29 @@ public struct OCRWorkerJobPipeline: Sendable {
     public func execute(
         ocrRequest: ProcessRequest,
         resultURL: URL,
-        cropConfiguration: OCRWorkerCropConfiguration?
+        cropConfiguration: OCRWorkerCropConfiguration?,
+        blankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil
     ) async throws -> ProcessResult {
         let ocrResult = try await ocrExecutor.execute(ocrRequest)
-        guard ocrResult.succeeded, let cropConfiguration else { return ocrResult }
+        guard ocrResult.succeeded else { return ocrResult }
+        if let cropConfiguration {
+            try Task.checkCancellation()
+            let cropResult = try await documentExecutor.execute(
+                cropConfiguration.request(pdfPath: resultURL.path).command.processRequest(
+                    environment: ocrRequest.environment,
+                    workingDirectory: ocrRequest.workingDirectory
+                )
+            )
+            guard cropResult.succeeded else { return cropResult }
+        }
+        guard let blankPageConfiguration else { return ocrResult }
         try Task.checkCancellation()
-        return try await documentExecutor.execute(
-            cropConfiguration.request(pdfPath: resultURL.path).command.processRequest(
+        let blankResult = try await documentExecutor.execute(
+            blankPageConfiguration.request(pdfPath: resultURL.path).command.processRequest(
                 environment: ocrRequest.environment,
                 workingDirectory: ocrRequest.workingDirectory
             )
         )
+        return blankResult.succeeded ? ocrResult : blankResult
     }
 }

@@ -80,6 +80,36 @@ struct OCRWorkerJobPipelineTests {
         #expect(result.exitStatus == 7)
         #expect(await documentExecutor.requests.isEmpty)
     }
+
+    @Test("Successful OCR and autocrop are followed by per-page blank removal")
+    func blankRemovalAfterOCRAndCrop() async throws {
+        let ocrExecutor = WorkerPipelineTestExecutor(results: [
+            ProcessResult(exitStatus: 0, standardOutput: "ocr complete\n"),
+        ])
+        let documentExecutor = WorkerPipelineTestExecutor(results: [
+            ProcessResult(exitStatus: 0, standardOutput: "crop complete\n"),
+            ProcessResult(exitStatus: 0, standardOutput: "Removed 1 blank page.\n"),
+        ])
+        let resultURL = URL(fileURLWithPath: "/work/result.pdf")
+
+        let result = try await OCRWorkerJobPipeline(
+            ocrExecutor: ocrExecutor,
+            documentExecutor: documentExecutor
+        ).execute(
+            ocrRequest: ProcessRequest(
+                executable: "ocrmypdf",
+                arguments: ["/work/source.pdf", resultURL.path]
+            ),
+            resultURL: resultURL,
+            cropConfiguration: OCRWorkerCropConfiguration(),
+            blankPageConfiguration: OCRWorkerBlankPageConfiguration()
+        )
+
+        #expect(result.succeeded)
+        let requests = await documentExecutor.requests
+        #expect(requests.map(\.executable) == ["crop-pdf-pages", "remove-blank-pages"])
+        #expect(requests[1].arguments.contains("--no-keep-one"))
+    }
 }
 
 private actor WorkerPipelineTestExecutor: ProcessExecutor {

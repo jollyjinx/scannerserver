@@ -85,6 +85,45 @@ public struct OCRWorkerCropConfiguration: Codable, Equatable, Sendable {
     }
 }
 
+public struct OCRWorkerBlankPageConfiguration: Codable, Equatable, Sendable {
+    public let whiteThreshold: Int
+    public let contentRatioThreshold: Double
+    public let meanThreshold: Double
+    public let debug: Bool
+
+    public init(
+        whiteThreshold: Int = 230,
+        contentRatioThreshold: Double = 0.003,
+        meanThreshold: Double = 248.0,
+        debug: Bool = false
+    ) {
+        self.whiteThreshold = whiteThreshold
+        self.contentRatioThreshold = contentRatioThreshold
+        self.meanThreshold = meanThreshold
+        self.debug = debug
+    }
+
+    public init(request: RemoveBlankPagesRequest) {
+        self.init(
+            whiteThreshold: request.whiteThreshold,
+            contentRatioThreshold: request.contentRatioThreshold,
+            meanThreshold: request.meanThreshold,
+            debug: request.debug
+        )
+    }
+
+    public func request(pdfPath: String) -> RemoveBlankPagesRequest {
+        RemoveBlankPagesRequest(
+            pdfPath: pdfPath,
+            whiteThreshold: whiteThreshold,
+            contentRatioThreshold: contentRatioThreshold,
+            meanThreshold: meanThreshold,
+            keepOne: false,
+            debug: debug
+        )
+    }
+}
+
 public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let jobID: String
     public let sourcePath: String
@@ -94,6 +133,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
     public let ocrLanguages: [String]
     public let ocrEnabled: Bool
     public let removeBlankPages: Bool
+    public let blankPageConfiguration: OCRWorkerBlankPageConfiguration?
     public let cropPages: Bool
     public let cropConfiguration: OCRWorkerCropConfiguration?
     public let containerArguments: [String]?
@@ -109,6 +149,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         ocrLanguages: [String],
         ocrEnabled: Bool,
         removeBlankPages: Bool,
+        blankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil,
         cropPages: Bool,
         cropConfiguration: OCRWorkerCropConfiguration? = nil,
         containerArguments: [String]? = nil,
@@ -123,6 +164,7 @@ public struct OCRWorkerJobManifest: Codable, Equatable, Sendable {
         self.ocrLanguages = ocrLanguages
         self.ocrEnabled = ocrEnabled
         self.removeBlankPages = removeBlankPages
+        self.blankPageConfiguration = blankPageConfiguration
         self.cropPages = cropPages
         self.cropConfiguration = cropConfiguration
         self.containerArguments = containerArguments
