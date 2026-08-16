@@ -939,6 +939,97 @@ struct ScannerServerApplicationTests {
             }
         }
     }
+
+    @Test("Documents page offers PDF drag and drop import")
+    func documentsPageOffersPDFImport() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/documents", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("data-pdf-drop-zone"))
+                #expect(body.contains(#"accept="application/pdf,.pdf""#))
+                #expect(body.contains(#"fetch(`/documents/import?${parameters}`"#))
+            }
+        }
+    }
+
+    @Test("PDF import preserves the source and queues OCR")
+    func importsPDFAndQueuesOCR() async throws {
+        let executor = SlowCapturingExecutor(delay: .seconds(30))
+        let fixture = try HTTPFixture(
+            environment: ["SCAN_BACKEND": "sane", "SCAN_LANGUAGE": "eng"],
+            executor: executor
+        )
+        defer { fixture.remove() }
+        let application = try fixture.application()
+        let pdf = Data("%PDF-1.7\nimported document\n".utf8)
+        let filename64 = Data("Quarterly Report.PDF".utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        try await application.test(.router) { client in
+            try await client.execute(
+                uri: "/documents/import?filename64=\(filename64)",
+                method: .post,
+                headers: [.contentType: "application/pdf"],
+                body: ByteBuffer(data: pdf)
+            ) { response in
+                #expect(response.status == .accepted)
+                #expect(String(buffer: response.body).contains(#""filename":"Quarterly Report.pdf""#))
+            }
+        }
+
+        let importedURL = fixture.outputDirectory.appendingPathComponent("Quarterly Report.pdf")
+        #expect(try Data(contentsOf: importedURL) == pdf)
+        let state = await fixture.ocrQueue.state
+        #expect(state.running == 1)
+        #expect(state.input == importedURL.path)
+        await fixture.ocrQueue.cancelAll()
+    }
+
+    @Test("PDF import rejects unsafe, invalid, and conflicting files")
+    func rejectsInvalidPDFImports() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+        let existingURL = fixture.outputDirectory.appendingPathComponent("existing.pdf")
+        try Data("original".utf8).write(to: existingURL)
+
+        try await application.test(.router) { client in
+            try await client.execute(
+                uri: "/documents/import?filename64=Li4vb3V0c2lkZS5wZGY",
+                method: .post,
+                headers: [.contentType: "application/pdf"],
+                body: ByteBuffer(string: "%PDF-1.7")
+            ) { response in
+                #expect(response.status == .badRequest)
+            }
+            try await client.execute(
+                uri: "/documents/import?filename64=bm90ZXMucGRm",
+                method: .post,
+                headers: [.contentType: "application/pdf"],
+                body: ByteBuffer(string: "not a PDF")
+            ) { response in
+                #expect(response.status == .unsupportedMediaType)
+            }
+            try await client.execute(
+                uri: "/documents/import?filename64=ZXhpc3RpbmcucGRm",
+                method: .post,
+                headers: [.contentType: "application/pdf"],
+                body: ByteBuffer(string: "%PDF-1.7")
+            ) { response in
+                #expect(response.status == .conflict)
+            }
+        }
+
+        #expect(try Data(contentsOf: existingURL) == Data("original".utf8))
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("outside.pdf").path))
+    }
 }
 
 private struct HTTPFixture: Sendable {

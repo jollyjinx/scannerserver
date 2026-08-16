@@ -456,6 +456,88 @@ public enum ScannerServerApplication {
                 buildInformation: buildInformation
             )
         }
+        router.post("/documents/import") { request, context -> Response in
+            guard request.headers[.contentType]?.lowercased().hasPrefix("application/pdf") == true else {
+                return textResponse("Only PDF uploads are supported.\n", status: .unsupportedMediaType)
+            }
+            let query = queryValues(request.uri.query)
+            guard let encodedName = query["filename64"],
+                  let requestedName = decodeURLSafeBase64(encodedName) else {
+                return textResponse("Missing PDF filename.\n", status: .badRequest)
+            }
+
+            let fileName: ScanOutputFileName
+            do {
+                fileName = try importedPDFFileName(requestedName)
+            } catch {
+                return textResponse("Invalid PDF filename.\n", status: .badRequest)
+            }
+
+            let outputDirectory = dependencies.outputPathResolver.outputDirectory
+            let inputURL = outputDirectory.appendingPathComponent(fileName.rawValue, isDirectory: false)
+            let outputPath = OCRInputPath.outputPath(for: inputURL.path)!
+            guard !FileManager.default.fileExists(atPath: inputURL.path),
+                  !FileManager.default.fileExists(atPath: outputPath) else {
+                return textResponse("A source or OCR file with that name already exists.\n", status: .conflict)
+            }
+
+            let settings = try await dependencies.settingsStore.load()
+            let mode: ScanMode
+            if let modeID = query["mode_id"] {
+                guard let selected = settings.mode(id: modeID) else {
+                    return textResponse("Unknown OCR preset.\n", status: .badRequest)
+                }
+                mode = selected
+            } else {
+                mode = settings.defaultMode
+            }
+
+            let data: Data
+            do {
+                let buffer = try await request.body.collect(
+                    upTo: pdfImportUploadLimit(environment: dependencies.environment)
+                )
+                data = Data(buffer.readableBytesView)
+            } catch {
+                return textResponse(
+                    "PDF upload is too large.\n",
+                    status: HTTPResponse.Status(code: 413, reasonPhrase: "Content Too Large")
+                )
+            }
+            guard data.count >= 5, data.prefix(5) == Data("%PDF-".utf8) else {
+                return textResponse("Uploaded data is not a PDF.\n", status: .unsupportedMediaType)
+            }
+
+            let stagingURL = outputDirectory.appendingPathComponent(
+                ".pdf-import.\(UUID().uuidString)",
+                isDirectory: false
+            )
+            defer { try? FileManager.default.removeItem(at: stagingURL) }
+            do {
+                try data.write(to: stagingURL, options: .atomic)
+                try FoundationNativeScanFileSystem().placeFileExclusively(
+                    at: stagingURL,
+                    destination: inputURL
+                )
+            } catch {
+                return textResponse("Could not store PDF without overwriting a file.\n", status: .conflict)
+            }
+
+            var environment = dependencies.environment
+            environment.merge(mode.environment(trigger: "pdf-import")) { _, selected in selected }
+            environment["SCAN_FORMAT"] = "pdf"
+            environment["SCAN_PAGE_MODE"] = "single"
+            environment["SCAN_OCR_ENABLED"] = "true"
+            environment["SCAN_REMOVE_BLANK_PAGES"] = "false"
+            environment["SCAN_CROP_PAGES"] = "false"
+            await dependencies.ocrQueue.enqueue(
+                inputURL.path,
+                environment: environment,
+                ocrEnabled: true
+            )
+            await dependencies.webUpdates.notify()
+            return jsonResponse(PDFImportResponse(filename: fileName.rawValue), status: .accepted)
+        }
         router.get("/presets") { request, _ in
             await webPageResponse(
                 request: request,
@@ -999,6 +1081,46 @@ private struct ScannerManualForm: Decodable {
     }
 }
 
+private struct PDFImportResponse: Encodable {
+    let filename: String
+}
+
+private func importedPDFFileName(_ requestedName: String) throws -> ScanOutputFileName {
+    let validated = try ScanOutputFileName(rawValue: requestedName)
+    guard URL(fileURLWithPath: validated.rawValue).pathExtension.lowercased() == "pdf",
+          !validated.rawValue.lowercased().hasSuffix(".ocr.pdf") else {
+        throw ScanOutputFileNameError.unsupportedExtension(
+            URL(fileURLWithPath: validated.rawValue).pathExtension
+        )
+    }
+    let stem = String(validated.rawValue.dropLast(4))
+    guard !stem.isEmpty else {
+        throw ScanOutputFileNameError.invalidComponent(requestedName)
+    }
+    return try ScanOutputFileName(rawValue: "\(stem).pdf")
+}
+
+private func pdfImportUploadLimit(environment: [String: String]) -> Int {
+    let defaultLimit = 1_073_741_824
+    guard let value = environment["SCAN_PDF_UPLOAD_MAX_BYTES"],
+          let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
+          parsed > 0 else {
+        return defaultLimit
+    }
+    return parsed
+}
+
+private func decodeURLSafeBase64(_ value: String) -> String? {
+    var base64 = value.replacingOccurrences(of: "-", with: "+")
+        .replacingOccurrences(of: "_", with: "/")
+    let remainder = base64.count % 4
+    if remainder != 0 {
+        base64 += String(repeating: "=", count: 4 - remainder)
+    }
+    guard let data = Data(base64Encoded: base64) else { return nil }
+    return String(data: data, encoding: .utf8)
+}
+
 private func decodeForm<Form: Decodable>(
     _ type: Form.Type,
     request: Request,
@@ -1401,7 +1523,7 @@ private func renderIndexContent(
             html += "<a class=\"button-link\" href=\"/settings\">Open scanner settings</a></section>"
         }
     case .documents:
-        html += renderFiles(groups)
+        html += renderFiles(groups, settings: settings)
     case .presets:
         html += renderModes(
             settings: settings,
@@ -2065,10 +2187,19 @@ private func renderStatus(
     return html + "</article></div></section>"
 }
 
-private func renderFiles(_ groups: [ScanDayGroup]) -> String {
+private func renderFiles(_ groups: [ScanDayGroup], settings: ScanSettings) -> String {
     var html = "<section class=\"documents-panel\"><div class=\"section-heading\"><div>"
     html += "<p class=\"eyebrow\">Scan results</p><h2>Documents</h2>"
     html += "<p class=\"muted\">Open completed scans, download source files, or remove documents.</p></div></div>"
+    html += "<div class=\"pdf-drop-zone\" data-pdf-drop-zone tabindex=\"0\" role=\"button\" aria-label=\"Import PDFs for OCR\">"
+    html += "<input type=\"file\" accept=\"application/pdf,.pdf\" multiple hidden data-pdf-file-input>"
+    html += "<div><h3>Drop PDFs here for OCR</h3><p class=\"muted\">The original PDF is kept and an OCR PDF appears beside it. Language and CPU settings come from the selected preset; scanner-only blank-page removal and cropping are skipped.</p></div>"
+    html += "<div class=\"pdf-import-controls\"><label>OCR preset<select data-pdf-preset>"
+    for mode in settings.modes {
+        html += option(value: mode.id, label: mode.name, selected: mode.id == settings.defaultModeID)
+    }
+    html += "</select></label><button type=\"button\" data-pdf-choose>Choose PDFs</button></div>"
+    html += "<p class=\"pdf-import-status muted\" data-pdf-import-status role=\"status\" aria-live=\"polite\"></p></div>"
     guard !groups.isEmpty else {
         return html + "<div class=\"empty-state compact\"><h3>No scans yet</h3><p class=\"muted\">Completed scans will appear here.</p><a class=\"button-link\" href=\"/\">Start a scan</a></div></section>"
     }
