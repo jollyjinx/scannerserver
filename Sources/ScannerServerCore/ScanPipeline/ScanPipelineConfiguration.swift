@@ -15,6 +15,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         "SCAN_REMOVE_BLANK_PAGES",
         "SCAN_CROP_PAGES",
         "SCAN_CROP_MARGIN_POINTS",
+        "SCAN_OCR_ONLY",
     ]
 
     public let language: String
@@ -28,6 +29,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
     public let ocrNice: Bool
     public let removeBlankPages: Bool
     public let cropPages: Bool
+    public let ocrOnly: Bool
     public let environment: [String: String]
 
     public init(
@@ -72,6 +74,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         ocrNice = boolean("SCAN_OCR_NICE", default: false)
         removeBlankPages = boolean("SCAN_REMOVE_BLANK_PAGES", default: true)
         cropPages = boolean("SCAN_CROP_PAGES", default: true)
+        ocrOnly = boolean("SCAN_OCR_ONLY", default: true)
 
         let requestedFormat = string("SCAN_FORMAT", default: "pdf").lowercased()
         switch requestedFormat {
@@ -99,6 +102,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         processEnvironment["SCAN_OCR_NICE"] = Self.boolText(ocrNice)
         processEnvironment["SCAN_REMOVE_BLANK_PAGES"] = Self.boolText(removeBlankPages)
         processEnvironment["SCAN_CROP_PAGES"] = Self.boolText(cropPages)
+        processEnvironment["SCAN_OCR_ONLY"] = Self.boolText(ocrOnly)
         self.environment = processEnvironment
     }
 

@@ -66,7 +66,9 @@ persisted stores, reachability, and physical-button session state.
   blank-page removal, autocrop, and optional OCR against one cgroup-aware CPU budget while reserving
   one detected processor for acquisition and HTTP work. Deferred single-page PDF and PNG jobs keep
   global blank removal and crop semantics before publishing their final files, then schedule
-  per-file OCR. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
+  per-file OCR. Under `SCAN_OCR_ONLY`, deferred PDF jobs split into the private scan workspace,
+  publish only the OCR results, and remove the workspace once the queue empties; failed pages or a
+  failed whole-document pass publish the raw PDF as a fallback. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
   single-page OCR are bounded concurrently. Remote-capable OCR admission uses the sum of every
   online approved worker's advertised concurrent page slots plus the internal OCR capacity when it
   is unpaused. Remote slots are assigned first and any added internal slots are explicitly kept
@@ -78,13 +80,18 @@ persisted stores, reachability, and physical-button session state.
   cancellation, and recent jobs.
 - For OCR-enabled multipage ScanSnap Wi-Fi scans, acquisition calls the queue after every accepted
   JPEG side. The queue immediately creates and schedules a one-page PDF, owns the private scan
-  workspace after raw publication, receives each remote result independently, and assembles pages
+  workspace (retaining the raw PDF there under `SCAN_OCR_ONLY`), receives each remote result
+  independently, and assembles pages
   in source order. It reserves each page in actor-isolated batch state before the asynchronous PDF
   writer runs, so an earlier page completion cannot be overwritten by a stale pre-suspension batch
   snapshot. Workers advertising the relevant capabilities run the same native autocrop and blank
   filtering after OCR on each page; an unavailable or failed remote worker falls back to local OCR
   and the same per-page operations. The scanner host retains the all-blank keep-one safeguard,
-  creator metadata, and exclusive `.ocr.pdf` publication. The Workers page reports this
+  creator metadata, and exclusive `.ocr.pdf` publication. With `SCAN_OCR_ONLY`, the raw PDF stays
+  private and is removed once the assembled `.ocr.pdf` is published; OCR or document-processing
+  failure publishes the raw PDF as a fallback instead of losing the scan, while cancellation
+  publishes nothing. Without it, the raw PDF is published before page processing begins. The
+  Workers page reports this
   document-finalization phase separately instead
   of continuing to show the already completed final OCR page as worker activity. This streaming
   path retains the raw PDF, local fallback, cancellation, CPU

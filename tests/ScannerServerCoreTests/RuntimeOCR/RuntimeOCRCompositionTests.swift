@@ -158,6 +158,7 @@ private struct LiveCommandFixture {
         environment["SCAN_OCR_ENABLED"] = "true"
         environment["SCAN_REMOVE_BLANK_PAGES"] = "false"
         environment["SCAN_CROP_PAGES"] = "false"
+        environment["SCAN_OCR_ONLY"] = "false"
         environment["SCAN_OUTPUT_DIR"] = scans.path
         environment["SCAN_SETTINGS_PATH"] = scans.appendingPathComponent(".scanner-settings.json").path
         environment["SCANNER_CONFIG_PATH"] = scans.appendingPathComponent(".scannerserver-scanner.json").path

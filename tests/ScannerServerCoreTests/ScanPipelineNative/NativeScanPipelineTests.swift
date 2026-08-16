@@ -117,6 +117,7 @@ struct NativeScanPipelineTests {
             "SCAN_WIFI_DEBUG": "true",
             "SCAN_FORMAT": "pdf",
             "SCAN_PAGE_MODE": "single",
+            "SCAN_OCR_ONLY": "false",
             "SCAN_BLANK_WHITE_THRESHOLD": "240",
             "SCAN_BLANK_CONTENT_RATIO_THRESHOLD": "0.01",
             "SCAN_BLANK_MEAN_THRESHOLD": "247.5",
@@ -179,7 +180,43 @@ struct NativeScanPipelineTests {
         #expect(deferred.inputPath == fixture.rawPDF.path)
         #expect(deferred.cleanupDirectory == fixture.work)
         #expect(deferred.ocrEnabled)
+        #expect(!deferred.ocrOnly)
         #expect(FileManager.default.fileExists(atPath: fixture.work.path))
+    }
+
+    @Test("OCR-only Wi-Fi single-page PDFs split into the work directory")
+    func wifiSinglePagePDFOCROnly() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let timestamp = "2026-07-10.142306"
+        let executor = FakeNativeScanProcessExecutor(stubs: [])
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer()
+        let pipeline = fixture.pipeline(executor: executor, wifiAcquirer: wifiAcquirer)
+        let configuration = fixture.configuration([
+            "SCAN_BACKEND": "wifi",
+            "SCAN_TIMESTAMP": timestamp,
+            "SCANNER_IP": "192.0.2.20",
+            "SCAN_PAIRING_KEY": "primary-key",
+            "SCANSNAP_PAIRING_KEY": "fallback-key",
+            "SCANSNAP_CLIENT_IP": "192.0.2.30",
+            "SCANSNAP_CLIENT_MAC": "02:11:22:33:44:55",
+            "SCAN_SOURCE": "ADF Simplex",
+            "SCAN_FORMAT": "pdf",
+            "SCAN_PAGE_MODE": "single",
+        ])
+
+        let result = try await pipeline.scan(configuration: configuration)
+        let deferred = try #require(result.deferredScanProcessing)
+
+        #expect(result.exitStatus == 0)
+        #expect(deferred.ocrEnabled)
+        #expect(deferred.ocrOnly)
+        guard case .splitPDF(let splitRequest) = deferred.plan.finalOutput else {
+            Issue.record("Expected deferred PDF splitting")
+            return
+        }
+        #expect(splitRequest.command.arguments == [fixture.rawPDF.path, fixture.work.path, timestamp])
+        #expect(deferred.cleanupDirectory == fixture.work)
     }
 
     @Test("Wi-Fi acquisition reuses a button session handed off by the lifecycle")

@@ -174,6 +174,7 @@ public actor OCRQueueActor {
         let deferredProcessing: DeferredScanProcessing?
         let workerMetadata: OCRWorkerJobMetadata?
         let streamingPageNumber: Int?
+        let outputDirectory: String?
     }
 
     private struct StreamingPage: Sendable {
@@ -247,6 +248,8 @@ public actor OCRQueueActor {
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var isCancellingAll = false
     private var finishingJobCount = 0
+    private var finishingJobBatchCounts: [UUID: Int] = [:]
+    private var pendingCleanups: [UUID: URL] = [:]
     private var latestCompletionStatus: String?
     private var queueState: OCRQueueState
 
@@ -300,7 +303,8 @@ public actor OCRQueueActor {
             cropPages: cropPages,
             deferredProcessing: nil,
             workerMetadata: nil,
-            streamingPageNumber: nil
+            streamingPageNumber: nil,
+            outputDirectory: nil
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
@@ -317,7 +321,8 @@ public actor OCRQueueActor {
             cropPages: deferredProcessing.plan.cropPages != nil,
             deferredProcessing: deferredProcessing,
             workerMetadata: nil,
-            streamingPageNumber: nil
+            streamingPageNumber: nil,
+            outputDirectory: nil
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
@@ -504,7 +509,8 @@ public actor OCRQueueActor {
                 pageNumber: pageNumber,
                 operations: operations
             ),
-            streamingPageNumber: pageNumber
+            streamingPageNumber: pageNumber,
+            outputDirectory: nil
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
@@ -544,9 +550,7 @@ public actor OCRQueueActor {
         let tasks = activeJobs.values.filter { $0.job.batchID == batchID }.map(\.task)
         for task in tasks { task.cancel() }
         for task in tasks { await task.value }
-        if let batch = streamingBatches.removeValue(forKey: batchID) {
-            try? FileManager.default.removeItem(at: batch.request.workDirectory)
-        }
+        disposeStreamingBatch(batchID: batchID, publishRawFallback: false)
         await scheduleAvailableJobs()
         resumeIdleWaitersIfIdle()
         await publishQueueState()
@@ -566,18 +570,24 @@ public actor OCRQueueActor {
         let queuedJobs = queue
         queue.removeAll()
         for job in queuedJobs {
-            job.deferredProcessing?.removeCleanupDirectoryIfValid()
+            disposeDeferredJob(job, publishFallback: false)
+        }
+        let cancelledBatches: [(UUID, StreamingBatch)] = Array(streamingBatches.keys).compactMap { batchID in
+            guard let batch = streamingBatches[batchID] else { return nil }
+            streamingBatches[batchID] = nil
+            return (batchID, batch)
         }
         isCancellingAll = true
         let tasks = activeJobs.values.map(\.task)
         for task in tasks { task.cancel() }
         for task in tasks { await task.value }
-        let batches = streamingBatches.values
-        streamingBatches.removeAll()
-        for batch in batches {
-            try? FileManager.default.removeItem(at: batch.request.workDirectory)
+        for (_, batch) in cancelledBatches {
+            cleanupStreamingBatch(batch, publishRawFallback: false)
         }
         isCancellingAll = false
+        for batchID in Array(pendingCleanups.keys) {
+            sweepPendingCleanupsIfPossible(batchID: batchID)
+        }
         await scheduleAvailableJobs()
         await publishQueueState()
     }
@@ -588,15 +598,15 @@ public actor OCRQueueActor {
         })
         let removedJobs = queue.filter {
             matchingBatchIDs.contains($0.batchID)
-                || jobReferencesPath($0.inputPath, path: path)
+                || jobReferencesPath($0, path: path)
         }
         let queuedCount = queue.count
         queue.removeAll {
             matchingBatchIDs.contains($0.batchID)
-                || jobReferencesPath($0.inputPath, path: path)
+                || jobReferencesPath($0, path: path)
         }
         for job in removedJobs {
-            job.deferredProcessing?.removeCleanupDirectoryIfValid()
+            disposeDeferredJob(job, publishFallback: false)
         }
         let removedQueuedJob = queue.count != queuedCount
         queueState.queued = queue.count
@@ -604,19 +614,24 @@ public actor OCRQueueActor {
         let matchingTasks = activeJobs.values
             .filter {
                 matchingBatchIDs.contains($0.job.batchID)
-                    || jobReferencesPath($0.job.inputPath, path: path)
+                    || jobReferencesPath($0.job, path: path)
             }
             .map(\.task)
-        let removedBatches = matchingBatchIDs.compactMap {
-            streamingBatches.removeValue(forKey: $0)
+        let cancelledBatches: [(UUID, StreamingBatch)] = matchingBatchIDs.compactMap { batchID in
+            guard let batch = streamingBatches[batchID] else { return nil }
+            streamingBatches[batchID] = nil
+            return (batchID, batch)
         }
         for task in matchingTasks { task.cancel() }
         for task in matchingTasks { await task.value }
-        for batch in removedBatches {
-            try? FileManager.default.removeItem(at: batch.request.workDirectory)
+        for (_, batch) in cancelledBatches {
+            cleanupStreamingBatch(batch, publishRawFallback: false)
+        }
+        for batchID in Array(pendingCleanups.keys) {
+            sweepPendingCleanupsIfPossible(batchID: batchID)
         }
 
-        if removedQueuedJob || !matchingTasks.isEmpty || !removedBatches.isEmpty {
+        if removedQueuedJob || !matchingTasks.isEmpty || !cancelledBatches.isEmpty {
             await scheduleAvailableJobs()
             resumeIdleWaitersIfIdle()
             await publishQueueState()
@@ -713,9 +728,23 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         }
-        let outputPath = job.ocrEnabled
-            ? OCRInputPath.outputPath(for: job.inputPath)!
-            : job.inputPath
+        let outputPath: String
+        if let outputDirectory = job.outputDirectory {
+            guard let path = OCRInputPath.outputPath(for: job.inputPath, in: outputDirectory) else {
+                return JobCompletion(
+                    finished: Date(),
+                    status: "failed (64)",
+                    output: "",
+                    error: "Raw PDF must end in .pdf and must not already be an OCR PDF: \(job.inputPath)",
+                    publishedOutputPath: ""
+                )
+            }
+            outputPath = path
+        } else {
+            outputPath = job.ocrEnabled
+                ? OCRInputPath.outputPath(for: job.inputPath)!
+                : job.inputPath
+        }
         guard !job.ocrEnabled || !FileManager.default.fileExists(atPath: outputPath) else {
             return JobCompletion(
                 finished: Date(),
@@ -739,7 +768,9 @@ public actor OCRQueueActor {
                 status: result.succeeded ? "done" : "failed (\(result.exitStatus))",
                 output: result.succeeded && processOutput.isEmpty ? outputPath : processOutput,
                 error: result.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
-                publishedOutputPath: result.succeeded ? outputPath : "",
+                publishedOutputPath: result.succeeded
+                    ? outputPath
+                    : publishRawPageFallback(for: job) ?? "",
                 executionLocation: result.executionLocation
             )
         } catch is CancellationError {
@@ -756,7 +787,7 @@ public actor OCRQueueActor {
                 status: "failed",
                 output: "",
                 error: error.localizedDescription,
-                publishedOutputPath: ""
+                publishedOutputPath: publishRawPageFallback(for: job) ?? ""
             )
         }
     }
@@ -764,6 +795,7 @@ public actor OCRQueueActor {
     private func finish(identifier: UUID, completion: JobCompletion) async {
         guard let activeJob = activeJobs.removeValue(forKey: identifier) else { return }
         finishingJobCount += 1
+        finishingJobBatchCounts[activeJob.job.batchID, default: 0] += 1
         let effectiveCompletion = isCancellingAll || Task.isCancelled
             ? JobCompletion(
                 finished: completion.finished,
@@ -806,12 +838,17 @@ public actor OCRQueueActor {
                 latestCompletionStatus = "failed"
                 queueState.status = "failed"
                 queueState.error = error.localizedDescription
-                if let failedBatch = streamingBatches.removeValue(forKey: activeJob.job.batchID) {
-                    try? FileManager.default.removeItem(at: failedBatch.request.workDirectory)
-                }
+                disposeStreamingBatch(batchID: activeJob.job.batchID, publishRawFallback: true)
             }
         }
         finishingJobCount -= 1
+        let remainingFinishing = (finishingJobBatchCounts[activeJob.job.batchID] ?? 1) - 1
+        if remainingFinishing <= 0 {
+            finishingJobBatchCounts[activeJob.job.batchID] = nil
+        } else {
+            finishingJobBatchCounts[activeJob.job.batchID] = remainingFinishing
+        }
+        sweepPendingCleanupsIfPossible(batchID: activeJob.job.batchID)
         if activeJobs.isEmpty,
            queue.isEmpty,
            streamingBatches.isEmpty,
@@ -997,12 +1034,21 @@ public actor OCRQueueActor {
         for waiter in waiters { waiter.resume() }
     }
 
-    private func jobReferencesPath(_ inputPath: String, path: String) -> Bool {
+    private func jobReferencesPath(_ job: Job, path: String) -> Bool {
         let candidate = standardizedPath(path)
-        if standardizedPath(inputPath) == candidate {
+        if standardizedPath(job.inputPath) == candidate {
             return true
         }
-        return OCRInputPath.outputPath(for: inputPath).map(standardizedPath) == candidate
+        if let output = OCRInputPath.outputPath(for: job.inputPath),
+           standardizedPath(output) == candidate {
+            return true
+        }
+        if let outputDirectory = job.outputDirectory,
+           let output = OCRInputPath.outputPath(for: job.inputPath, in: outputDirectory),
+           standardizedPath(output) == candidate {
+            return true
+        }
+        return false
     }
 
     private func streamingBatch(_ batch: StreamingBatch, references path: String) -> Bool {
@@ -1182,7 +1228,14 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         }
-        defer { deferredProcessing.removeCleanupDirectoryIfValid() }
+        if deferredProcessing.ocrOnly {
+            pendingCleanups[job.batchID] = deferredProcessing.cleanupDirectory
+        }
+        defer {
+            if !deferredProcessing.ocrOnly {
+                deferredProcessing.removeCleanupDirectoryIfValid()
+            }
+        }
 
         do {
             let result = try await DocumentProcessingOrchestrator(
@@ -1190,6 +1243,7 @@ public actor OCRQueueActor {
             )
                 .process(deferredProcessing.plan)
             guard result.outputPaths.allSatisfy(regularFileExists) else {
+                disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: true)
                 return JobCompletion(
                     finished: Date(),
                     status: "failed (2)",
@@ -1206,13 +1260,18 @@ public actor OCRQueueActor {
                         inputPath: path,
                         batchID: job.batchID,
                         environment: job.environment,
-                        workingDirectory: nil,
+                        workingDirectory: deferredProcessing.ocrOnly
+                            ? deferredProcessing.plan.workingDirectory
+                            : nil,
                         ocrEnabled: true,
                         removeBlankPages: false,
                         cropPages: false,
                         deferredProcessing: nil,
                         workerMetadata: nil,
-                        streamingPageNumber: nil
+                        streamingPageNumber: nil,
+                        outputDirectory: deferredProcessing.ocrOnly
+                            ? deferredProcessing.cleanupDirectory.deletingLastPathComponent().path
+                            : nil
                     )
                 }
                 : []
@@ -1225,6 +1284,7 @@ public actor OCRQueueActor {
                 followUpJobs: followUpJobs
             )
         } catch is CancellationError {
+            disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: false)
             return JobCompletion(
                 finished: Date(),
                 status: "cancelled",
@@ -1233,6 +1293,7 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         } catch let error as DocumentProcessingError {
+            disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: true)
             return JobCompletion(
                 finished: Date(),
                 status: "failed (\(error.compatibleExitStatus))",
@@ -1243,6 +1304,7 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         } catch {
+            disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: true)
             return JobCompletion(
                 finished: Date(),
                 status: "failed",
@@ -1299,8 +1361,7 @@ public actor OCRQueueActor {
             .map(\.key)
             .sorted()
         guard failedPages.isEmpty else {
-            streamingBatches.removeValue(forKey: batchID)
-            try? FileManager.default.removeItem(at: batch.request.workDirectory)
+            disposeStreamingBatch(batchID: batchID, publishRawFallback: true)
             throw StreamingScanError.pageProcessingFailed(failedPages)
         }
         var outputPaths = batch.pages.keys.sorted().compactMap { batch.pages[$0]?.outputPath }
@@ -1377,7 +1438,83 @@ public actor OCRQueueActor {
            activeJobs.isEmpty,
            streamingBatches.isEmpty,
            finishingJobCount == 0 {
+            for batchID in Array(pendingCleanups.keys) {
+                sweepPendingCleanupsIfPossible(batchID: batchID)
+            }
             resumeIdleWaiters()
+        }
+    }
+
+    private func disposeStreamingBatch(batchID: UUID, publishRawFallback: Bool) {
+        guard let batch = streamingBatches.removeValue(forKey: batchID) else { return }
+        cleanupStreamingBatch(batch, publishRawFallback: publishRawFallback)
+    }
+
+    private func cleanupStreamingBatch(_ batch: StreamingBatch, publishRawFallback: Bool) {
+        if publishRawFallback, isTruthy(batch.request.environment["SCAN_OCR_ONLY"]) {
+            let rawPDF = batch.request.workDirectory.appendingPathComponent("raw.pdf")
+            if FileManager.default.fileExists(atPath: rawPDF.path) {
+                let destination = batch.request.workDirectory
+                    .deletingLastPathComponent()
+                    .appendingPathComponent(batch.request.documentName)
+                try? FoundationNativeScanFileSystem().placeFileExclusively(
+                    at: rawPDF,
+                    destination: destination
+                )
+            }
+        }
+        try? FileManager.default.removeItem(at: batch.request.workDirectory)
+    }
+
+    private func disposeDeferredJob(_ job: Job, publishFallback: Bool) {
+        guard let deferredProcessing = job.deferredProcessing else { return }
+        if deferredProcessing.ocrOnly {
+            if publishFallback { deferredProcessing.publishRawPDFFallback() }
+            pendingCleanups[job.batchID] = nil
+        }
+        deferredProcessing.removeCleanupDirectoryIfValid()
+    }
+
+    private func disposeDeferredProcessing(
+        batchID: UUID,
+        _ deferredProcessing: DeferredScanProcessing,
+        publishFallback: Bool
+    ) {
+        guard deferredProcessing.ocrOnly else { return }
+        if publishFallback { deferredProcessing.publishRawPDFFallback() }
+        pendingCleanups[batchID] = nil
+        deferredProcessing.removeCleanupDirectoryIfValid()
+    }
+
+    private func publishRawPageFallback(for job: Job) -> String? {
+        guard let outputDirectory = job.outputDirectory else { return nil }
+        let inputURL = URL(fileURLWithPath: job.inputPath)
+        let destination = URL(fileURLWithPath: outputDirectory)
+            .appendingPathComponent(inputURL.lastPathComponent)
+        try? FoundationNativeScanFileSystem().placeFileExclusively(
+            at: inputURL,
+            destination: destination
+        )
+        return destination.path
+    }
+
+    private func sweepPendingCleanupsIfPossible(batchID: UUID) {
+        guard let cleanup = pendingCleanups[batchID],
+              !queue.contains(where: { $0.batchID == batchID }),
+              !activeJobs.values.contains(where: { $0.job.batchID == batchID }),
+              (finishingJobBatchCounts[batchID] ?? 0) == 0
+        else { return }
+        try? FileManager.default.removeItem(at: cleanup)
+        pendingCleanups[batchID] = nil
+    }
+
+    private func isTruthy(_ value: String?) -> Bool {
+        guard let value else { return false }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
         }
     }
 }

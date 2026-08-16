@@ -6,17 +6,20 @@ public struct DeferredScanProcessing: Equatable, Sendable {
     public let cleanupDirectory: URL
     public let plan: DocumentProcessingPlan
     public let ocrEnabled: Bool
+    public let ocrOnly: Bool
 
     public init(
         inputPath: String,
         cleanupDirectory: URL,
         plan: DocumentProcessingPlan,
-        ocrEnabled: Bool
+        ocrEnabled: Bool,
+        ocrOnly: Bool = false
     ) {
         self.inputPath = inputPath
         self.cleanupDirectory = cleanupDirectory
         self.plan = plan
         self.ocrEnabled = ocrEnabled
+        self.ocrOnly = ocrOnly
     }
 
     var validationError: String? {
@@ -51,7 +54,9 @@ public struct DeferredScanProcessing: Equatable, Sendable {
         let outputDirectory = URL(fileURLWithPath: finalOutputDirectory, isDirectory: true)
             .resolvingSymlinksInPath()
             .standardizedFileURL
-        guard outputDirectory == cleanup.deletingLastPathComponent() else {
+        guard outputDirectory == cleanup.deletingLastPathComponent()
+            || (ocrOnly && outputDirectory == cleanup)
+        else {
             return "Deferred scan processing references an unexpected output directory."
         }
         return nil
@@ -60,6 +65,27 @@ public struct DeferredScanProcessing: Equatable, Sendable {
     func removeCleanupDirectoryIfValid() {
         guard validationError == nil else { return }
         try? FileManager.default.removeItem(at: cleanupDirectory)
+    }
+
+    /// Publishes the raw PDF into the scan directory when only the OCR result was meant
+    /// to be published and that publication did not happen (OCR/processing failed).
+    func publishRawPDFFallback() {
+        guard ocrOnly, validationError == nil, let rawFallbackName else { return }
+        guard FileManager.default.fileExists(atPath: inputPath) else { return }
+        let destination = cleanupDirectory.deletingLastPathComponent()
+            .appendingPathComponent(rawFallbackName)
+        try? FoundationNativeScanFileSystem().placeFileExclusively(
+            at: URL(fileURLWithPath: inputPath),
+            destination: destination
+        )
+    }
+
+    private var rawFallbackName: String? {
+        guard ocrOnly else { return nil }
+        switch plan.finalOutput {
+        case .splitPDF(let request): return "\(request.prefix.rawValue).pdf"
+        case .exportImages: return nil
+        }
     }
 
     private var finalOutputPDFPath: String {

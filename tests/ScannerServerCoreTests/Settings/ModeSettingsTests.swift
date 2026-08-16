@@ -16,6 +16,7 @@ struct ModeSettingsTests {
         #expect(settings.format == "pdf")
         #expect(settings.pageMode == "multi")
         #expect(settings.ocrEnabled)
+        #expect(settings.ocrOnly)
         #expect(settings.ocrCPULimit == nil)
         #expect(!settings.ocrNice)
         #expect(settings.removeBlankPages)
@@ -44,6 +45,7 @@ struct ModeSettingsTests {
             "SCAN_FORMAT": "Images",
             "SCAN_PAGE_MODE": "SINGLE",
             "SCAN_OCR_ENABLED": "off",
+            "SCAN_OCR_ONLY": "off",
             "SCAN_OCR_CPU_LIMIT": "4",
             "SCAN_OCR_NICE": "yes",
             "SCAN_REMOVE_BLANK_PAGES": "1",
@@ -59,6 +61,7 @@ struct ModeSettingsTests {
         #expect(settings.format == "png")
         #expect(settings.pageMode == "single")
         #expect(!settings.ocrEnabled)
+        #expect(!settings.ocrOnly)
         #expect(settings.ocrCPULimit == 4)
         #expect(settings.ocrNice)
         #expect(settings.removeBlankPages)
@@ -75,6 +78,7 @@ struct ModeSettingsTests {
         #expect(Set(object.keys) == Set(ModeSettings.EnvironmentKey.allCases.map(\.rawValue)))
         #expect(object["SCAN_SIMPLEX"] == "true")
         #expect(object["SCAN_OCR_ENABLED"] == "false")
+        #expect(object["SCAN_OCR_ONLY"] == "true")
         #expect(object["SCAN_OCR_CPU_LIMIT"] == "")
         #expect(object["SCAN_OCR_NICE"] == "false")
         #expect(object["SCAN_REMOVE_BLANK_PAGES"] == "true")

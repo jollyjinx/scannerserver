@@ -63,8 +63,10 @@ Raw multipage PDFs appear immediately in `./scans` after acquisition, and the sc
 rearmed before document processing begins. For single-page PDF and PNG modes, the captured raw
 document is handed directly to the bounded background queue; blank-page removal, autocrop, and
 final file splitting or image export happen there while the scanner is already available again.
-Without OCR, a processed multipage copy atomically replaces its raw PDF. With OCR, the original
-remains unchanged and the processed searchable `.ocr.pdf` is published beside it.
+Without OCR, a processed multipage copy atomically replaces its raw PDF. With OCR, only the
+searchable `.ocr.pdf` is published (`SCAN_OCR_ONLY`, the default): the raw PDF stays in the private
+scan workspace and is deleted after OCR succeeds, and it is published as a fallback only if OCR or
+document processing fails. Set `SCAN_OCR_ONLY=false` to publish both files.
 
 ## Compose
 

@@ -1046,6 +1046,7 @@ private struct ModeSaveForm: Decodable {
     let removeBlankPages: String?
     let cropPages: String?
     let cropMarginPoints: String?
+    let ocrOnly: String?
     let setDefault: String?
 
     enum CodingKeys: String, CodingKey {
@@ -1064,6 +1065,7 @@ private struct ModeSaveForm: Decodable {
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
         case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
+        case ocrOnly = "SCAN_OCR_ONLY"
         case setDefault = "set_default"
     }
 
@@ -1083,6 +1085,7 @@ private struct ModeSaveForm: Decodable {
             "SCAN_REMOVE_BLANK_PAGES": removeBlankPages == nil ? "false" : "true",
             "SCAN_CROP_PAGES": cropPages == nil ? "false" : "true",
             "SCAN_CROP_MARGIN_POINTS": cropMarginPoints ?? "",
+            "SCAN_OCR_ONLY": ocrOnly == nil ? "false" : "true",
         ])
     }
 }
@@ -2129,6 +2132,12 @@ private func renderModes(
         label: "Remove blanks",
         checked: selectedMode.settings.removeBlankPages,
         help: "Discard pages detected as blank during background PDF processing."
+    )
+    html += checkbox(
+        name: "SCAN_OCR_ONLY",
+        label: "Publish OCR result only",
+        checked: selectedMode.settings.ocrOnly,
+        help: "Publish only the searchable OCR PDF to the scan directory and keep the raw PDF private until OCR succeeds. The raw PDF replaces it if OCR fails or is cancelled."
     )
     html += "</div></div></fieldset>"
     html += "<fieldset class=\"setting-group\"><legend>Physical button</legend>"

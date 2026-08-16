@@ -45,9 +45,11 @@ do not need a fixed address or an inbound firewall rule.
 - Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is wrapped in a
   one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR,
   crop, and blank-filter results are uploaded immediately, retained in the scan workspace, and
-  assembled in source order after the feeder is empty. The raw `.pdf` remains independently
-  published; only the all-blank safeguard, creator metadata, and atomic `.ocr.pdf` publication
-  happen after ordered assembly.
+  assembled in source order after the feeder is empty. With `SCAN_OCR_ONLY`, the raw `.pdf` stays
+  private and is removed once the assembled `.ocr.pdf` is published; if processing fails it is
+  published as a fallback instead. Without it, the raw `.pdf` is published independently and only
+  the all-blank safeguard, creator metadata, and atomic `.ocr.pdf` publication happen after ordered
+  assembly.
   The SANE backend remains whole-document because `scanimage` does not expose the same page-arrival
   callback.
 - PDFs dropped onto the Documents page are split into one-page jobs and dispatched through the same
@@ -207,5 +209,7 @@ The public listing contains worker metadata and status but never authentication 
 
 Remote manifests may carry optional document, batch, page, and operation metadata. Older persisted
 jobs without these fields remain decodable. ScanSnap Wi-Fi page sharding preserves source order and
-publishes the assembled `.ocr.pdf` only when every page has completed successfully; cancellation or
-failure removes the private scan workspace without replacing the already published raw PDF.
+publishes the assembled `.ocr.pdf` only when every page has completed successfully. On failure with
+`SCAN_OCR_ONLY`, the private raw PDF is published as a fallback before the scan workspace is
+removed; cancellation removes the workspace without publishing it. Without `SCAN_OCR_ONLY`, the raw
+PDF is already published independently and is never replaced.

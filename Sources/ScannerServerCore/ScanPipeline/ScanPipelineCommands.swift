@@ -51,6 +51,13 @@ public enum OCRInputPath {
         }
         return String(inputPath.dropLast(4)) + ".ocr.pdf"
     }
+
+    public static func outputPath(for inputPath: String, in outputDirectory: String) -> String? {
+        guard let relative = outputPath(for: inputPath) else { return nil }
+        return URL(fileURLWithPath: outputDirectory)
+            .appendingPathComponent(URL(fileURLWithPath: relative).lastPathComponent)
+            .path
+    }
 }
 
 public enum ScanOutputPaths {

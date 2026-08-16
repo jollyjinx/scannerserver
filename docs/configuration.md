@@ -17,16 +17,25 @@ YYYY-MM-DD.HHMMSS.pdf
 YYYY-MM-DD.HHMMSS.ocr.pdf
 ```
 
+With `SCAN_OCR_ONLY` enabled (the default for PDF scans with OCR), only the searchable OCR PDF is
+published. The source PDF stays in the private scan workspace and is removed once OCR succeeds, so
+the scan directory holds one file per scan instead of a raw/searchable pair. If OCR or document
+processing fails, the source PDF is published as a fallback so no scan is lost; cancellation
+publishes nothing. Set `SCAN_OCR_ONLY=false` to keep both files. PNG exports and PDFs imported on
+the Documents page are unaffected.
+
 The date and time prefix uses the service's `TZ` setting, including daylight-saving changes. The
 web status timestamps and file-list day headings use the same time zone.
 
-For multipage PDF mode, the acquisition lifecycle finishes as soon as the source PDF is published.
-For single-page PDF and PNG modes, it finishes after the captured raw document is handed to the
+For multipage PDF mode, the acquisition lifecycle finishes as soon as the source PDF is published
+or, with `SCAN_OCR_ONLY`, once the assembled OCR PDF is placed. For single-page PDF and PNG modes,
+it finishes after the captured raw document is handed to the
 background queue; blank removal and crop still run across the complete document before the queue
 publishes individual files. The web scan control and physical button can therefore accept another
 scan while blank-page removal, crop, final-output conversion, or OCR is still running. Without OCR,
 the background queue processes an isolated multipage copy and atomically replaces the source PDF.
-With OCR, it leaves the source unchanged and publishes the processed `.ocr.pdf`.
+With OCR and `SCAN_OCR_ONLY`, it publishes only the processed `.ocr.pdf` and removes the private raw
+copy after success.
 
 For OCR-enabled multipage ScanSnap Wi-Fi scans, each page is OCRed, autocropped, and blank-filtered
 before ordered assembly. A capable remote worker performs those CPU-heavy operations; local
@@ -49,8 +58,10 @@ YYYY-MM-DD.HHMMSS-page-0001.ocr.pdf
 ```
 
 These individual files appear after background blank removal, crop, metadata, and splitting finish.
-OCR variants then appear beside them as their queued jobs complete. PNG exports follow the same
-deferred final-output lifecycle.
+OCR variants then appear beside them as their queued jobs complete. With `SCAN_OCR_ONLY`, only the
+`.ocr.pdf` pages are published; the raw pages stay in the private scan workspace and are removed as
+their OCR succeeds, with a raw-page fallback published for any page whose OCR fails. PNG exports
+follow the same deferred final-output lifecycle.
 
 PNG modes save one image per page:
 
@@ -87,6 +98,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCAN_FORMAT` | `pdf` | `pdf` or `png` |
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
+| `SCAN_OCR_ONLY` | `true` | Publish only the OCR result for PDF scans. The raw PDF stays in the private scan workspace and is deleted after OCR succeeds; on OCR/processing failure it is published as a fallback, while cancellation publishes nothing. PNG output and imported PDFs are unaffected |
 | `SCAN_OCR_CPU_LIMIT` | detected CPUs minus one | Optional positive cap on CPUs used by background page processing and OCR; values above the background allowance are clamped |
 | `SCAN_OCR_NICE` | `false` | Run post-scan document-processing subprocesses with reduced CPU scheduling priority |
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |

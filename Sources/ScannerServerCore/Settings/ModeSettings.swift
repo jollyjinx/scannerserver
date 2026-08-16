@@ -21,6 +21,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
         case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
+        case ocrOnly = "SCAN_OCR_ONLY"
     }
 
     public static let truthyValues: Set<String> = ["1", "true", "yes", "on"]
@@ -38,6 +39,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
     public var removeBlankPages: Bool
     public var cropPages: Bool
     public var cropMarginPoints: Double
+    public var ocrOnly: Bool
 
     public init(
         language: String = "deu+eng",
@@ -52,7 +54,8 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         ocrNice: Bool = false,
         removeBlankPages: Bool = true,
         cropPages: Bool = true,
-        cropMarginPoints: Double = 1.0
+        cropMarginPoints: Double = 1.0,
+        ocrOnly: Bool = true
     ) {
         self.language = language
         self.resolution = resolution
@@ -70,6 +73,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
             cropMarginPoints,
             fallback: 1.0
         )
+        self.ocrOnly = ocrOnly
     }
 
     public init(values: [String: String], defaults: ModeSettings = .standard) {
@@ -116,6 +120,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
             requestedCropMargin,
             fallback: defaults.cropMarginPoints
         )
+        ocrOnly = Self.isTruthy(values[EnvironmentKey.ocrOnly.rawValue] ?? defaults.ocrOnlyText)
     }
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
@@ -151,6 +156,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
             EnvironmentKey.removeBlankPages.rawValue: removeBlankPagesText,
             EnvironmentKey.cropPages.rawValue: cropPagesText,
             EnvironmentKey.cropMarginPoints.rawValue: cropMarginPointsText,
+            EnvironmentKey.ocrOnly.rawValue: ocrOnlyText,
         ]
     }
 
@@ -164,6 +170,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
     public var ocrNiceText: String { Self.booleanText(ocrNice) }
     public var removeBlankPagesText: String { Self.booleanText(removeBlankPages) }
     public var cropPagesText: String { Self.booleanText(cropPages) }
+    public var ocrOnlyText: String { Self.booleanText(ocrOnly) }
     public var cropMarginPointsText: String {
         String(
             format: "%.12g",
@@ -228,6 +235,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
         case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
+        case ocrOnly = "SCAN_OCR_ONLY"
     }
 }
 

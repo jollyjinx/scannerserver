@@ -126,6 +126,9 @@ public actor NativeScanPipeline: NativeScanExecuting {
 
             let options = try DocumentProcessingOptions(environment: environment)
             if configuration.format == "pdf", configuration.pageMode == "multi" {
+                let publishRawPDF = !(configuration.ocrOnly
+                    && configuration.ocrEnabled
+                    && streamingBatchID != nil)
                 try await processForMultipagePDF(
                     rawPDF: rawPDF,
                     outputDirectory: outputDirectory,
@@ -133,21 +136,28 @@ public actor NativeScanPipeline: NativeScanExecuting {
                     configuration: configuration,
                     options: options,
                     workDirectory: workDirectory,
-                    executor: capturingExecutor
+                    executor: capturingExecutor,
+                    publishRawPDF: publishRawPDF
                 )
-                let outputPath = outputDirectory
-                    .appendingPathComponent("\(timestamp.rawValue).pdf", isDirectory: false)
-                    .path
-                guard fileSystem.regularFileExists(at: URL(fileURLWithPath: outputPath)) else {
-                    if let streamingBatchID, let ocrQueue {
-                        await ocrQueue.cancelStreamingScan(batchID: streamingBatchID)
-                        activeStreamingBatchID = nil
+                let outputPath = publishRawPDF
+                    ? outputDirectory
+                        .appendingPathComponent("\(timestamp.rawValue).pdf", isDirectory: false)
+                        .path
+                    : outputDirectory
+                        .appendingPathComponent("\(timestamp.rawValue).ocr.pdf", isDirectory: false)
+                        .path
+                if publishRawPDF {
+                    guard fileSystem.regularFileExists(at: URL(fileURLWithPath: outputPath)) else {
+                        if let streamingBatchID, let ocrQueue {
+                            await ocrQueue.cancelStreamingScan(batchID: streamingBatchID)
+                            activeStreamingBatchID = nil
+                        }
+                        return await failure(
+                            status: 2,
+                            message: "No output files were created.",
+                            diagnosticsFrom: capturingExecutor
+                        )
                     }
-                    return await failure(
-                        status: 2,
-                        message: "No output files were created.",
-                        diagnosticsFrom: capturingExecutor
-                    )
                 }
                 if let streamingBatchID, let ocrQueue {
                     pipelineOwnsWorkDirectory = false
@@ -380,7 +390,8 @@ public actor NativeScanPipeline: NativeScanExecuting {
         configuration: ScanPipelineConfiguration,
         options: DocumentProcessingOptions,
         workDirectory: URL,
-        executor: NativeScanCapturingExecutor
+        executor: NativeScanCapturingExecutor,
+        publishRawPDF: Bool = true
     ) async throws {
         try await executeDocumentStep(
             .setCreatorMetadata,
@@ -394,6 +405,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
             throw NativeScanMissingOutputError()
         }
         try Task.checkCancellation()
+        guard publishRawPDF else { return }
         let destination = outputDirectory.appendingPathComponent(
             "\(timestamp.rawValue).pdf",
             isDirectory: false
@@ -409,6 +421,9 @@ public actor NativeScanPipeline: NativeScanExecuting {
         options: DocumentProcessingOptions,
         workDirectory: URL
     ) -> DeferredScanProcessing {
+        let ocrOnly = configuration.ocrOnly
+            && configuration.ocrEnabled
+            && configuration.format == "pdf"
         let finalOutput: DocumentFinalOutputRequest
         if configuration.format == "png" {
             finalOutput = .exportImages(ExportScanImagesRequest(
@@ -419,7 +434,7 @@ public actor NativeScanPipeline: NativeScanExecuting {
         } else {
             finalOutput = .splitPDF(SplitPDFPagesRequest(
                 pdfPath: rawPDF.path,
-                outputDirectory: outputDirectory.path,
+                outputDirectory: ocrOnly ? workDirectory.path : outputDirectory.path,
                 prefix: timestamp
             ))
         }
@@ -440,7 +455,8 @@ public actor NativeScanPipeline: NativeScanExecuting {
             inputPath: rawPDF.path,
             cleanupDirectory: workDirectory,
             plan: plan,
-            ocrEnabled: configuration.ocrEnabled && configuration.format == "pdf"
+            ocrEnabled: configuration.ocrEnabled && configuration.format == "pdf",
+            ocrOnly: ocrOnly
         )
     }
 
