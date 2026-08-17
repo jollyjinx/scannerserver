@@ -71,9 +71,9 @@ public actor NativeScanPipeline: NativeScanExecuting {
 
         let capturingExecutor = NativeScanCapturingExecutor(executor: executor)
         var activeStreamingBatchID: UUID?
+        let rawPDF = workDirectory.appendingPathComponent("raw.pdf", isDirectory: false)
         do {
             let timestamp = try scanTimestamp(environment: environment)
-            let rawPDF = workDirectory.appendingPathComponent("raw.pdf", isDirectory: false)
             let streamingBatchID: UUID?
             if let ocrQueue,
                (nonEmpty(environment["SCAN_BACKEND"]) ?? "wifi") == "wifi",
@@ -105,18 +105,17 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 streamingBatchID: streamingBatchID
             )
             if let acquisitionFailure = acquisition.failure {
-                if let streamingBatchID, let ocrQueue {
-                    await ocrQueue.cancelStreamingScan(batchID: streamingBatchID)
-                    activeStreamingBatchID = nil
-                }
+                await cancelStreamingScanIfActive(
+                    batchID: activeStreamingBatchID,
+                    publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+                )
+                activeStreamingBatchID = nil
                 return await completedFailure(acquisitionFailure, diagnosticsFrom: capturingExecutor)
             }
 
             guard fileSystem.regularFileExists(at: rawPDF) else {
-                if let streamingBatchID, let ocrQueue {
-                    await ocrQueue.cancelStreamingScan(batchID: streamingBatchID)
-                    activeStreamingBatchID = nil
-                }
+                await cancelStreamingScanIfActive(batchID: activeStreamingBatchID, publishRawFallback: false)
+                activeStreamingBatchID = nil
                 return await failure(
                     status: 2,
                     message: "No scan output was created by the scanner backend.",
@@ -148,10 +147,11 @@ public actor NativeScanPipeline: NativeScanExecuting {
                         .path
                 if publishRawPDF {
                     guard fileSystem.regularFileExists(at: URL(fileURLWithPath: outputPath)) else {
-                        if let streamingBatchID, let ocrQueue {
-                            await ocrQueue.cancelStreamingScan(batchID: streamingBatchID)
-                            activeStreamingBatchID = nil
-                        }
+                        await cancelStreamingScanIfActive(
+                            batchID: activeStreamingBatchID,
+                            publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+                        )
+                        activeStreamingBatchID = nil
                         return await failure(
                             status: 2,
                             message: "No output files were created.",
@@ -161,16 +161,10 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 }
                 if let streamingBatchID, let ocrQueue {
                     pipelineOwnsWorkDirectory = false
-                    do {
-                        try await ocrQueue.finishStreamingScan(
-                            batchID: streamingBatchID,
-                            pageCount: acquisition.pageCount ?? 0
-                        )
-                    } catch {
-                        await ocrQueue.cancelStreamingScan(batchID: streamingBatchID)
-                        activeStreamingBatchID = nil
-                        throw error
-                    }
+                    try await ocrQueue.finishStreamingScan(
+                        batchID: streamingBatchID,
+                        pageCount: acquisition.pageCount ?? 0
+                    )
                     activeStreamingBatchID = nil
                 }
                 return ProcessResult(
@@ -196,68 +190,93 @@ public actor NativeScanPipeline: NativeScanExecuting {
                 deferredScanProcessing: deferredProcessing
             )
         } catch is CancellationError {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            await cancelStreamingScanIfActive(batchID: activeStreamingBatchID, publishRawFallback: false)
+            activeStreamingBatchID = nil
             throw CancellationError()
         } catch let error as NativeScanConfigurationError {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            await cancelStreamingScanIfActive(
+                batchID: activeStreamingBatchID,
+                publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+            )
+            activeStreamingBatchID = nil
             return await failure(
                 status: 64,
                 message: error.localizedDescription,
                 diagnosticsFrom: capturingExecutor
             )
         } catch let error as NativeScanFileSystemError {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            let removed = await cancelStreamingScanIfActive(
+                batchID: activeStreamingBatchID,
+                publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+            )
+            activeStreamingBatchID = nil
             switch error {
             case .outputConflict:
                 return await failure(
                     status: 73,
-                    message: error.localizedDescription,
+                    message: error.localizedDescription
+                        + retentionNote(workDirectory, retained: !removed),
                     diagnosticsFrom: capturingExecutor
                 )
             }
         } catch let error as DocumentProcessingError {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            let removed = await cancelStreamingScanIfActive(
+                batchID: activeStreamingBatchID,
+                publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+            )
+            activeStreamingBatchID = nil
             return await failure(
                 status: error.compatibleExitStatus,
-                message: documentProcessingDiagnostic(error),
+                message: documentProcessingDiagnostic(error)
+                    + retentionNote(workDirectory, retained: !removed),
                 diagnosticsFrom: capturingExecutor
             )
         } catch is NativeScanMissingOutputError {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            await cancelStreamingScanIfActive(
+                batchID: activeStreamingBatchID,
+                publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+            )
+            activeStreamingBatchID = nil
             return await failure(
                 status: 2,
                 message: "No output files were created.",
                 diagnosticsFrom: capturingExecutor
             )
         } catch let error as ProcessExecutorError {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            let removed = await cancelStreamingScanIfActive(
+                batchID: activeStreamingBatchID,
+                publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+            )
+            activeStreamingBatchID = nil
             return await failure(
                 status: 127,
-                message: error.localizedDescription,
+                message: error.localizedDescription + retentionNote(workDirectory, retained: !removed),
                 diagnosticsFrom: capturingExecutor
             )
         } catch {
-            if let activeStreamingBatchID, let ocrQueue {
-                await ocrQueue.cancelStreamingScan(batchID: activeStreamingBatchID)
-            }
+            let removed = await cancelStreamingScanIfActive(
+                batchID: activeStreamingBatchID,
+                publishRawFallback: fileSystem.regularFileExists(at: rawPDF)
+            )
+            activeStreamingBatchID = nil
             return await failure(
                 status: 1,
-                message: error.localizedDescription,
+                message: error.localizedDescription + retentionNote(workDirectory, retained: !removed),
                 diagnosticsFrom: capturingExecutor
             )
         }
+    }
+
+    @discardableResult
+    private func cancelStreamingScanIfActive(batchID: UUID?, publishRawFallback: Bool) async -> Bool {
+        guard let batchID, let ocrQueue else { return true }
+        return await ocrQueue.cancelStreamingScan(batchID: batchID, publishRawFallback: publishRawFallback)
+    }
+
+    private func retentionNote(_ workDirectory: URL, retained: Bool) -> String {
+        retained
+            ? "\nThe raw scan was retained in \(workDirectory.path) because publishing the fallback failed."
+            : ""
     }
 
     private func acquireRawPDF(

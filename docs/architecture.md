@@ -68,7 +68,8 @@ persisted stores, reachability, and physical-button session state.
   global blank removal and crop semantics before publishing their final files, then schedule
   per-file OCR. Under `SCAN_OCR_ONLY`, deferred PDF jobs split into the private scan workspace,
   publish only the OCR results, and remove the workspace once the queue empties; failed pages or a
-  failed whole-document pass publish the raw PDF as a fallback. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
+  failed whole-document pass publish the raw PDF as a fallback, and a fallback that cannot be
+  published keeps the workspace and reports the error. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
   single-page OCR are bounded concurrently. Remote-capable OCR admission uses the sum of every
   online approved worker's advertised concurrent page slots plus the internal OCR capacity when it
   is unpaused. Remote slots are assigned first and any added internal slots are explicitly kept
@@ -90,7 +91,9 @@ persisted stores, reachability, and physical-button session state.
   creator metadata, and exclusive `.ocr.pdf` publication. With `SCAN_OCR_ONLY`, the raw PDF stays
   private and is removed once the assembled `.ocr.pdf` is published; OCR or document-processing
   failure publishes the raw PDF as a fallback instead of losing the scan, while cancellation
-  publishes nothing. Without it, the raw PDF is published before page processing begins. The
+  publishes nothing. If that fallback cannot be published, the raw PDF remains in the private
+  workspace and the error is reported. Without it, the raw PDF is published before page processing
+  begins. The
   Workers page reports this
   document-finalization phase separately instead
   of continuing to show the already completed final OCR page as worker activity. This streaming

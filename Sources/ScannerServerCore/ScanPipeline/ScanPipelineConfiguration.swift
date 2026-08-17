@@ -74,7 +74,7 @@ public struct ScanPipelineConfiguration: Equatable, Sendable {
         ocrNice = boolean("SCAN_OCR_NICE", default: false)
         removeBlankPages = boolean("SCAN_REMOVE_BLANK_PAGES", default: true)
         cropPages = boolean("SCAN_CROP_PAGES", default: true)
-        ocrOnly = boolean("SCAN_OCR_ONLY", default: true)
+        ocrOnly = boolean("SCAN_OCR_ONLY", default: false)
 
         let requestedFormat = string("SCAN_FORMAT", default: "pdf").lowercased()
         switch requestedFormat {

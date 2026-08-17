@@ -250,6 +250,7 @@ public actor OCRQueueActor {
     private var finishingJobCount = 0
     private var finishingJobBatchCounts: [UUID: Int] = [:]
     private var pendingCleanups: [UUID: URL] = [:]
+    private var unconfirmedCleanupBatches: Set<UUID> = []
     private var latestCompletionStatus: String?
     private var queueState: OCRQueueState
 
@@ -545,15 +546,17 @@ public actor OCRQueueActor {
         await publishQueueState()
     }
 
-    public func cancelStreamingScan(batchID: UUID) async {
+    @discardableResult
+    public func cancelStreamingScan(batchID: UUID, publishRawFallback: Bool = false) async -> Bool {
         queue.removeAll { $0.batchID == batchID }
         let tasks = activeJobs.values.filter { $0.job.batchID == batchID }.map(\.task)
         for task in tasks { task.cancel() }
         for task in tasks { await task.value }
-        disposeStreamingBatch(batchID: batchID, publishRawFallback: false)
+        let removed = disposeStreamingBatch(batchID: batchID, publishRawFallback: publishRawFallback)
         await scheduleAvailableJobs()
         resumeIdleWaitersIfIdle()
         await publishQueueState()
+        return removed
     }
 
     public func waitUntilIdle() async {
@@ -746,12 +749,16 @@ public actor OCRQueueActor {
                 : job.inputPath
         }
         guard !job.ocrEnabled || !FileManager.default.fileExists(atPath: outputPath) else {
+            let fallback = publishRawPageFallback(for: job)
+            if fallback == nil, job.outputDirectory != nil {
+                unconfirmedCleanupBatches.insert(job.batchID)
+            }
             return JobCompletion(
                 finished: Date(),
                 status: "failed (73)",
                 output: "",
                 error: "OCR output file already exists: \(outputPath)",
-                publishedOutputPath: outputPath
+                publishedOutputPath: fallback ?? outputPath
             )
         }
 
@@ -763,14 +770,21 @@ public actor OCRQueueActor {
                 executionPreference: executionPreference
             )
             let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            let publishedOutputPath: String
+            if result.succeeded {
+                publishedOutputPath = outputPath
+            } else {
+                publishedOutputPath = publishRawPageFallback(for: job) ?? ""
+                if publishedOutputPath.isEmpty, job.outputDirectory != nil {
+                    unconfirmedCleanupBatches.insert(job.batchID)
+                }
+            }
             return JobCompletion(
                 finished: Date(),
                 status: result.succeeded ? "done" : "failed (\(result.exitStatus))",
                 output: result.succeeded && processOutput.isEmpty ? outputPath : processOutput,
                 error: result.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
-                publishedOutputPath: result.succeeded
-                    ? outputPath
-                    : publishRawPageFallback(for: job) ?? "",
+                publishedOutputPath: publishedOutputPath,
                 executionLocation: result.executionLocation
             )
         } catch is CancellationError {
@@ -782,12 +796,16 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         } catch {
+            let fallback = publishRawPageFallback(for: job)
+            if fallback == nil, job.outputDirectory != nil {
+                unconfirmedCleanupBatches.insert(job.batchID)
+            }
             return JobCompletion(
                 finished: Date(),
                 status: "failed",
                 output: "",
                 error: error.localizedDescription,
-                publishedOutputPath: publishRawPageFallback(for: job) ?? ""
+                publishedOutputPath: fallback ?? ""
             )
         }
     }
@@ -837,8 +855,11 @@ public actor OCRQueueActor {
             } catch {
                 latestCompletionStatus = "failed"
                 queueState.status = "failed"
+                let retainedWorkDirectory = streamingBatches[activeJob.job.batchID]?.request.workDirectory
                 queueState.error = error.localizedDescription
-                disposeStreamingBatch(batchID: activeJob.job.batchID, publishRawFallback: true)
+                    + (disposeStreamingBatch(batchID: activeJob.job.batchID, publishRawFallback: true)
+                        ? ""
+                        : cleanupRetentionNote(retainedWorkDirectory))
             }
         }
         finishingJobCount -= 1
@@ -1243,12 +1264,15 @@ public actor OCRQueueActor {
             )
                 .process(deferredProcessing.plan)
             guard result.outputPaths.allSatisfy(regularFileExists) else {
-                disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: true)
+                let retained = !disposeDeferredProcessing(
+                    batchID: job.batchID, deferredProcessing, publishFallback: true
+                )
                 return JobCompletion(
                     finished: Date(),
                     status: "failed (2)",
                     output: "",
-                    error: "No output files were created.",
+                    error: "No output files were created."
+                        + cleanupRetentionNote(retained ? deferredProcessing.cleanupDirectory : nil),
                     publishedOutputPath: ""
                 )
             }
@@ -1293,23 +1317,29 @@ public actor OCRQueueActor {
                 publishedOutputPath: ""
             )
         } catch let error as DocumentProcessingError {
-            disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: true)
+            let retained = !disposeDeferredProcessing(
+                batchID: job.batchID, deferredProcessing, publishFallback: true
+            )
             return JobCompletion(
                 finished: Date(),
                 status: "failed (\(error.compatibleExitStatus))",
                 output: "",
-                error: error.processResult.standardError.isEmpty
+                error: (error.processResult.standardError.isEmpty
                     ? error.localizedDescription
-                    : error.processResult.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
+                    : error.processResult.standardError.trimmingCharacters(in: .whitespacesAndNewlines))
+                    + cleanupRetentionNote(retained ? deferredProcessing.cleanupDirectory : nil),
                 publishedOutputPath: ""
             )
         } catch {
-            disposeDeferredProcessing(batchID: job.batchID, deferredProcessing, publishFallback: true)
+            let retained = !disposeDeferredProcessing(
+                batchID: job.batchID, deferredProcessing, publishFallback: true
+            )
             return JobCompletion(
                 finished: Date(),
                 status: "failed",
                 output: "",
-                error: error.localizedDescription,
+                error: error.localizedDescription
+                    + cleanupRetentionNote(retained ? deferredProcessing.cleanupDirectory : nil),
                 publishedOutputPath: ""
             )
         }
@@ -1445,25 +1475,35 @@ public actor OCRQueueActor {
         }
     }
 
-    private func disposeStreamingBatch(batchID: UUID, publishRawFallback: Bool) {
-        guard let batch = streamingBatches.removeValue(forKey: batchID) else { return }
-        cleanupStreamingBatch(batch, publishRawFallback: publishRawFallback)
+    @discardableResult
+    private func disposeStreamingBatch(batchID: UUID, publishRawFallback: Bool) -> Bool {
+        guard let batch = streamingBatches[batchID] else {
+            return true
+        }
+        streamingBatches.removeValue(forKey: batchID)
+        return cleanupStreamingBatch(batch, publishRawFallback: publishRawFallback)
     }
 
-    private func cleanupStreamingBatch(_ batch: StreamingBatch, publishRawFallback: Bool) {
+    @discardableResult
+    private func cleanupStreamingBatch(_ batch: StreamingBatch, publishRawFallback: Bool) -> Bool {
         if publishRawFallback, isTruthy(batch.request.environment["SCAN_OCR_ONLY"]) {
             let rawPDF = batch.request.workDirectory.appendingPathComponent("raw.pdf")
             if FileManager.default.fileExists(atPath: rawPDF.path) {
                 let destination = batch.request.workDirectory
                     .deletingLastPathComponent()
                     .appendingPathComponent(batch.request.documentName)
-                try? FoundationNativeScanFileSystem().placeFileExclusively(
-                    at: rawPDF,
-                    destination: destination
-                )
+                do {
+                    try FoundationNativeScanFileSystem().placeFileExclusively(
+                        at: rawPDF,
+                        destination: destination
+                    )
+                } catch {
+                    return false
+                }
             }
         }
         try? FileManager.default.removeItem(at: batch.request.workDirectory)
+        return true
     }
 
     private func disposeDeferredJob(_ job: Job, publishFallback: Bool) {
@@ -1475,15 +1515,21 @@ public actor OCRQueueActor {
         deferredProcessing.removeCleanupDirectoryIfValid()
     }
 
+    @discardableResult
     private func disposeDeferredProcessing(
         batchID: UUID,
         _ deferredProcessing: DeferredScanProcessing,
         publishFallback: Bool
-    ) {
-        guard deferredProcessing.ocrOnly else { return }
-        if publishFallback { deferredProcessing.publishRawPDFFallback() }
+    ) -> Bool {
+        guard deferredProcessing.ocrOnly else { return true }
+        let published = !publishFallback || deferredProcessing.publishRawPDFFallback()
         pendingCleanups[batchID] = nil
+        guard published else {
+            unconfirmedCleanupBatches.insert(batchID)
+            return false
+        }
         deferredProcessing.removeCleanupDirectoryIfValid()
+        return true
     }
 
     private func publishRawPageFallback(for job: Job) -> String? {
@@ -1491,11 +1537,15 @@ public actor OCRQueueActor {
         let inputURL = URL(fileURLWithPath: job.inputPath)
         let destination = URL(fileURLWithPath: outputDirectory)
             .appendingPathComponent(inputURL.lastPathComponent)
-        try? FoundationNativeScanFileSystem().placeFileExclusively(
-            at: inputURL,
-            destination: destination
-        )
-        return destination.path
+        do {
+            try FoundationNativeScanFileSystem().placeFileExclusively(
+                at: inputURL,
+                destination: destination
+            )
+            return destination.path
+        } catch {
+            return nil
+        }
     }
 
     private func sweepPendingCleanupsIfPossible(batchID: UUID) {
@@ -1504,8 +1554,17 @@ public actor OCRQueueActor {
               !activeJobs.values.contains(where: { $0.job.batchID == batchID }),
               (finishingJobBatchCounts[batchID] ?? 0) == 0
         else { return }
-        try? FileManager.default.removeItem(at: cleanup)
         pendingCleanups[batchID] = nil
+        guard !unconfirmedCleanupBatches.contains(batchID) else {
+            unconfirmedCleanupBatches.remove(batchID)
+            return
+        }
+        try? FileManager.default.removeItem(at: cleanup)
+    }
+
+    private func cleanupRetentionNote(_ cleanupDirectory: URL?) -> String {
+        guard let cleanupDirectory else { return "" }
+        return "\nThe scan was retained in \(cleanupDirectory.path) because publishing the raw fallback failed."
     }
 
     private func isTruthy(_ value: String?) -> Bool {

@@ -8,6 +8,7 @@ enum FakeNativeScanProcessError: Error, Sendable {
 actor FakeNativeScanProcessExecutor: ProcessExecutor {
     enum Stub: Sendable {
         case result(ProcessResult)
+        case executableResult(executable: String, result: ProcessResult)
         case materialize(files: [String: Data], result: ProcessResult)
         case suspended
     }
@@ -31,8 +32,22 @@ actor FakeNativeScanProcessExecutor: ProcessExecutor {
         resumeSatisfiedRequestWaiters()
         guard !stubs.isEmpty else { throw FakeNativeScanProcessError.missingStub }
 
+        if let index = stubs.firstIndex(where: { stub in
+            if case .executableResult(executable: let executable, result: _) = stub {
+                return executable == request.executable
+            }
+            return false
+        }) {
+            let stub = stubs.remove(at: index)
+            if case .executableResult(executable: _, result: let result) = stub {
+                return result
+            }
+        }
+
         switch stubs.removeFirst() {
         case .result(let result):
+            return result
+        case .executableResult(executable: _, result: let result):
             return result
         case .materialize(let files, let result):
             for (path, contents) in files {

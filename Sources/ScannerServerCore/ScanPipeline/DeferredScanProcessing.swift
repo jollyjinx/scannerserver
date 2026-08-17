@@ -69,15 +69,22 @@ public struct DeferredScanProcessing: Equatable, Sendable {
 
     /// Publishes the raw PDF into the scan directory when only the OCR result was meant
     /// to be published and that publication did not happen (OCR/processing failed).
-    func publishRawPDFFallback() {
-        guard ocrOnly, validationError == nil, let rawFallbackName else { return }
-        guard FileManager.default.fileExists(atPath: inputPath) else { return }
+    /// Returns `false` when the fallback had to be published but could not be placed.
+    @discardableResult
+    func publishRawPDFFallback() -> Bool {
+        guard ocrOnly, validationError == nil, let rawFallbackName else { return true }
+        guard FileManager.default.fileExists(atPath: inputPath) else { return true }
         let destination = cleanupDirectory.deletingLastPathComponent()
             .appendingPathComponent(rawFallbackName)
-        try? FoundationNativeScanFileSystem().placeFileExclusively(
-            at: URL(fileURLWithPath: inputPath),
-            destination: destination
-        )
+        do {
+            try FoundationNativeScanFileSystem().placeFileExclusively(
+                at: URL(fileURLWithPath: inputPath),
+                destination: destination
+            )
+            return true
+        } catch {
+            return false
+        }
     }
 
     private var rawFallbackName: String? {

@@ -2137,7 +2137,7 @@ private func renderModes(
         name: "SCAN_OCR_ONLY",
         label: "Publish OCR result only",
         checked: selectedMode.settings.ocrOnly,
-        help: "Publish only the searchable OCR PDF to the scan directory and keep the raw PDF private until OCR succeeds. The raw PDF replaces it if OCR fails or is cancelled."
+        help: "Publish only the searchable OCR PDF to the scan directory and keep the raw PDF private until OCR succeeds. On OCR failure the raw PDF is published instead; if that fails too, the raw scan stays in the private work directory. Cancelled scans are not published."
     )
     html += "</div></div></fieldset>"
     html += "<fieldset class=\"setting-group\"><legend>Physical button</legend>"

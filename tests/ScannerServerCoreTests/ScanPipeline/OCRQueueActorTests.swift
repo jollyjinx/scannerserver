@@ -872,6 +872,126 @@ struct OCRQueueActorTests {
         #expect(state.recentJobs.contains { $0.status == "failed (3)" })
     }
 
+    @Test("OCR-only deferred output conflict retains the workspace when the raw page fallback cannot be published")
+    func deferredOCROnlyConflictRetainsWorkspace() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "deferred-ocr-only-conflict-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205400"
+        let rawPage1 = work.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let existingOCRPage = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let existingOCROutput = root.appendingPathComponent("\(prefix)-page-0001.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw source".utf8).write(to: input)
+        try Data("existing page".utf8).write(to: existingOCRPage)
+        try Data("existing ocr".utf8).write(to: existingOCROutput)
+
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .materialize(
+                files: [rawPage1.path: Data("page one".utf8)],
+                result: ProcessResult(exitStatus: 0, standardOutput: "\(rawPage1.path)\n")
+            ),
+        ])
+        let plan = DocumentProcessingPlan(
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: work.path,
+                prefix: try ScanTimestamp(rawValue: prefix)
+            )),
+            environment: ["SCAN_LANGUAGE": "eng"],
+            workingDirectory: work
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: plan,
+            ocrEnabled: true,
+            ocrOnly: true
+        ))
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "set-pdf-creator", "split-pdf-pages",
+        ])
+        let state = await queue.state
+        #expect(state.recentJobs.contains { $0.status == "failed (73)" })
+        #expect(state.error.contains("OCR output file already exists"))
+        #expect(FileManager.default.fileExists(atPath: work.path))
+        #expect(try Data(contentsOf: existingOCRPage) == Data("existing page".utf8))
+        #expect(try Data(contentsOf: existingOCROutput) == Data("existing ocr".utf8))
+    }
+
+    @Test("OCR-only deferred page failure retains the workspace when the raw page fallback cannot be published")
+    func deferredOCROnlyFallbackPublicationFailureRetainsWorkspace() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "deferred-ocr-only-retention-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.test", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-13.205401"
+        let rawPage1 = work.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let existingPage = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw source".utf8).write(to: input)
+        try Data("existing page".utf8).write(to: existingPage)
+
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .materialize(
+                files: [rawPage1.path: Data("page one".utf8)],
+                result: ProcessResult(exitStatus: 0, standardOutput: "\(rawPage1.path)\n")
+            ),
+            .result(ProcessResult(exitStatus: 3, standardError: "tesseract failed\n")),
+        ])
+        let plan = DocumentProcessingPlan(
+            creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+            finalOutput: .splitPDF(SplitPDFPagesRequest(
+                pdfPath: input.path,
+                outputDirectory: work.path,
+                prefix: try ScanTimestamp(rawValue: prefix)
+            )),
+            environment: ["SCAN_LANGUAGE": "eng"],
+            workingDirectory: work
+        )
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: plan,
+            ocrEnabled: true,
+            ocrOnly: true
+        ))
+        await queue.waitUntilIdle()
+
+        #expect(await executor.requests().map(\.executable) == [
+            "set-pdf-creator", "split-pdf-pages", "ocrmypdf",
+        ])
+        let state = await queue.state
+        #expect(state.recentJobs.contains { $0.status == "failed (3)" })
+        #expect(state.error.contains("tesseract failed"))
+        #expect(FileManager.default.fileExists(atPath: work.path))
+        #expect(try Data(contentsOf: existingPage) == Data("existing page".utf8))
+    }
+
     @Test("Deferred output conflicts retain status compatibility and clean work files")
     func deferredOutputConflict() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(

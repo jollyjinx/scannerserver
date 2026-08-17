@@ -15,7 +15,7 @@ struct ScanPipelineConfigurationTests {
         #expect(configuration.format == "pdf")
         #expect(configuration.pageMode == "multi")
         #expect(configuration.ocrEnabled)
-        #expect(configuration.ocrOnly)
+        #expect(!configuration.ocrOnly)
         #expect(!configuration.ocrNice)
         #expect(configuration.removeBlankPages)
         #expect(configuration.cropPages)

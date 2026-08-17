@@ -203,6 +203,7 @@ struct NativeScanPipelineTests {
             "SCAN_SOURCE": "ADF Simplex",
             "SCAN_FORMAT": "pdf",
             "SCAN_PAGE_MODE": "single",
+            "SCAN_OCR_ONLY": "true",
         ])
 
         let result = try await pipeline.scan(configuration: configuration)
@@ -422,6 +423,48 @@ struct NativeScanPipelineTests {
         #expect(FileManager.default.fileExists(atPath: fixture.work.path))
     }
 
+    @Test("Multipage streaming failure publishes the raw PDF fallback and removes the work directory")
+    func wifiMultipageStreamingFailurePublishesRawPDFFallback() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let timestamp = "2026-07-10.142314"
+        let fallbackPDF = fixture.output.appendingPathComponent("\(timestamp).pdf")
+        try FileManager.default.createDirectory(at: fixture.output, withIntermediateDirectories: true)
+
+        let executor = FakeNativeScanProcessExecutor(stubs: [
+            .executableResult(executable: "ocrmypdf", result: ProcessResult(exitStatus: 0)),
+            .executableResult(executable: "set-pdf-creator", result: ProcessResult(exitStatus: 3, standardError: "set-pdf-creator failed\n")),
+        ])
+        let wifiAcquirer = FakeScanSnapWiFiAcquirer(stubs: [
+            .materialize(Data("multipage-pdf".utf8), ScanSnapWiFiAcquisitionResult(pageCount: 1)),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
+        )
+        let pipeline = fixture.pipeline(
+            executor: executor,
+            wifiAcquirer: wifiAcquirer,
+            ocrQueue: queue
+        )
+        let result = try await pipeline.scan(configuration: fixture.configuration([
+            "SCAN_BACKEND": "wifi",
+            "SCAN_TIMESTAMP": timestamp,
+            "SCANNER_IP": "192.0.2.20",
+            "SCANSNAP_PAIRING_KEY": "pairing-key",
+            "SCAN_OCR_ONLY": "true",
+            "SCAN_REMOVE_BLANK_PAGES": "false",
+            "SCAN_CROP_PAGES": "false",
+        ]))
+
+        #expect(result.exitStatus == 3)
+        #expect(result.standardError.contains("set-pdf-creator failed"))
+        #expect(!result.standardError.contains("raw scan was retained"))
+        #expect(try Data(contentsOf: fallbackPDF) == Data("multipage-pdf".utf8))
+        #expect(!FileManager.default.fileExists(atPath: fixture.work.path))
+    }
+
     @Test("Cancellation reaches native Wi-Fi acquisition and removes the work directory")
     func cancellationCleanup() async throws {
         let fixture = try Fixture()
@@ -472,12 +515,14 @@ private struct Fixture {
     func pipeline(
         executor: any ProcessExecutor,
         wifiAcquirer: any ScanSnapWiFiAcquiring = FakeScanSnapWiFiAcquirer(),
+        ocrQueue: OCRQueueActor? = nil,
         timestamp: ScanTimestamp? = nil,
         acquisitionSessions: ScanSnapAcquisitionSessionCoordinator = ScanSnapAcquisitionSessionCoordinator()
     ) -> NativeScanPipeline {
         NativeScanPipeline(
             executor: executor,
             wifiAcquirer: wifiAcquirer,
+            ocrQueue: ocrQueue,
             acquisitionSessions: acquisitionSessions,
             fileSystem: FoundationNativeScanFileSystem(),
             timestampProvider: { timestamp ?? ScanTimestamp(date: Date(timeIntervalSince1970: 0)) },

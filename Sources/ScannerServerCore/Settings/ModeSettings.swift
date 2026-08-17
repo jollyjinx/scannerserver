@@ -55,7 +55,7 @@ public struct ModeSettings: Codable, Equatable, Sendable {
         removeBlankPages: Bool = true,
         cropPages: Bool = true,
         cropMarginPoints: Double = 1.0,
-        ocrOnly: Bool = true
+        ocrOnly: Bool = false
     ) {
         self.language = language
         self.resolution = resolution
