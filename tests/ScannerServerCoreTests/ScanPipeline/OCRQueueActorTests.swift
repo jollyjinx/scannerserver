@@ -928,6 +928,7 @@ struct OCRQueueActorTests {
         let state = await queue.state
         #expect(state.recentJobs.contains { $0.status == "failed (73)" })
         #expect(state.error.contains("OCR output file already exists"))
+        #expect(state.error.contains(work.path))
         #expect(FileManager.default.fileExists(atPath: work.path))
         #expect(try Data(contentsOf: existingOCRPage) == Data("existing page".utf8))
         #expect(try Data(contentsOf: existingOCROutput) == Data("existing ocr".utf8))
@@ -988,6 +989,7 @@ struct OCRQueueActorTests {
         let state = await queue.state
         #expect(state.recentJobs.contains { $0.status == "failed (3)" })
         #expect(state.error.contains("tesseract failed"))
+        #expect(state.error.contains(work.path))
         #expect(FileManager.default.fileExists(atPath: work.path))
         #expect(try Data(contentsOf: existingPage) == Data("existing page".utf8))
     }
@@ -1170,6 +1172,67 @@ struct OCRQueueActorTests {
         #expect(await executor.requests().count == 2)
         #expect(await queue.state.status == "done")
         #expect(await queue.state.input == "/scans/two.pdf")
+    }
+
+    @Test("OCR-only cancellation does not publish a fallback from a late failing process result")
+    func ocrOnlyCancellationDoesNotPublishLateFallback() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "cancelled-ocr-only-late-failure-tests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let work = root.appendingPathComponent(".scan-work.active", isDirectory: true)
+        let input = work.appendingPathComponent("raw.pdf")
+        let prefix = "2026-08-17.083700"
+        let rawPage = work.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let publishedFallback = root.appendingPathComponent("\(prefix)-page-0001.pdf")
+        let publishedOCR = root.appendingPathComponent("\(prefix)-page-0001.ocr.pdf")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try Data("raw document".utf8).write(to: input)
+        try Data("raw page".utf8).write(to: rawPage)
+
+        let executor = FakeProcessExecutor(stubs: [
+            .result(ProcessResult(exitStatus: 0)),
+            .result(ProcessResult(exitStatus: 0, standardOutput: rawPage.path + "\n")),
+            .suspendedIgnoringCancellation(ProcessResult(
+                exitStatus: 3,
+                standardError: "late OCR failure\n"
+            )),
+        ])
+        let queue = OCRQueueActor(
+            executor: executor,
+            documentExecutor: executor,
+            configuration: serialOCRConfiguration
+        )
+        await queue.enqueue(DeferredScanProcessing(
+            inputPath: input.path,
+            cleanupDirectory: work,
+            plan: DocumentProcessingPlan(
+                creatorMetadata: SetPDFCreatorRequest(pdfPath: input.path),
+                finalOutput: .splitPDF(SplitPDFPagesRequest(
+                    pdfPath: input.path,
+                    outputDirectory: work.path,
+                    prefix: try ScanTimestamp(rawValue: prefix)
+                )),
+                environment: ["SCAN_LANGUAGE": "eng"],
+                workingDirectory: work
+            ),
+            ocrEnabled: true,
+            ocrOnly: true
+        ))
+
+        await executor.waitForRequestCount(3)
+        let cancellation = Task { await queue.cancelAll() }
+        await executor.waitForIgnoredCancellationCount(1)
+        try Data("partial late OCR output".utf8).write(to: publishedOCR)
+        await executor.resumeNextSuspendedExecution()
+        await cancellation.value
+        await queue.waitUntilIdle()
+
+        #expect(!FileManager.default.fileExists(atPath: publishedFallback.path))
+        #expect(!FileManager.default.fileExists(atPath: publishedOCR.path))
+        #expect(!FileManager.default.fileExists(atPath: work.path))
+        #expect(await queue.state.status == "cancelled")
     }
 
     @Test("Cancellation stops the worker and clears queued jobs")

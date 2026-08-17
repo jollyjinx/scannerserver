@@ -215,6 +215,8 @@ public actor OCRQueueActor {
         let publishedOutputPath: String
         let followUpJobs: [Job]
         let executionLocation: ProcessExecutionLocation?
+        let rawPageFallbackRequested: Bool
+        let cancellableOutputPath: String?
 
         init(
             finished: Date,
@@ -223,7 +225,9 @@ public actor OCRQueueActor {
             error: String,
             publishedOutputPath: String,
             followUpJobs: [Job] = [],
-            executionLocation: ProcessExecutionLocation? = nil
+            executionLocation: ProcessExecutionLocation? = nil,
+            rawPageFallbackRequested: Bool = false,
+            cancellableOutputPath: String? = nil
         ) {
             self.finished = finished
             self.status = status
@@ -232,6 +236,22 @@ public actor OCRQueueActor {
             self.publishedOutputPath = publishedOutputPath
             self.followUpJobs = followUpJobs
             self.executionLocation = executionLocation
+            self.rawPageFallbackRequested = rawPageFallbackRequested
+            self.cancellableOutputPath = cancellableOutputPath
+        }
+
+        func replacing(error: String? = nil, publishedOutputPath: String? = nil) -> JobCompletion {
+            JobCompletion(
+                finished: finished,
+                status: status,
+                output: output,
+                error: error ?? self.error,
+                publishedOutputPath: publishedOutputPath ?? self.publishedOutputPath,
+                followUpJobs: followUpJobs,
+                executionLocation: executionLocation,
+                rawPageFallbackRequested: rawPageFallbackRequested,
+                cancellableOutputPath: cancellableOutputPath
+            )
         }
     }
 
@@ -749,16 +769,13 @@ public actor OCRQueueActor {
                 : job.inputPath
         }
         guard !job.ocrEnabled || !FileManager.default.fileExists(atPath: outputPath) else {
-            let fallback = publishRawPageFallback(for: job)
-            if fallback == nil, job.outputDirectory != nil {
-                unconfirmedCleanupBatches.insert(job.batchID)
-            }
             return JobCompletion(
                 finished: Date(),
                 status: "failed (73)",
                 output: "",
                 error: "OCR output file already exists: \(outputPath)",
-                publishedOutputPath: fallback ?? outputPath
+                publishedOutputPath: job.outputDirectory == nil ? outputPath : "",
+                rawPageFallbackRequested: job.outputDirectory != nil
             )
         }
 
@@ -770,22 +787,15 @@ public actor OCRQueueActor {
                 executionPreference: executionPreference
             )
             let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-            let publishedOutputPath: String
-            if result.succeeded {
-                publishedOutputPath = outputPath
-            } else {
-                publishedOutputPath = publishRawPageFallback(for: job) ?? ""
-                if publishedOutputPath.isEmpty, job.outputDirectory != nil {
-                    unconfirmedCleanupBatches.insert(job.batchID)
-                }
-            }
             return JobCompletion(
                 finished: Date(),
                 status: result.succeeded ? "done" : "failed (\(result.exitStatus))",
                 output: result.succeeded && processOutput.isEmpty ? outputPath : processOutput,
                 error: result.standardError.trimmingCharacters(in: .whitespacesAndNewlines),
-                publishedOutputPath: publishedOutputPath,
-                executionLocation: result.executionLocation
+                publishedOutputPath: result.succeeded ? outputPath : "",
+                executionLocation: result.executionLocation,
+                rawPageFallbackRequested: !result.succeeded && job.outputDirectory != nil,
+                cancellableOutputPath: job.outputDirectory == nil ? nil : outputPath
             )
         } catch is CancellationError {
             return JobCompletion(
@@ -793,19 +803,18 @@ public actor OCRQueueActor {
                 status: "cancelled",
                 output: "",
                 error: "",
-                publishedOutputPath: ""
+                publishedOutputPath: "",
+                cancellableOutputPath: job.outputDirectory == nil ? nil : outputPath
             )
         } catch {
-            let fallback = publishRawPageFallback(for: job)
-            if fallback == nil, job.outputDirectory != nil {
-                unconfirmedCleanupBatches.insert(job.batchID)
-            }
             return JobCompletion(
                 finished: Date(),
                 status: "failed",
                 output: "",
                 error: error.localizedDescription,
-                publishedOutputPath: fallback ?? ""
+                publishedOutputPath: "",
+                rawPageFallbackRequested: job.outputDirectory != nil,
+                cancellableOutputPath: job.outputDirectory == nil ? nil : outputPath
             )
         }
     }
@@ -814,15 +823,30 @@ public actor OCRQueueActor {
         guard let activeJob = activeJobs.removeValue(forKey: identifier) else { return }
         finishingJobCount += 1
         finishingJobBatchCounts[activeJob.job.batchID, default: 0] += 1
-        let effectiveCompletion = isCancellingAll || Task.isCancelled
-            ? JobCompletion(
+        let cancelled = isCancellingAll || Task.isCancelled || completion.status == "cancelled"
+        let effectiveCompletion: JobCompletion
+        if cancelled {
+            removeCancellableOutputIfPresent(completion)
+            effectiveCompletion = JobCompletion(
                 finished: completion.finished,
                 status: "cancelled",
                 output: "",
                 error: "",
                 publishedOutputPath: ""
             )
-            : completion
+        } else if completion.rawPageFallbackRequested {
+            removeCancellableOutputIfPresent(completion)
+            if let fallback = publishRawPageFallback(for: activeJob.job) {
+                effectiveCompletion = completion.replacing(publishedOutputPath: fallback)
+            } else {
+                unconfirmedCleanupBatches.insert(activeJob.job.batchID)
+                effectiveCompletion = completion.replacing(
+                    error: completion.error + cleanupRetentionNote(activeJob.job.workingDirectory)
+                )
+            }
+        } else {
+            effectiveCompletion = completion
+        }
         record(
             job: activeJob.job,
             started: activeJob.started,
@@ -1546,6 +1570,11 @@ public actor OCRQueueActor {
         } catch {
             return nil
         }
+    }
+
+    private func removeCancellableOutputIfPresent(_ completion: JobCompletion) {
+        guard let path = completion.cancellableOutputPath else { return }
+        try? FileManager.default.removeItem(atPath: path)
     }
 
     private func sweepPendingCleanupsIfPossible(batchID: UUID) {
