@@ -194,6 +194,12 @@ Swift source files reuse their Linux release artifacts; only invalidated sources
 The host package's `.build` directory is intentionally not mounted because macOS objects cannot be
 used in a Linux image and ARM64/AMD64 build products must remain isolated.
 
+The runtime stage retains Ubuntu Noble's OCRmyPDF package for native dependencies and installs the
+application's pinned OCRmyPDF `17.8.1` into `/opt/ocrmypdf`. The isolated executable takes
+precedence on `PATH`; `OCRMYPDF_VERSION` exposes the selected build version, and the container smoke
+test verifies it. A development build can temporarily test another release with
+`--build-arg OCRMYPDF_VERSION=<version>`, but the checked-in pin remains the supported version.
+
 Run `--help` for the complete interface:
 
 ```bash

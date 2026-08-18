@@ -36,6 +36,7 @@ ARG APP_UID=1000
 ARG APP_GID=1000
 ARG VCS_REF=unknown
 ARG SCANNERSERVER_VERSION=development
+ARG OCRMYPDF_VERSION=17.8.1
 
 LABEL org.opencontainers.image.title="scannerserver" \
     org.opencontainers.image.version="${SCANNERSERVER_VERSION}" \
@@ -46,7 +47,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SANE_CONFIG_DIR=/app/sane.d \
     TZ=Europe/Berlin \
     SCANNERSERVER_VERSION=${SCANNERSERVER_VERSION} \
-    SCANNERSERVER_REVISION=${VCS_REF}
+    SCANNERSERVER_REVISION=${VCS_REF} \
+    OCRMYPDF_VERSION=${OCRMYPDF_VERSION}
 
 RUN sed -i \
         -e 's/ noble-backports//g' \
@@ -59,6 +61,7 @@ RUN sed -i \
         avahi-daemon \
         avahi-utils \
         dbus \
+        fonts-noto-core \
         img2pdf \
         iproute2 \
         libcap2-bin \
@@ -66,6 +69,7 @@ RUN sed -i \
         libvips-tools \
         ocrmypdf \
         poppler-utils \
+        python3-venv \
         qpdf \
         sane-airscan \
         sane-utils \
@@ -74,6 +78,16 @@ RUN sed -i \
         tesseract-ocr-osd \
         tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/ocrmypdf \
+    && /opt/ocrmypdf/bin/python -m pip install \
+        --disable-pip-version-check \
+        --no-cache-dir \
+        --retries 5 \
+        "ocrmypdf==${OCRMYPDF_VERSION}" \
+    && test "$(/opt/ocrmypdf/bin/ocrmypdf --version 2>&1)" = "${OCRMYPDF_VERSION}" \
+    && install -d /usr/local/bin \
+    && ln -sf /opt/ocrmypdf/bin/ocrmypdf /usr/local/bin/ocrmypdf
 
 WORKDIR /app
 
@@ -91,7 +105,7 @@ COPY scripts/entrypoint.sh /usr/local/bin/scansnap-entrypoint
 RUN chmod +x /usr/local/bin/scansnap-entrypoint \
     && setcap cap_net_bind_service=+ep /opt/scannerserver/scannerserver
 
-ENV PATH="${PATH}:/opt/scannerserver"
+ENV PATH="/opt/ocrmypdf/bin:${PATH}:/opt/scannerserver"
 ENV SCANNERSERVER_WORKER_DIRECT=true
 
 EXPOSE 8080

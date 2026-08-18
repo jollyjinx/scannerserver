@@ -151,6 +151,12 @@ qpdf, Poppler, libvips, ExifTool, and `img2pdf` remain external tools because th
 established optional-backend, OCR, and document-processing behavior. Replacing one is a separate
 compatibility project.
 
+The runtime image installs Ubuntu's OCRmyPDF package to retain its native program dependencies,
+then overlays pinned OCRmyPDF `17.8.1` in the isolated `/opt/ocrmypdf` Python environment. The
+image `PATH` and `/usr/local/bin/ocrmypdf` select that environment instead of Ubuntu Noble's older
+Python package. `OCRMYPDF_VERSION` records the build-time pin, and the container smoke test requires
+the selected executable to report the same version.
+
 ## Compatibility Contracts
 
 Preserve these unless the user explicitly authorizes a breaking change:

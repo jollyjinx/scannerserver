@@ -159,6 +159,7 @@ fi
   for command in scannerserver img2pdf ocrmypdf nice qpdf pdfimages pdfinfo vips exiftool; do
     command -v "$command" >/dev/null
   done
+  test "$(ocrmypdf --version 2>&1)" = "$OCRMYPDF_VERSION"
   ! command -v scansnap-wifi >/dev/null
   test -x /usr/bin/scanimage
 '
