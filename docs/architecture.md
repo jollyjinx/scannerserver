@@ -45,7 +45,7 @@ Sources/
       Acquisition/        native JPEG transfer state machine and PDF assembly
     ScanPipeline/         single-flight scans, acquisition, subprocesses, and OCR queue
     OCRWorkers/           remote-worker registry, discovery, manifests, and lease state
-    Documents/            PDF/image processing, previews, naming, and grouping
+    Documents/            visible collection lifecycle, processing, previews, naming, and grouping
     Settings/             persisted scanner and mode configuration
 tests/
   ScannerServerCoreTests/ Swift Testing suites and opt-in integration coverage
@@ -58,6 +58,11 @@ persisted stores, reachability, and physical-button session state.
 
 ## Runtime Boundaries
 
+- `ScanDocumentCollection` is the actor-isolated boundary for browser-visible scan outputs. It
+  discovers and groups regular PDF/PNG files, validates and reads requested outputs, delegates
+  preview generation, and coordinates cancellation before removing an output and its preview
+  sidecar. Scan and OCR publishers retain their atomic file-publication contracts; newly published
+  outputs appear in the next collection snapshot.
 - Hummingbird and SwiftNIO provide the HTTP service.
 - `ScanJobActor` enforces single-flight acquisition, publishes a multipage source PDF or hands a
   captured single-page/PNG document to the background queue, and ends the scanner lifecycle before

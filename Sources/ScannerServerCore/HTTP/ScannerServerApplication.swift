@@ -189,32 +189,6 @@ public actor StoredScannerSetupService: ScannerSetupServing {
     }
 }
 
-public protocol ScanPreviewProviding: Sendable {
-    func preview(for sourceURL: URL, outputDirectory: URL) async throws -> Data
-}
-
-public struct CompatibleScanPreviewProvider: ScanPreviewProviding {
-    public init() {}
-
-    public func preview(for sourceURL: URL, outputDirectory: URL) async throws -> Data {
-        let previewDirectory = outputDirectory.appendingPathComponent(PreviewOutputName.directoryName, isDirectory: true)
-        let previewURL = previewDirectory.appendingPathComponent("\(sourceURL.lastPathComponent).jpg")
-        let fileManager = FileManager.default
-        if let previewAttributes = try? fileManager.attributesOfItem(atPath: previewURL.path),
-           let sourceAttributes = try? fileManager.attributesOfItem(atPath: sourceURL.path),
-           let previewDate = previewAttributes[.modificationDate] as? Date,
-           let sourceDate = sourceAttributes[.modificationDate] as? Date,
-           previewDate >= sourceDate {
-            return try Data(contentsOf: previewURL)
-        }
-
-        let data = PlaceholderPreview.jpegBytes
-        try fileManager.createDirectory(at: previewDirectory, withIntermediateDirectories: true)
-        try data.write(to: previewURL, options: .atomic)
-        return data
-    }
-}
-
 public struct ScannerServerDependencies: Sendable {
     public let settingsStore: ScanSettingsStore
     public let scannerStore: ScannerConfigStore
@@ -226,6 +200,7 @@ public struct ScannerServerDependencies: Sendable {
     public let ocrWorkerJobs: OCRWorkerJobStore
     public let ocrWorkerResultValidator: any OCRWorkerResultValidating
     public let outputPathResolver: ScanOutputPathResolver
+    public let documentCollection: ScanDocumentCollection
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
     public let webUpdates: WebUpdateNotifier
@@ -269,8 +244,9 @@ public struct ScannerServerDependencies: Sendable {
             fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
         )
         self.internalOCRWorker = internalOCRWorker
+        let resolvedOCRQueue: OCRQueueActor
         if let ocrQueue {
-            self.ocrQueue = ocrQueue
+            resolvedOCRQueue = ocrQueue
         } else {
             let processExecutor = FoundationProcessExecutor()
             let queueConfiguration = OCRQueueConfiguration(environment: environment)
@@ -279,7 +255,7 @@ public struct ScannerServerDependencies: Sendable {
                 capacity: queueConfiguration.cpuLimit,
                 webUpdates: webUpdates
             )
-            self.ocrQueue = OCRQueueActor(
+            resolvedOCRQueue = OCRQueueActor(
                 executor: DistributedOCRProcessExecutor(
                     local: processExecutor,
                     workers: ocrWorkerRegistry,
@@ -303,7 +279,18 @@ public struct ScannerServerDependencies: Sendable {
                 webUpdates: webUpdates
             )
         }
+        self.ocrQueue = resolvedOCRQueue
         self.outputPathResolver = outputPathResolver
+        self.documentCollection = ScanDocumentCollection(
+            outputDirectory: outputPathResolver.outputDirectory,
+            previewProvider: previewProvider,
+            workCanceller: ScanDocumentWorkCanceller { path in
+                await resolvedOCRQueue.cancelJobs(referencing: path)
+                if (try? await ocrWorkerJobs.cancelJobs(referencing: path)) ?? 0 > 0 {
+                    await webUpdates.notify()
+                }
+            }
+        )
         self.scannerSetup = scannerSetup
         self.previewProvider = previewProvider
         self.webUpdates = webUpdates
@@ -1006,21 +993,26 @@ public enum ScannerServerApplication {
         }
 
         router.get("/files/:name/preview") { _, context -> Response in
-            guard let sourceURL = resolvedFile(context: context, dependencies: dependencies),
-                  ["pdf", "png"].contains(sourceURL.pathExtension.lowercased()) else {
+            guard let name = routeName(context: context),
+                  let data = try await dependencies.documentCollection.preview(named: name)
+            else {
                 return textResponse("Not found", status: .notFound)
             }
-            let data = try await dependencies.previewProvider.preview(
-                for: sourceURL,
-                outputDirectory: dependencies.outputPathResolver.outputDirectory
-            )
             return dataResponse(data, contentType: "image/jpeg")
         }
         router.get("/files/:name") { _, context -> Response in
-            fileResponse(context: context, dependencies: dependencies, disposition: "attachment")
+            await fileResponse(
+                context: context,
+                dependencies: dependencies,
+                disposition: "attachment"
+            )
         }
         router.get("/view/:name") { _, context -> Response in
-            fileResponse(context: context, dependencies: dependencies, disposition: "inline")
+            await fileResponse(
+                context: context,
+                dependencies: dependencies,
+                disposition: "inline"
+            )
         }
         router.post("/files/delete-selected") { request, context -> Response in
             let names = try await decodeRepeatedFormValue(
@@ -1271,49 +1263,27 @@ private func workerResultUploadLimit(environment: [String: String]) -> Int {
     return parsed
 }
 
-private func resolvedFile(
-    context: some RequestContext,
-    dependencies: ScannerServerDependencies
-) -> URL? {
-    guard let name = routeName(context: context) else { return nil }
-    return try? dependencies.outputPathResolver.resolve(name)
-}
-
 private func fileResponse(
     context: some RequestContext,
     dependencies: ScannerServerDependencies,
     disposition: String
-) -> Response {
-    guard let fileURL = resolvedFile(context: context, dependencies: dependencies),
-          let data = try? Data(contentsOf: fileURL) else {
+) async -> Response {
+    guard let name = routeName(context: context),
+          let resource = await dependencies.documentCollection.resource(named: name)
+    else {
         return textResponse("Not found", status: .notFound)
     }
     return dataResponse(
-        data,
-        contentType: mediaType(for: fileURL),
-        additionalHeaders: [.contentDisposition: "\(disposition); filename=\(fileURL.lastPathComponent)"]
+        resource.data,
+        contentType: resource.contentType,
+        additionalHeaders: [
+            .contentDisposition: "\(disposition); filename=\(resource.fileName.rawValue)"
+        ]
     )
 }
 
 private func deleteFile(name: String, dependencies: ScannerServerDependencies) async {
-    guard let fileURL = try? dependencies.outputPathResolver.resolve(name) else { return }
-    await dependencies.ocrQueue.cancelJobs(referencing: fileURL.path)
-    if (try? await dependencies.ocrWorkerJobs.cancelJobs(referencing: fileURL.path)) ?? 0 > 0 {
-        await dependencies.webUpdates.notify()
-    }
-    let previewURL = dependencies.outputPathResolver.outputDirectory
-        .appendingPathComponent(PreviewOutputName.directoryName, isDirectory: true)
-        .appendingPathComponent("\(fileURL.lastPathComponent).jpg")
-    try? FileManager.default.removeItem(at: previewURL)
-    try? FileManager.default.removeItem(at: fileURL)
-}
-
-private func mediaType(for url: URL) -> String {
-    switch url.pathExtension.lowercased() {
-    case "pdf": "application/pdf"
-    case "png": "image/png"
-    default: "application/octet-stream"
-    }
+    await dependencies.documentCollection.remove(named: name)
 }
 
 private func dataResponse(
@@ -1505,10 +1475,7 @@ private func indexResponse(
     let localTime = ScannerServerLocalTime(environment: dependencies.environment)
     let query = queryValues(request.uri.query)
     let webRevision = await dependencies.webUpdates.currentRevision
-    let groups = scanFileGroups(
-        outputDirectory: dependencies.outputPathResolver.outputDirectory,
-        timeZone: localTime.timeZone
-    )
+    let groups = await dependencies.documentCollection.groups(timeZone: localTime.timeZone)
     let content = renderIndexContent(
         page: page,
         settings: settings,
@@ -1536,22 +1503,6 @@ private func indexResponse(
         )
         .replacingOccurrences(of: "<!-- SCANNER_SERVER_CONTENT -->", with: content)
     return dataResponse(Data(html.utf8), contentType: "text/html; charset=utf-8")
-}
-
-private func scanFileGroups(outputDirectory: URL, timeZone: TimeZone) -> [ScanDayGroup] {
-    guard let urls = try? FileManager.default.contentsOfDirectory(
-        at: outputDirectory,
-        includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-        options: [.skipsHiddenFiles]
-    ) else { return [] }
-
-    let files = urls.compactMap { url -> ScanFile? in
-        guard let name = try? ScanOutputFileName(rawValue: url.lastPathComponent),
-              let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
-              values.isRegularFile == true else { return nil }
-        return ScanFile(name: name, modificationDate: values.contentModificationDate ?? .distantPast)
-    }
-    return ScanFileGrouping.groups(for: files, timeZone: timeZone)
 }
 
 private func renderIndexContent(

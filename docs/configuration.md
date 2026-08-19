@@ -49,8 +49,11 @@ PDFs imported on the Documents page use the same page-oriented path: scannerserv
 uploaded source, splits a private working copy into one-page jobs, fills the aggregate capacity of
 all compatible remote workers, and assembles the resulting `.ocr.pdf` in source order.
 
-Deleting a source scan while processing is active cancels that document's work before removing the
-file. Matching queued work is removed as well, while jobs for other scans continue.
+The Documents page reads and removes visible PDF/PNG outputs through one serialized collection
+lifecycle. Deleting a source scan while processing is active cancels that document's work before
+removing the file and its cached preview. Matching queued work is removed as well, while jobs for
+other scans continue. Scan and OCR publication remains atomic, and a newly published output appears
+in the next Documents-page snapshot.
 
 Single-page PDF modes use:
 
