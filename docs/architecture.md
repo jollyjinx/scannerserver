@@ -123,6 +123,17 @@ persisted stores, reachability, and physical-button session state.
   replaced across an asynchronous validation step. The coordinator has no mutable state of its own,
   so independent transfers stay concurrent while durable transitions remain serialized by
   `OCRWorkerJobStore`.
+- `OCRWorkerRuntimeModule` is the reusable worker-process lifecycle boundary. The
+  `scannerserver-worker` executable retains command-line and environment parsing, worker-identity
+  persistence, explicit-URL or Bonjour selection, and dependency construction, then immediately
+  hands registration, approval/disabled waiting, reconnects, heartbeat supervision, leasing, and
+  job-task ownership to the Core module. An activity actor serializes the heartbeat's running-job
+  count. Structured session task groups bind the heartbeat, dispatcher, and every page process to
+  one approved registration; loss of approval, heartbeat failure, or cancellation tears down that
+  complete session before registration recovery begins. The dispatcher's single owner tracks both
+  capacity and its one in-progress long poll, so it fills all advertised page slots without issuing
+  simultaneous lease requests. Narrow client, processor, sleeper, and event interfaces keep this
+  lifecycle testable without launching the executable.
 - `DistributedOCRProcessExecutor` wraps the `ocrmypdf` process boundary and carries an optional
   typed per-page crop configuration. Approved, enabled, language- and capability-compatible worker
   registrations get first refusal even across a temporary heartbeat outage; assignment timeout or

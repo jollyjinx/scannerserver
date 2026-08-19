@@ -17,6 +17,12 @@ do not need a fixed address or an inbound firewall rule.
 
 - The `scannerserver-worker` Swift executable connects to an explicit scannerserver URL or discovers
   `_scannerserver._tcp` through Bonjour on macOS.
+- After resolving command-line configuration, identity, and the server URL, the executable composes
+  separate control and job HTTP clients plus the job processor and hands the long-running lifecycle
+  to `OCRWorkerRuntimeModule` in `ScannerServerCore`. That module owns registration/reconnects,
+  approval and disabled waiting, heartbeat supervision, lease dispatch, job activity accounting,
+  and approved-session cancellation/recovery. The executable therefore has no independent session
+  or leasing loop.
 - Each worker creates a persistent ID and authentication token in
   `~/.config/scannerserver-worker/identity.json`.
 - Registration reports its name, hostname, architecture, CPU capacity, derived concurrency limit,
@@ -71,7 +77,11 @@ do not need a fixed address or an inbound firewall rule.
   back to local OCR and local per-page autocrop. Cancellation invalidates the remote lease.
 - A worker uses one long-polling lease request at a time and starts page-processing tasks until its
   announced capacity is full. Registration and heartbeats use a separate HTTP session, so many CPU
-  slots cannot occupy every connection and make a healthy worker appear stale.
+  slots cannot occupy every connection and make a healthy worker appear stale. The approved-session
+  task owns its heartbeat, dispatcher, and in-flight job children as one cancellation tree: a failed
+  heartbeat, pause/disable transition, or process cancellation stops the lease poll and every active
+  page before the registration loop recovers the session. Individual job failures remain logged and
+  reported without terminating other pages or the dispatcher.
 
 ## Run A Worker Container
 

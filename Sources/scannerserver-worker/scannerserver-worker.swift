@@ -11,11 +11,6 @@ private let workerCPUDefault = directOCRDefault
     ? OCRQueueConfiguration.detectedProcessorCount
     : max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
 
-private enum WorkerJobEvent: Sendable {
-    case lease(OCRWorkerJobLease?)
-    case jobFinished
-}
-
 @main
 struct ScannerServerWorkerCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -119,165 +114,26 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
         )
 
         JLog.notice("Connecting OCR worker \(name) to \(serverURL.absoluteString)")
-        while !Task.isCancelled {
-            do {
-                var state = try await controlClient.register(registration)
-                log(state.availability)
-                while state.availability == .pendingApproval || state.availability == .disabled {
-                    try await Task.sleep(for: .seconds(state.heartbeatIntervalSeconds))
-                    state = try await controlClient.heartbeat(
-                        workerID: identity.workerID,
-                        request: OCRWorkerHeartbeatRequest(
-                            authenticationToken: identity.authenticationToken,
-                            runningJobs: 0
-                        )
-                    )
-                    log(state.availability)
-                }
-                guard state.availability == .online || state.availability == .busy else {
-                    throw WorkerSessionError.noLongerAvailable
-                }
-                try await runApprovedSession(
-                    controlClient: controlClient,
-                    jobClient: jobClient,
-                    identity: identity,
-                    capacity: capacity,
-                    heartbeatIntervalSeconds: state.heartbeatIntervalSeconds
-                )
-            } catch is CancellationError {
-                return
-            } catch {
-                JLog.warning("OCR worker connection failed: \(error.localizedDescription); retrying")
-                try await Task.sleep(for: .seconds(5))
-            }
-        }
-    }
-
-    private func runApprovedSession(
-        controlClient: OCRWorkerHTTPClient,
-        jobClient: OCRWorkerHTTPClient,
-        identity: WorkerIdentity,
-        capacity: OCRWorkerCapacity,
-        heartbeatIntervalSeconds: Int
-    ) async throws {
-        let activity = WorkerActivity()
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                while !Task.isCancelled {
-                    try await Task.sleep(for: .seconds(heartbeatIntervalSeconds))
-                    let state = try await controlClient.heartbeat(
-                        workerID: identity.workerID,
-                        request: OCRWorkerHeartbeatRequest(
-                            authenticationToken: identity.authenticationToken,
-                            runningJobs: await activity.count
-                        )
-                    )
-                    guard state.availability == .online || state.availability == .busy else {
-                        throw WorkerSessionError.noLongerAvailable
-                    }
-                }
-            }
-            let processor = OCRWorkerJobProcessor(
-                client: jobClient,
-                configuration: OCRWorkerContainerConfiguration(
-                    runtime: containerRuntime,
-                    image: containerImage,
-                    cpuLimitPerJob: capacity.cpuLimitPerJob,
-                    memory: memoryPerJob,
-                    workspaceRoot: URL(fileURLWithPath: workspace, isDirectory: true),
-                    directExecution: directOCR
-                )
+        let processor = OCRWorkerJobProcessor(
+            client: jobClient,
+            configuration: OCRWorkerContainerConfiguration(
+                runtime: containerRuntime,
+                image: containerImage,
+                cpuLimitPerJob: capacity.cpuLimitPerJob,
+                memory: memoryPerJob,
+                workspaceRoot: URL(fileURLWithPath: workspace, isDirectory: true),
+                directExecution: directOCR
             )
-            group.addTask {
-                try await runJobDispatcher(
-                    processor: processor,
-                    client: jobClient,
-                    identity: identity,
-                    activity: activity,
-                    maximumConcurrentJobs: capacity.maximumConcurrentJobs
-                )
-            }
-            defer { group.cancelAll() }
-            guard let _ = try await group.next() else {
-                throw WorkerSessionError.noLongerAvailable
-            }
-            throw WorkerSessionError.noLongerAvailable
-        }
-    }
-
-    private func runJobDispatcher(
-        processor: OCRWorkerJobProcessor,
-        client: OCRWorkerHTTPClient,
-        identity: WorkerIdentity,
-        activity: WorkerActivity,
-        maximumConcurrentJobs: Int
-    ) async throws {
-        try await withThrowingTaskGroup(of: WorkerJobEvent.self) { group in
-            var activeJobs = 0
-            var leaseRequestIsRunning = false
-            defer { group.cancelAll() }
-
-            while !Task.isCancelled {
-                if activeJobs < maximumConcurrentJobs, !leaseRequestIsRunning {
-                    leaseRequestIsRunning = true
-                    group.addTask {
-                        .lease(try await client.leaseNextJob(
-                            workerID: identity.workerID,
-                            request: OCRWorkerJobPollRequest(
-                                authenticationToken: identity.authenticationToken,
-                                waitSeconds: 20
-                            )
-                        ))
-                    }
-                }
-
-                guard let event = try await group.next() else {
-                    throw WorkerSessionError.noLongerAvailable
-                }
-                switch event {
-                case .lease(nil):
-                    leaseRequestIsRunning = false
-                case .lease(let lease?):
-                    leaseRequestIsRunning = false
-                    activeJobs += 1
-                    await activity.beginJob()
-                    group.addTask {
-                        await process(
-                            lease: lease,
-                            processor: processor,
-                            identity: identity,
-                            activity: activity
-                        )
-                        return .jobFinished
-                    }
-                case .jobFinished:
-                    activeJobs = max(0, activeJobs - 1)
-                }
-            }
-            throw CancellationError()
-        }
-    }
-
-    private func process(
-        lease: OCRWorkerJobLease,
-        processor: OCRWorkerJobProcessor,
-        identity: WorkerIdentity,
-        activity: WorkerActivity
-    ) async {
-        JLog.notice("Starting remote OCR job \(lease.manifest.jobID), attempt \(lease.attempt)")
-        do {
-            try await processor.process(
-                lease: lease,
-                workerID: identity.workerID,
-                authenticationToken: identity.authenticationToken
-            )
-            JLog.notice("Completed remote OCR job \(lease.manifest.jobID)")
-        } catch is CancellationError {
-            // Session shutdown cancels every in-flight page and its nested process.
-        } catch {
-            JLog.warning("Remote OCR job \(lease.manifest.jobID) failed: \(error.localizedDescription)")
-        }
-        await activity.finishJob()
+        )
+        try await OCRWorkerRuntimeModule(
+            registration: registration,
+            configuration: OCRWorkerRuntimeConfiguration(
+                maximumConcurrentJobs: capacity.maximumConcurrentJobs
+            ),
+            controlClient: controlClient,
+            jobClient: jobClient,
+            processor: processor
+        ).run()
     }
 
     private func resolveServerURL() async throws -> URL {
@@ -295,23 +151,6 @@ struct ScannerServerWorkerCommand: AsyncParsableCommand {
         #else
         throw ValidationError("Bonjour discovery is only available on Apple platforms; pass --server")
         #endif
-    }
-
-    private func log(_ availability: OCRWorkerAvailability) {
-        switch availability {
-        case .pendingApproval:
-            JLog.notice("Worker registered and is waiting for approval in scannerserver")
-        case .online:
-            JLog.notice("Worker is approved and online")
-        case .busy:
-            JLog.info("Worker is processing")
-        case .paused:
-            JLog.notice("Worker is paused in scannerserver")
-        case .offline:
-            JLog.warning("Worker is marked offline")
-        case .disabled:
-            JLog.notice("Worker is disabled in scannerserver")
-        }
     }
 
     private var architectureName: String {
