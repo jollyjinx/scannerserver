@@ -22,6 +22,7 @@ struct ScanSettingsTests {
         #expect(settings.mode(id: "photo-png")?.settings.format == "png")
         #expect(settings.mode(id: "photo-png")?.settings.ocrEnabled == false)
         #expect(settings.defaultMode.settings.cropMarginPoints == 1.0)
+        #expect(settings.blankPageSettings == .standard)
     }
 
     @Test("Built-in modes inherit environment defaults")
@@ -33,6 +34,9 @@ struct ScanSettingsTests {
             "SCAN_CROP_MARGIN_POINTS": "3.5",
             "SCAN_OCR_CPU_LIMIT": "4",
             "SCAN_OCR_NICE": "true",
+            "SCAN_BLANK_WHITE_THRESHOLD": "220",
+            "SCAN_BLANK_CONTENT_RATIO_THRESHOLD": "0.005",
+            "SCAN_BLANK_MEAN_THRESHOLD": "245.5",
         ])
 
         #expect(settings.defaultMode.settings.language == "fra+eng")
@@ -42,6 +46,11 @@ struct ScanSettingsTests {
         #expect(settings.defaultMode.settings.ocrCPULimit == nil)
         #expect(settings.defaultMode.settings.ocrNice)
         #expect(settings.mode(id: "photo-png")?.settings.resolution == "600")
+        #expect(settings.blankPageSettings == BlankPageSettings(
+            whiteThreshold: 220,
+            contentRatioThreshold: 0.005,
+            meanThreshold: 245.5
+        ))
     }
 
     @Test("Existing settings JSON normalizes duplicate IDs and invalid values")
@@ -86,6 +95,7 @@ struct ScanSettingsTests {
         #expect(settings.modes[0].settings.ocrEnabled)
         #expect(!settings.modes[0].settings.removeBlankPages)
         #expect(settings.modes[0].settings.cropMarginPoints == 1.0)
+        #expect(settings.blankPageSettings == .standard)
     }
 
     @Test("Save, update, delete, and default operations preserve IDs")
@@ -148,6 +158,11 @@ struct ScanSettingsTests {
         let store = ScanSettingsStore(fileURL: file, environment: [:])
         var settings = ScanSettings.defaults(environment: [:])
         _ = settings.setDefaultMode(id: "photo-png")
+        settings.blankPageSettings = BlankPageSettings(
+            whiteThreshold: 215,
+            contentRatioThreshold: 0.0045,
+            meanThreshold: 244.5
+        )
 
         let saved = try await store.save(settings)
         let loaded = try await store.load()
@@ -155,6 +170,8 @@ struct ScanSettingsTests {
 
         #expect(saved == loaded)
         #expect(text.contains(#""default_mode_id" : "photo-png""#))
+        #expect(text.contains(#""blank_page_settings""#))
+        #expect(text.contains(#""SCAN_BLANK_WHITE_THRESHOLD" : "215""#))
         #expect(!FileManager.default.fileExists(atPath: file.path + ".tmp"))
     }
 
@@ -170,6 +187,9 @@ struct ScanSettingsTests {
             "SCAN_LANGUAGE": "nld+eng",
             "SCAN_OCR_CPU_LIMIT": "4",
             "SCAN_OCR_NICE": "true",
+            "SCAN_BLANK_WHITE_THRESHOLD": "225",
+            "SCAN_BLANK_CONTENT_RATIO_THRESHOLD": "0.002",
+            "SCAN_BLANK_MEAN_THRESHOLD": "250",
         ]
         #expect(ScanSettingsStore.defaultFileURL(environment: environment) == file)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -183,6 +203,82 @@ struct ScanSettingsTests {
         #expect(loaded.defaultMode.settings.format == "png")
         #expect(loaded.defaultMode.settings.ocrCPULimit == nil)
         #expect(loaded.defaultMode.settings.ocrNice)
+        #expect(loaded.blankPageSettings == BlankPageSettings(
+            whiteThreshold: 225,
+            contentRatioThreshold: 0.002,
+            meanThreshold: 250
+        ))
+    }
+
+    @Test("Shared blank-page thresholds override process values for every trigger")
+    func sharedBlankPageEnvironment() {
+        let settings = ScanSettings(
+            blankPageSettings: BlankPageSettings(
+                whiteThreshold: 210,
+                contentRatioThreshold: 0.006,
+                meanThreshold: 242
+            ),
+            environment: [:]
+        )
+
+        for trigger in ["web", "pdf-import", "button"] {
+            let values = settings.environment(for: settings.defaultMode, trigger: trigger)
+            #expect(values["SCAN_TRIGGER"] == trigger)
+            #expect(values["SCAN_BLANK_WHITE_THRESHOLD"] == "210")
+            #expect(values["SCAN_BLANK_CONTENT_RATIO_THRESHOLD"] == "0.006")
+            #expect(values["SCAN_BLANK_MEAN_THRESHOLD"] == "242")
+        }
+    }
+
+    @Test("Blank-page settings accept compatible JSON and reject invalid form values")
+    func blankPageSettingsCompatibility() throws {
+        let decoded = try JSONDecoder().decode(BlankPageSettings.self, from: Data(#"""
+        {
+          "SCAN_BLANK_WHITE_THRESHOLD": 205,
+          "SCAN_BLANK_CONTENT_RATIO_THRESHOLD": "0.0075",
+          "SCAN_BLANK_MEAN_THRESHOLD": 241.5
+        }
+        """#.utf8))
+
+        #expect(decoded == BlankPageSettings(
+            whiteThreshold: 205,
+            contentRatioThreshold: 0.0075,
+            meanThreshold: 241.5
+        ))
+        #expect(BlankPageSettings(
+            validatingWhiteThreshold: 256,
+            contentRatioThreshold: 0.003,
+            meanThreshold: 248
+        ) == nil)
+        #expect(BlankPageSettings(
+            validatingWhiteThreshold: 230,
+            contentRatioThreshold: -0.01,
+            meanThreshold: 248
+        ) == nil)
+    }
+
+    @Test("Store updates shared blank-page thresholds without changing presets")
+    func saveBlankPageSettings() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScanSettingsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ScanSettingsStore(
+            fileURL: directory.appendingPathComponent("settings.json"),
+            environment: [:]
+        )
+        let original = try await store.load()
+        let blankPageSettings = BlankPageSettings(
+            whiteThreshold: 208,
+            contentRatioThreshold: 0.008,
+            meanThreshold: 239
+        )
+
+        try await store.saveBlankPageSettings(blankPageSettings)
+        let loaded = try await store.load()
+
+        #expect(loaded.blankPageSettings == blankPageSettings)
+        #expect(loaded.modes == original.modes)
+        #expect(loaded.defaultModeID == original.defaultModeID)
     }
 
     @Test("Concurrent store mutations preserve every mode update")

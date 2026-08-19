@@ -164,7 +164,8 @@ Preserve these unless the user explicitly authorizes a breaking change:
 - image name, host networking, ports `80` and `8080`, arbitrary non-root UID/GID operation, and the
   `/scans` volume;
 - documented environment variable names and Compose examples;
-- `/scans/.scanner-settings.json` and `/scans/.scannerserver-scanner.json` schemas;
+- `/scans/.scanner-settings.json` (presets, button default, and shared blank-page thresholds) and
+  `/scans/.scannerserver-scanner.json` schemas;
 - `YYYY-MM-DD.HHMMSS.pdf`, `.ocr.pdf`, single-page PDF, PNG, and `.previews` naming;
 - existing HTTP routes, form workflows, scan visibility, OCR cancellation, and file operations;
 - ScanSnap discovery, pairing, port, packet, retained-session, heartbeat, and recovery behavior.

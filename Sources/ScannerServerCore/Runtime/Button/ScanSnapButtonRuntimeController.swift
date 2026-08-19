@@ -126,6 +126,7 @@ public enum ScanSnapButtonRuntimeFactory {
         let dispatcher = ScanJobButtonScanDispatcher(
             scanJobs: scanJobs,
             scannerStore: scannerStore,
+            settingsStore: settingsStore,
             environment: environment
         )
         let heartbeat = ScanSnapButtonHeartbeatActor(

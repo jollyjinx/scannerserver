@@ -23,6 +23,15 @@ struct ScanSnapButtonScanDispatcherTests {
             scannerIP: "192.168.60.44",
             pairingKey: "active-key"
         ))
+        let settingsStore = ScanSettingsStore(
+            fileURL: directory.appendingPathComponent("settings.json"),
+            environment: environment
+        )
+        try await settingsStore.saveBlankPageSettings(BlankPageSettings(
+            whiteThreshold: 212,
+            contentRatioThreshold: 0.004,
+            meanThreshold: 243
+        ))
         let mode = ScanMode(
             id: "button-receipts",
             name: "Button Receipts",
@@ -39,6 +48,7 @@ struct ScanSnapButtonScanDispatcherTests {
         let dispatcher = ScanJobButtonScanDispatcher(
             scanJobs: scanJobs,
             scannerStore: scannerStore,
+            settingsStore: settingsStore,
             environment: environment
         )
         #expect(await dispatcher.startButtonScan(mode: mode))
@@ -57,6 +67,9 @@ struct ScanSnapButtonScanDispatcherTests {
         #expect(requestEnvironment["SCAN_FORMAT"] == "png")
         #expect(requestEnvironment["SCAN_OCR_ENABLED"] == "false")
         #expect(requestEnvironment["SCAN_CROP_MARGIN_POINTS"] == "2.5")
+        #expect(requestEnvironment["SCAN_BLANK_WHITE_THRESHOLD"] == "212")
+        #expect(requestEnvironment["SCAN_BLANK_CONTENT_RATIO_THRESHOLD"] == "0.004")
+        #expect(requestEnvironment["SCAN_BLANK_MEAN_THRESHOLD"] == "243")
         await executor.complete()
         await scanJobs.waitUntilIdle()
 

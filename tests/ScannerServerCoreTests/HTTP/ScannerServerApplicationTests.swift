@@ -52,6 +52,8 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("href=\"/presets\""))
                 #expect(body.contains("href=\"/workers\""))
                 #expect(body.contains("href=\"/settings\""))
+                #expect(body.contains(">Scan Settings</a>"))
+                #expect(body.contains(">Network Setup</a>"))
                 #expect(body.contains("fetch(`/updates?since=${revision}`"))
                 #expect(!body.contains("SCANNER_SERVER_REVISION"))
                 #expect(!body.contains("SCANNER_SERVER_VERSION"))
@@ -522,12 +524,12 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("Reachable</span>"))
                 #expect(summary.lowerBound < reachability.lowerBound)
                 #expect(reachability.lowerBound < summaryEnd.lowerBound)
-                #expect(!body.contains("Scanner setup"))
+                #expect(!body.contains("Network Setup</h2>"))
             }
 
             try await client.execute(uri: "/settings", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains("Scanner setup"))
+                #expect(body.contains("Network Setup</h2>"))
                 #expect(body.contains(#"data-scanner-setup data-configured="true""#))
                 #expect(body.contains(#"scannerSetup.dataset.configured !== "true""#))
                 #expect(body.contains("action=\"/setup/scanners/clear\""))
@@ -542,6 +544,66 @@ struct ScannerServerApplicationTests {
                 #expect(!body.contains("scanner-reachability reachable"))
                 #expect(summary.lowerBound < body.endIndex)
             }
+        }
+    }
+
+    @Test("Scan Settings edits blank-page thresholds shared by all presets")
+    func blankPageThresholdSettings() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/settings", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains("Network Setup"))
+                #expect(body.contains(#"<a href="/settings" aria-current="page">Network Setup</a>"#))
+                #expect(!body.contains("Blank-page detection"))
+            }
+            try await client.execute(uri: "/presets", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains(#"<a href="/presets" aria-current="page">Scan Settings</a>"#))
+                #expect(body.contains("Scan presets"))
+                #expect(body.contains("Blank-page detection"))
+                #expect(body.contains("shared by every preset"))
+                #expect(body.contains(#"action="/presets/blank-pages""#))
+                #expect(body.contains(#"name="SCAN_BLANK_WHITE_THRESHOLD" value="230""#))
+                #expect(body.contains(#"name="SCAN_BLANK_CONTENT_RATIO_THRESHOLD" value="0.003""#))
+                #expect(body.contains(#"name="SCAN_BLANK_MEAN_THRESHOLD" value="248""#))
+            }
+
+            let form = [
+                "SCAN_BLANK_WHITE_THRESHOLD=214",
+                "SCAN_BLANK_CONTENT_RATIO_THRESHOLD=0.0045",
+                "SCAN_BLANK_MEAN_THRESHOLD=242.5",
+            ].joined(separator: "&")
+            try await postForm(client, uri: "/presets/blank-pages", body: form) { response in
+                expectRedirect(response, to: "/presets?blank_pages=saved")
+            }
+            #expect(try await fixture.settingsStore.load().blankPageSettings == BlankPageSettings(
+                whiteThreshold: 214,
+                contentRatioThreshold: 0.0045,
+                meanThreshold: 242.5
+            ))
+
+            try await client.execute(uri: "/presets?blank_pages=saved", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(body.contains("Blank-page thresholds saved."))
+                #expect(body.contains(#"name="SCAN_BLANK_WHITE_THRESHOLD" value="214""#))
+                #expect(body.contains(#"name="SCAN_BLANK_CONTENT_RATIO_THRESHOLD" value="0.0045""#))
+                #expect(body.contains(#"name="SCAN_BLANK_MEAN_THRESHOLD" value="242.5""#))
+            }
+
+            try await postForm(
+                client,
+                uri: "/presets/blank-pages",
+                body: "SCAN_BLANK_WHITE_THRESHOLD=256&SCAN_BLANK_CONTENT_RATIO_THRESHOLD=0.0045&SCAN_BLANK_MEAN_THRESHOLD=242.5"
+            ) { response in
+                #expect(response.status == .badRequest)
+            }
+            #expect(try await fixture.settingsStore.load().blankPageSettings.whiteThreshold == 214)
         }
     }
 
@@ -639,6 +701,11 @@ struct ScannerServerApplicationTests {
             executor: executor
         )
         defer { fixture.remove() }
+        try await fixture.settingsStore.saveBlankPageSettings(BlankPageSettings(
+            whiteThreshold: 211,
+            contentRatioThreshold: 0.005,
+            meanThreshold: 241
+        ))
         let application = try fixture.application()
 
         try await application.test(.router) { client in
@@ -667,6 +734,9 @@ struct ScannerServerApplicationTests {
             #expect(requests.first?.environment?["SCAN_PROFILE_ID"] == "photo-png")
             #expect(requests.first?.environment?["SCAN_TRIGGER"] == "web")
             #expect(requests.first?.environment?["SCAN_FORMAT"] == "png")
+            #expect(requests.first?.environment?["SCAN_BLANK_WHITE_THRESHOLD"] == "211")
+            #expect(requests.first?.environment?["SCAN_BLANK_CONTENT_RATIO_THRESHOLD"] == "0.005")
+            #expect(requests.first?.environment?["SCAN_BLANK_MEAN_THRESHOLD"] == "241")
         }
         await fixture.scanJobs.cancel()
     }
@@ -715,7 +785,7 @@ struct ScannerServerApplicationTests {
             }
             try await client.execute(uri: "/", method: .get) { response in
                 let body = String(buffer: response.body)
-                #expect(body.contains("Open scanner settings"))
+                #expect(body.contains("Open network setup"))
                 #expect(!body.contains("action=\"/scan\""))
             }
             try await client.execute(uri: "/settings", method: .get) { response in

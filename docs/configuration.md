@@ -83,7 +83,7 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with default 
 - `Duplex PDF`
 - `Single Page PDFs + OCR`
 
-Use **Presets** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button. The **Scanner** page only selects a preset and starts a scan; **Settings** contains scanner connection management.
+Use **Scan Settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button and to configure blank-page detection thresholds shared by every preset. The **Scanner** page only selects a preset and starts a scan. **Network Setup** contains scanner connection management.
 
 With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the background CPU limit and post-scan process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers a **Processing CPUs** dropdown: **Automatic** uses the container-aware background allowance, while a number lowers the limit for that mode. **Post-scan priority** selects normal or reduced (`nice`) priority for every external tool launched by background processing. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
 
@@ -94,7 +94,7 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `TZ` | `Europe/Berlin` | Local IANA time zone used for scan filenames, file grouping, and status timestamps |
 | `SCAN_OUTPUT_DIR` | `/scans` | Output directory inside the container |
 | `TMPDIR` | `<SCAN_OUTPUT_DIR>/.ocr-tmp` | Writable temporary directory created at startup and used by OCRmyPDF, Ghostscript, Tesseract, and other document tools |
-| `SCAN_SETTINGS_PATH` | `/scans/.scanner-settings.json` | Saved scan modes and button-default mode |
+| `SCAN_SETTINGS_PATH` | `/scans/.scanner-settings.json` | Saved scan modes, button-default mode, and shared blank-page thresholds |
 | `SCANNER_CONFIG_PATH` | `/scans/.scannerserver-scanner.json` | Saved Wi-Fi scanner IP and derived pairing identity |
 | `SCAN_BACKEND` | `wifi` | `wifi` for iX500 Wi-Fi protocol, `sane` for SANE fallback |
 | `SCAN_LANGUAGE` | `deu+eng` | OCR languages passed to OCRmyPDF/Tesseract |
@@ -119,6 +119,10 @@ With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion
 | `SCANNERSERVER_BONJOUR_URL` | derived HTTP URL | Complete LAN-reachable HTTP(S) URL placed in the Bonjour TXT record |
 | `SCAN_CROP_PAGES` | `true` | Crop PDF pages to the detected paper or content bounds in background processing |
 | `SCAN_CROP_MARGIN_POINTS` | `1` | Extra margin around content-classified autocrops, in PDF points (1 point = 1/72 inch) |
+| `SCAN_REMOVE_BLANK_PAGES` | `true` | Per-preset switch for discarding pages detected as blank |
+| `SCAN_BLANK_WHITE_THRESHOLD` | `230` | Initial shared grayscale value at or above which a pixel counts as white (0–255) |
+| `SCAN_BLANK_CONTENT_RATIO_THRESHOLD` | `0.003` | Initial shared maximum fraction of non-white pixels allowed on a blank page (0–1) |
+| `SCAN_BLANK_MEAN_THRESHOLD` | `248` | Initial shared minimum average grayscale brightness for a blank page (0–255) |
 | `SCANNER_IP` | empty | Optional scanner IP override; web setup can persist this instead |
 | `SCANSNAP_PAIRING_KEY` | empty | Optional pairing identity override; web setup can derive and persist this instead |
 | `SCANSNAP_CLIENT_IP` | empty | Optional client IP override for macvlan/static-IP deployments |
@@ -214,7 +218,14 @@ and `/health` remains available while the scan directory is inaccessible.
 Blank-page removal is enabled by default for PDF scans. Analysis ignores the outer three percent
 of the embedded page image so the scanner border and edge shadows are not mistaken for content.
 
-Useful settings:
+Use **Scan Settings → Blank-page detection** to tune the white, content-ratio, and mean-brightness
+thresholds. These values are stored once in `.scanner-settings.json` and are shared by web scans,
+PDF imports, physical-button scans, and every preset. The **Remove blanks** switch remains separate
+for each preset, so a preset can opt out without changing the shared detector calibration.
+
+The threshold environment variables below seed the shared values when the settings file or its
+`blank_page_settings` object does not yet exist. `SCAN_REMOVE_BLANK_PAGES` similarly seeds the
+per-preset switch. Once saved on the website, the persisted values take precedence:
 
 ```yaml
 environment:

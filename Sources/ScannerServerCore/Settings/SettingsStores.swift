@@ -80,6 +80,16 @@ public actor ScanSettingsStore {
     }
 
     @discardableResult
+    public func saveBlankPageSettings(
+        _ blankPageSettings: BlankPageSettings
+    ) throws -> BlankPageSettings {
+        var settings = try load()
+        settings.blankPageSettings = blankPageSettings
+        try write(settings.normalized(environment: environment))
+        return blankPageSettings
+    }
+
+    @discardableResult
     public func deleteMode(id: String?) throws -> Bool {
         guard let id else { return false }
         var settings = try load()

@@ -36,9 +36,9 @@ The web page header shows the running release version. Published images derive i
 commit date in `YYYY.MM.DD.HHMMSS` format; `/version` returns the same value for scripts and
 deployment checks.
 
-On first start, open **Settings** to set up the scanner. Discovery keeps running in the background while the manual fields remain usable. When exactly one ScanSnap is found, setup automatically derives and tests its factory-default password from the scanner serial number. Multiple scanners are listed for manual selection.
+On first start, open **Network Setup** to set up the scanner. Discovery keeps running in the background while the manual fields remain usable. When exactly one ScanSnap is found, setup automatically derives and tests its factory-default password from the scanner serial number. Multiple scanners are listed for manual selection.
 
-The web UI separates everyday scanning from management: **Scanner** starts scans and shows live activity, **Documents** contains completed output and accepts PDF drag-and-drop imports for OCR, **Presets** manages scan and processing options, and **Settings** manages the scanner connection.
+The web UI separates everyday scanning from management: **Scanner** starts scans and shows live activity, **Documents** contains completed output and accepts PDF drag-and-drop imports for OCR, **Scan Settings** manages presets and blank-page detection thresholds shared by every preset, and **Network Setup** manages the scanner connection.
 
 After setup, scan either way:
 

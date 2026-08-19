@@ -524,7 +524,9 @@ public enum ScannerServerApplication {
             }
 
             var environment = dependencies.environment
-            environment.merge(mode.environment(trigger: "pdf-import")) { _, selected in selected }
+            environment.merge(settings.environment(for: mode, trigger: "pdf-import")) {
+                _, selected in selected
+            }
             environment["SCAN_FORMAT"] = "pdf"
             environment["SCAN_PAGE_MODE"] = "multi"
             environment["SCAN_OCR_ENABLED"] = "true"
@@ -614,7 +616,7 @@ public enum ScannerServerApplication {
             environment.merge(setup.scannerEnvironment) { _, configured in configured }
             let configuration = ScanPipelineConfiguration(
                 environment: environment,
-                modeOverrides: mode.environment(trigger: "web")
+                modeOverrides: settings.environment(for: mode, trigger: "web")
             )
             _ = await dependencies.scanJobs.start(configuration: configuration)
             return .redirect(to: "/")
@@ -939,6 +941,23 @@ public enum ScannerServerApplication {
             return .redirect(to: "/presets")
         }
 
+        router.post("/presets/blank-pages") { request, context -> Response in
+            let form = try await decodeForm(
+                BlankPageSettingsForm.self,
+                request: request,
+                context: context
+            )
+            guard let blankPageSettings = form.blankPageSettings else {
+                return textResponse(
+                    "Invalid blank-page thresholds.\n",
+                    status: .badRequest
+                )
+            }
+            try await dependencies.settingsStore.saveBlankPageSettings(blankPageSettings)
+            await dependencies.webUpdates.notify()
+            return .redirect(to: "/presets?blank_pages=saved")
+        }
+
         router.post("/setup/scanners/discover") { _, _ -> Response in
             redirect(setup: await dependencies.scannerSetup.discover(), to: "/settings")
         }
@@ -1087,6 +1106,32 @@ private struct ModeSaveForm: Decodable {
             "SCAN_CROP_MARGIN_POINTS": cropMarginPoints ?? "",
             "SCAN_OCR_ONLY": ocrOnly == nil ? "false" : "true",
         ])
+    }
+}
+
+private struct BlankPageSettingsForm: Decodable {
+    let whiteThreshold: String?
+    let contentRatioThreshold: String?
+    let meanThreshold: String?
+
+    enum CodingKeys: String, CodingKey {
+        case whiteThreshold = "SCAN_BLANK_WHITE_THRESHOLD"
+        case contentRatioThreshold = "SCAN_BLANK_CONTENT_RATIO_THRESHOLD"
+        case meanThreshold = "SCAN_BLANK_MEAN_THRESHOLD"
+    }
+
+    var blankPageSettings: BlankPageSettings? {
+        guard let whiteThreshold = whiteThreshold.flatMap(Int.init),
+              let contentRatioThreshold = contentRatioThreshold.flatMap(Double.init),
+              let meanThreshold = meanThreshold.flatMap(Double.init)
+        else {
+            return nil
+        }
+        return BlankPageSettings(
+            validatingWhiteThreshold: whiteThreshold,
+            contentRatioThreshold: contentRatioThreshold,
+            meanThreshold: meanThreshold
+        )
     }
 }
 
@@ -1389,7 +1434,13 @@ private enum ScannerServerPage: String, CaseIterable {
         }
     }
 
-    var label: String { rawValue.capitalized }
+    var label: String {
+        switch self {
+        case .presets: "Scan Settings"
+        case .settings: "Network Setup"
+        default: rawValue.capitalized
+        }
+    }
 }
 
 private func webPageResponse(
@@ -1463,6 +1514,7 @@ private func indexResponse(
         settings: settings,
         editModeID: query["edit_mode"],
         setupMessageCode: query["setup"],
+        blankPageMessageCode: query["blank_pages"],
         setup: setup,
         scannerIsReachable: scannerIsReachable,
         wifiBackend: wifiBackend,
@@ -1507,6 +1559,7 @@ private func renderIndexContent(
     settings: ScanSettings,
     editModeID: String?,
     setupMessageCode: String?,
+    blankPageMessageCode: String?,
     setup: ScannerSetupState,
     scannerIsReachable: Bool,
     wifiBackend: Bool,
@@ -1529,6 +1582,9 @@ private func renderIndexContent(
     if let message = setupMessage(setupMessageCode) {
         html += "<p class=\"notice\">\(htmlEscape(message))</p>"
     }
+    if page == .presets && blankPageMessageCode == "saved" {
+        html += "<p class=\"notice\">Blank-page thresholds saved.</p>"
+    }
     if wifiBackend && setup.configured {
         html += renderScannerReachabilitySummary(
             setup,
@@ -1544,11 +1600,12 @@ private func renderIndexContent(
             html += "<section class=\"empty-state\"><p class=\"eyebrow\">Setup required</p>"
             html += "<h2>Connect a scanner before your first scan</h2>"
             html += "<p class=\"muted\">Scanner discovery and connection are managed separately from everyday scanning.</p>"
-            html += "<a class=\"button-link\" href=\"/settings\">Open scanner settings</a></section>"
+            html += "<a class=\"button-link\" href=\"/settings\">Open network setup</a></section>"
         }
     case .documents:
         html += renderFiles(groups, settings: settings)
     case .presets:
+        html += renderBlankPageSettings(settings.blankPageSettings)
         html += renderModes(
             settings: settings,
             selectedMode: selectedMode,
@@ -1566,7 +1623,7 @@ private func renderIndexContent(
         if wifiBackend {
             html += renderScannerSetup(setup)
         } else {
-            html += "<section><p class=\"eyebrow\">Scanner settings</p><h2>Scanner connection</h2>"
+            html += "<section><p class=\"eyebrow\">Network Setup</p><h2>Scanner connection</h2>"
             html += "<p>This server uses the <strong>sane</strong> scan backend. Its connection is configured outside the web interface.</p></section>"
         }
     }
@@ -1960,7 +2017,7 @@ private func renderScannerSetup(_ setup: ScannerSetupState) -> String {
 }
 
 private func renderScannerSetupContent(_ setup: ScannerSetupState) -> String {
-    var html = "<h2>Scanner setup</h2>"
+    var html = "<h2>Network Setup</h2>"
     if setup.configured {
         html += "<p><strong>\(htmlEscape(setup.name))</strong> <span class=\"status\">configured</span></p>"
         html += "<p class=\"muted\">IP \(htmlEscape(setup.ipAddress))"
@@ -2001,13 +2058,51 @@ private func renderScannerDevices(_ devices: [ScannerSetupDevice]) -> String {
     return html
 }
 
+private func renderBlankPageSettings(_ settings: BlankPageSettings) -> String {
+    var html = "<section class=\"blank-page-settings\"><div class=\"section-heading\"><div>"
+    html += "<p class=\"eyebrow\">Document processing</p><h2>Blank-page detection</h2>"
+    html += "<p class=\"muted\">These thresholds are shared by every preset. Each preset separately controls whether blank-page removal is enabled.</p>"
+    html += "</div></div><form method=\"post\" action=\"/presets/blank-pages\">"
+    html += "<div class=\"settings-grid settings-grid-three\">"
+    html += numberInput(
+        name: "SCAN_BLANK_WHITE_THRESHOLD",
+        label: "White threshold",
+        value: String(settings.whiteThreshold),
+        minimum: "0",
+        maximum: "255",
+        step: "1",
+        help: "Pixels at or above this grayscale value count as white (0–255)."
+    )
+    html += numberInput(
+        name: "SCAN_BLANK_CONTENT_RATIO_THRESHOLD",
+        label: "Content ratio threshold",
+        value: settings.contentRatioThresholdText,
+        minimum: "0",
+        maximum: "1",
+        step: "0.0001",
+        help: "Maximum fraction of non-white pixels allowed on a blank page (0–1)."
+    )
+    html += numberInput(
+        name: "SCAN_BLANK_MEAN_THRESHOLD",
+        label: "Mean brightness threshold",
+        value: settings.meanThresholdText,
+        minimum: "0",
+        maximum: "255",
+        step: "0.1",
+        help: "Minimum average grayscale brightness required for a blank page (0–255)."
+    )
+    html += "</div><div class=\"button-row\"><button>Save blank-page thresholds</button></div>"
+    html += "</form></section>"
+    return html
+}
+
 private func renderModes(
     settings: ScanSettings,
     selectedMode: ScanMode,
     maximumOCRCPUs: Int
 ) -> String {
     var html = "<section class=\"preset-workspace\"><div class=\"section-heading\"><div>"
-    html += "<p class=\"eyebrow\">Reusable configurations</p><h2>Presets</h2>"
+    html += "<p class=\"eyebrow\">Reusable configurations</p><h2>Scan presets</h2>"
     html += "<p class=\"muted\">Create scan configurations and choose the preset used by the scanner's physical button.</p>"
     html += "</div><a class=\"button-link secondary-link\" href=\"/presets?edit_mode=new\">New preset</a></div>"
     html += "<div class=\"preset-layout\"><aside class=\"preset-sidebar\" aria-label=\"Saved presets\"><h3>Saved presets</h3><ul class=\"mode-list\">"
@@ -2308,12 +2403,14 @@ private func numberInput(
     label: String,
     value: String,
     minimum: String,
+    maximum: String? = nil,
     step: String,
     help: String
 ) -> String {
-    "<label>\(htmlEscape(label))<input type=\"number\" name=\"\(htmlEscape(name))\" "
+    let maximumAttribute = maximum.map { " max=\"\(htmlEscape($0))\"" } ?? ""
+    return "<label>\(htmlEscape(label))<input type=\"number\" name=\"\(htmlEscape(name))\" "
         + "value=\"\(htmlEscape(value))\" min=\"\(htmlEscape(minimum))\" "
-        + "step=\"\(htmlEscape(step))\">\(settingHelp(help))</label>"
+        + "step=\"\(htmlEscape(step))\"\(maximumAttribute)>\(settingHelp(help))</label>"
 }
 
 private func select(

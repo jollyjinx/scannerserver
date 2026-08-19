@@ -31,11 +31,13 @@ public struct ScanSettings: Codable, Equatable, Sendable {
     public var version: Int
     public var defaultModeID: String
     public var modes: [ScanMode]
+    public var blankPageSettings: BlankPageSettings
 
     public init(
         version: Int = 1,
         defaultModeID: String = "",
         modes: [ScanMode] = [],
+        blankPageSettings: BlankPageSettings? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         let base = ModeSettings(environment: environment)
@@ -60,6 +62,7 @@ public struct ScanSettings: Codable, Equatable, Sendable {
 
         self.version = 1
         self.modes = normalizedModes
+        self.blankPageSettings = blankPageSettings ?? BlankPageSettings(environment: environment)
         let requestedDefault = defaultModeID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.defaultModeID = normalizedModes.contains { $0.id == requestedDefault }
             ? requestedDefault
@@ -128,6 +131,12 @@ public struct ScanSettings: Codable, Equatable, Sendable {
         modes.first { $0.id == id }
     }
 
+    public func environment(for mode: ScanMode, trigger: String) -> [String: String] {
+        var values = mode.environment(trigger: trigger)
+        values.merge(blankPageSettings.environment) { _, shared in shared }
+        return values
+    }
+
     @discardableResult
     public mutating func setDefaultMode(id: String) -> Bool {
         guard mode(id: id) != nil else { return false }
@@ -174,7 +183,13 @@ public struct ScanSettings: Codable, Equatable, Sendable {
     public func normalized(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ScanSettings {
-        ScanSettings(version: version, defaultModeID: defaultModeID, modes: modes, environment: environment)
+        ScanSettings(
+            version: version,
+            defaultModeID: defaultModeID,
+            modes: modes,
+            blankPageSettings: blankPageSettings,
+            environment: environment
+        )
     }
 
     public static func slugifyModeName(_ name: String) -> String {
@@ -221,13 +236,24 @@ public struct ScanSettings: Codable, Equatable, Sendable {
         let version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
         let defaultModeID = try container.decodeIfPresent(String.self, forKey: .defaultModeID) ?? ""
         let modes = try container.decodeIfPresent([ScanMode].self, forKey: .modes) ?? []
+        let blankPageSettings = try container.decodeIfPresent(
+            BlankPageSettings.self,
+            forKey: .blankPageSettings
+        )
         let environment = decoder.userInfo[SettingsCoding.environmentUserInfoKey] as? [String: String] ?? [:]
-        self.init(version: version, defaultModeID: defaultModeID, modes: modes, environment: environment)
+        self.init(
+            version: version,
+            defaultModeID: defaultModeID,
+            modes: modes,
+            blankPageSettings: blankPageSettings,
+            environment: environment
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
         case version
         case defaultModeID = "default_mode_id"
         case modes
+        case blankPageSettings = "blank_page_settings"
     }
 }
