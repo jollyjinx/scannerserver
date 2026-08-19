@@ -116,6 +116,13 @@ persisted stores, reachability, and physical-button session state.
   transfer digest-verified PDFs. Optional manifest metadata identifies the user-facing document,
   streaming batch, page number, and requested operations without breaking persisted jobs from the
   original protocol shape.
+- `OCRWorkerJobTransferCoordinator` is the deep boundary between those HTTP routes and the worker
+  registry/job store actors. It combines worker authentication with capability- and capacity-aware
+  long-poll leasing, confines source and result paths to the scan directory, verifies source bytes,
+  and owns result staging, validation, atomic publication, and rollback when a lease is cancelled or
+  replaced across an asynchronous validation step. The coordinator has no mutable state of its own,
+  so independent transfers stay concurrent while durable transitions remain serialized by
+  `OCRWorkerJobStore`.
 - `DistributedOCRProcessExecutor` wraps the `ocrmypdf` process boundary and carries an optional
   typed per-page crop configuration. Approved, enabled, language- and capability-compatible worker
   registrations get first refusal even across a temporary heartbeat outage; assignment timeout or

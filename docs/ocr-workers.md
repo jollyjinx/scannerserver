@@ -31,6 +31,11 @@ do not need a fixed address or an inbound firewall rule.
   renewal, authenticated terminal transitions, and cancellation. Nonterminal manifests are
   cancelled at scannerserver startup because their owning in-memory queue tasks do not survive a
   restart; this prevents abandoned pages from being leased again.
+- `OCRWorkerJobTransferCoordinator` keeps the HTTP layer out of lease and file-publication policy.
+  It combines registry authorization with leasing, source path and digest checks, renewal and
+  failure transitions, and validated result staging. If cancellation or reassignment changes a
+  lease while a result is being validated, the coordinator removes any just-published result and
+  preserves the newer durable job state.
 - `OCRQueueActor` gives approved, enabled, compatible workers first refusal on streaming OCR jobs,
   including when a registered worker is temporarily offline. Capability-aware workers run OCR,
   configured autocrop, and blank-page filtering on each page. Scan acquisition, the all-blank
