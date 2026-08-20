@@ -1,12 +1,17 @@
 import Foundation
 
+public enum OCRJobExecutionLocation: String, Equatable, Sendable {
+    case local
+    case remote
+}
+
 public struct OCRJobTiming: Equatable, Sendable {
     public let input: String
     public let output: String
     public let status: String
     public let duration: TimeInterval
     public let metadata: OCRWorkerJobMetadata?
-    public let executionLocation: ProcessExecutionLocation?
+    public let executionLocation: OCRJobExecutionLocation?
 
     public init(
         input: String,
@@ -14,7 +19,7 @@ public struct OCRJobTiming: Equatable, Sendable {
         status: String,
         duration: TimeInterval,
         metadata: OCRWorkerJobMetadata? = nil,
-        executionLocation: ProcessExecutionLocation? = nil
+        executionLocation: OCRJobExecutionLocation? = nil
     ) {
         self.input = input
         self.output = output
@@ -181,8 +186,8 @@ public actor OCRQueueActor {
         let job: Job
         let started: Date
         let reservedCPUs: Int
-        let localReservationCPUs: Int
-        let executionPreference: OCRExecutionPreference
+        var localReservationCPUs: Int
+        let executionPreference: OCRDispatchPreference
         let task: Task<Void, Never>
     }
 
@@ -190,7 +195,7 @@ public actor OCRQueueActor {
         let index: Int
         let reservedCPUs: Int
         let localReservationCPUs: Int
-        let executionPreference: OCRExecutionPreference
+        let executionPreference: OCRDispatchPreference
     }
 
     private struct JobCompletion: Sendable {
@@ -200,7 +205,7 @@ public actor OCRQueueActor {
         let error: String
         let publishedOutputPath: String
         let followUpJobs: [Job]
-        let executionLocation: ProcessExecutionLocation?
+        let executionLocation: OCRJobExecutionLocation?
         let rawPageFallbackRequested: Bool
         let cancellableOutputPath: String?
 
@@ -211,7 +216,7 @@ public actor OCRQueueActor {
             error: String,
             publishedOutputPath: String,
             followUpJobs: [Job] = [],
-            executionLocation: ProcessExecutionLocation? = nil,
+            executionLocation: OCRJobExecutionLocation? = nil,
             rawPageFallbackRequested: Bool = false,
             cancellableOutputPath: String? = nil
         ) {
@@ -241,7 +246,40 @@ public actor OCRQueueActor {
         }
     }
 
-    private let executor: any ProcessExecutor
+    private struct JobExecutionResult: Sendable {
+        let exitStatus: Int32
+        let standardOutput: String
+        let standardError: String
+        let executionLocation: OCRJobExecutionLocation?
+
+        var succeeded: Bool { exitStatus == 0 }
+
+        init(_ result: ProcessResult) {
+            exitStatus = result.exitStatus
+            standardOutput = result.standardOutput
+            standardError = result.standardError
+            executionLocation = nil
+        }
+
+        init(_ result: OCRExecutionResult) {
+            exitStatus = result.exitStatus
+            standardOutput = result.standardOutput
+            standardError = result.standardError
+            executionLocation = switch result.location {
+            case .local: .local
+            case .remote: .remote
+            }
+        }
+
+        init(exitStatus: Int32, standardOutput: String = "", standardError: String = "") {
+            self.exitStatus = exitStatus
+            self.standardOutput = standardOutput
+            self.standardError = standardError
+            executionLocation = nil
+        }
+    }
+
+    private let ocrExecutor: any OCRExecuting
     private let documentExecutor: any ProcessExecutor
     private let streamingDocuments: StreamingOCRDocumentModule
     private let workspaceSuffixProvider: WorkspaceSuffixProvider
@@ -259,8 +297,8 @@ public actor OCRQueueActor {
     private var latestCompletionStatus: String?
     private var queueState: OCRQueueState
 
-    public init(
-        executor: any ProcessExecutor,
+    package init(
+        ocrExecutor: any OCRExecuting,
         documentExecutor: (any ProcessExecutor)? = nil,
         streamingPageWriter: any StreamingPagePDFWriting = ScanSnapPDFWriter(),
         workspaceSuffixProvider: @escaping WorkspaceSuffixProvider = { UUID().uuidString },
@@ -271,8 +309,9 @@ public actor OCRQueueActor {
         },
         webUpdates: WebUpdateNotifier = WebUpdateNotifier()
     ) {
-        self.executor = executor
-        let resolvedDocumentExecutor = documentExecutor ?? NativeDocumentToolExecutor(executor: executor)
+        self.ocrExecutor = ocrExecutor
+        let resolvedDocumentExecutor = documentExecutor
+            ?? NativeDocumentToolExecutor(executor: FoundationProcessExecutor())
         self.documentExecutor = resolvedDocumentExecutor
         self.streamingDocuments = StreamingOCRDocumentModule(
             documentExecutor: resolvedDocumentExecutor,
@@ -582,13 +621,14 @@ public actor OCRQueueActor {
         job: Job,
         reservedCPUs: Int,
         localReservationCPUs: Int,
-        executionPreference: OCRExecutionPreference
+        executionPreference: OCRDispatchPreference
     ) {
         let identifier = UUID()
         let started = Date()
         let task = Task { [weak self] in
             guard let self else { return }
             let completion = await self.run(
+                identifier: identifier,
                 job: job,
                 jobs: reservedCPUs,
                 executionPreference: executionPreference
@@ -612,9 +652,10 @@ public actor OCRQueueActor {
     }
 
     private func run(
+        identifier: UUID,
         job: Job,
         jobs: Int,
-        executionPreference: OCRExecutionPreference
+        executionPreference: OCRDispatchPreference
     ) async -> JobCompletion {
         if let deferredProcessing = job.deferredProcessing {
             return await runDeferredProcessing(
@@ -664,6 +705,7 @@ public actor OCRQueueActor {
 
         do {
             let result = try await execute(
+                identifier: identifier,
                 job: job,
                 outputPath: outputPath,
                 jobs: jobs,
@@ -819,7 +861,7 @@ public actor OCRQueueActor {
                     canUseDistributedCapacity($0.job)
                 }
                 let activeRemoteJobs = activeDistributedJobs.filter {
-                    $0.executionPreference == .automatic
+                    $0.executionPreference == .remoteFirst
                 }
                 let activeRemoteBatchJobs = activeRemoteJobs.filter {
                     $0.job.batchID == job.batchID
@@ -830,13 +872,13 @@ public actor OCRQueueActor {
                         index: index,
                         reservedCPUs: reservedCPUs,
                         localReservationCPUs: 0,
-                        executionPreference: .automatic
+                        executionPreference: .remoteFirst
                     )
                 }
 
                 let localLimit = workerCapacity.internalOCREnabled ? cpuLimit(for: job) : 0
                 let activeLocalJobs = activeDistributedJobs.filter {
-                    $0.executionPreference == .localOnly
+                    $0.executionPreference == .reservedInternal
                 }
                 let activeLocalBatchJobs = activeLocalJobs.filter {
                     $0.job.batchID == job.batchID
@@ -847,7 +889,7 @@ public actor OCRQueueActor {
                         index: index,
                         reservedCPUs: reservedCPUs,
                         localReservationCPUs: 0,
-                        executionPreference: .localOnly
+                        executionPreference: .reservedInternal
                     )
                 }
                 continue
@@ -867,7 +909,7 @@ public actor OCRQueueActor {
                 index: index,
                 reservedCPUs: reservedCPUs,
                 localReservationCPUs: localReservation,
-                executionPreference: .automatic
+                executionPreference: .remoteFirst
             )
         }
         return nil
@@ -967,11 +1009,12 @@ public actor OCRQueueActor {
     }
 
     private func execute(
+        identifier: UUID,
         job: Job,
         outputPath: String,
         jobs: Int,
-        executionPreference: OCRExecutionPreference
-    ) async throws -> ProcessResult {
+        executionPreference: OCRDispatchPreference
+    ) async throws -> JobExecutionResult {
         if job.streamingPageWork != nil {
             return try await executeStreamingPage(
                 job: job,
@@ -982,18 +1025,16 @@ public actor OCRQueueActor {
         }
         guard job.removeBlankPages || job.cropPages else {
             guard job.ocrEnabled else {
-                return ProcessResult(exitStatus: 0, standardOutput: job.inputPath + "\n")
+                return JobExecutionResult(exitStatus: 0, standardOutput: job.inputPath + "\n")
             }
-            return try await executor.execute(ScanPipelineCommands.ocr(
-                inputPath: job.inputPath,
-                outputPath: outputPath,
-                environment: job.environment,
-                workingDirectory: job.workingDirectory,
+            await transferLocalReservationToOCR(identifier: identifier)
+            return JobExecutionResult(try await ocrExecutor.execute(ocrRequest(
+                job: job,
+                inputURL: URL(fileURLWithPath: job.inputPath),
+                outputURL: URL(fileURLWithPath: outputPath),
                 jobs: jobs,
-                niceLevel: configuration.niceLevel(for: job.environment),
-                workerMetadata: workerMetadata(for: job),
                 executionPreference: executionPreference
-            ))
+            )))
         }
 
         let suffix = workspaceSuffixProvider()
@@ -1021,7 +1062,7 @@ public actor OCRQueueActor {
                     workingDirectory: workspace
                 )
             )
-            guard result.succeeded else { return result }
+            guard result.succeeded else { return JobExecutionResult(result) }
         }
         if job.cropPages {
             let result = try await documentExecutor.execute(
@@ -1030,20 +1071,19 @@ public actor OCRQueueActor {
                     workingDirectory: workspace
                 )
             )
-            guard result.succeeded else { return result }
+            guard result.succeeded else { return JobExecutionResult(result) }
         }
 
         if job.ocrEnabled {
-            return try await executor.execute(ScanPipelineCommands.ocr(
-                inputPath: stagedInput.path,
-                outputPath: outputPath,
-                environment: job.environment,
-                workingDirectory: workspace,
+            await transferLocalReservationToOCR(identifier: identifier)
+            return JobExecutionResult(try await ocrExecutor.execute(ocrRequest(
+                job: job,
+                inputURL: stagedInput,
+                outputURL: URL(fileURLWithPath: outputPath),
                 jobs: jobs,
-                niceLevel: configuration.niceLevel(for: job.environment),
-                workerMetadata: workerMetadata(for: job),
-                executionPreference: executionPreference
-            ))
+                executionPreference: executionPreference,
+                workingDirectory: workspace
+            )))
         }
 
         try Task.checkCancellation()
@@ -1051,15 +1091,25 @@ public actor OCRQueueActor {
             at: inputURL,
             with: stagedInput
         )
-        return ProcessResult(exitStatus: 0, standardOutput: outputPath + "\n")
+        return JobExecutionResult(exitStatus: 0, standardOutput: outputPath + "\n")
+    }
+
+    private func transferLocalReservationToOCR(identifier: UUID) async {
+        guard var activeJob = activeJobs[identifier], activeJob.localReservationCPUs > 0 else {
+            return
+        }
+        let reservation = activeJob.localReservationCPUs
+        activeJob.localReservationCPUs = 0
+        activeJobs[identifier] = activeJob
+        await localCapacity.release(reservation)
     }
 
     private func executeStreamingPage(
         job: Job,
         outputPath: String,
         jobs: Int,
-        executionPreference: OCRExecutionPreference
-    ) async throws -> ProcessResult {
+        executionPreference: OCRDispatchPreference
+    ) async throws -> JobExecutionResult {
         let environment = job.environment ?? [:]
         let cropConfiguration = job.cropPages
             ? OCRWorkerCropConfiguration(
@@ -1073,42 +1123,41 @@ public actor OCRQueueActor {
                     .removeBlankPagesRequest(pdfPath: outputPath)
             )
             : nil
-        let result = try await executor.execute(ScanPipelineCommands.ocr(
-            inputPath: job.inputPath,
-            outputPath: outputPath,
-            environment: job.environment,
-            workingDirectory: job.workingDirectory,
+        return JobExecutionResult(try await ocrExecutor.execute(ocrRequest(
+            job: job,
+            inputURL: URL(fileURLWithPath: job.inputPath),
+            outputURL: URL(fileURLWithPath: outputPath),
             jobs: jobs,
-            niceLevel: configuration.niceLevel(for: job.environment),
-            workerMetadata: workerMetadata(for: job),
-            workerCropConfiguration: cropConfiguration,
-            workerBlankPageConfiguration: blankPageConfiguration,
-            executionPreference: executionPreference
-        ))
-        guard result.succeeded, result.executionLocation == .local else {
-            return result
-        }
+            executionPreference: executionPreference,
+            cropConfiguration: cropConfiguration,
+            blankPageConfiguration: blankPageConfiguration
+        )))
+    }
 
-        let documentExecutor = prioritizedDocumentExecutor(for: job)
-        if let cropConfiguration {
-            let cropResult = try await documentExecutor.execute(
-                cropConfiguration.request(pdfPath: outputPath).command.processRequest(
-                    environment: job.environment,
-                    workingDirectory: job.workingDirectory
-                )
-            )
-            guard cropResult.succeeded else { return cropResult }
-        }
-        if let blankPageConfiguration {
-            let blankResult = try await documentExecutor.execute(
-                blankPageConfiguration.request(pdfPath: outputPath).command.processRequest(
-                    environment: job.environment,
-                    workingDirectory: job.workingDirectory
-                )
-            )
-            guard blankResult.succeeded else { return blankResult }
-        }
-        return result
+    private func ocrRequest(
+        job: Job,
+        inputURL: URL,
+        outputURL: URL,
+        jobs: Int,
+        executionPreference: OCRDispatchPreference,
+        workingDirectory: URL? = nil,
+        cropConfiguration: OCRWorkerCropConfiguration? = nil,
+        blankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil
+    ) -> OCRExecutionRequest {
+        OCRExecutionRequest(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            options: OCRProcessingOptions(environment: job.environment, jobs: jobs),
+            context: OCRProcessContext(
+                environment: job.environment,
+                workingDirectory: workingDirectory ?? job.workingDirectory,
+                niceLevel: configuration.niceLevel(for: job.environment)
+            ),
+            metadata: workerMetadata(for: job),
+            cropConfiguration: cropConfiguration,
+            blankPageConfiguration: blankPageConfiguration,
+            dispatchPreference: executionPreference
+        )
     }
 
     private func runDeferredProcessing(

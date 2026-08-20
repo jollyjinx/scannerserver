@@ -6,6 +6,21 @@ enum FakeProcessError: Error, Sendable {
     case missingStub
 }
 
+struct ProcessBackedOCRExecutor: OCRExecuting, Sendable {
+    let processExecutor: any ProcessExecutor
+
+    init(_ processExecutor: any ProcessExecutor) {
+        self.processExecutor = processExecutor
+    }
+
+    func execute(_ request: OCRExecutionRequest) async throws -> OCRExecutionResult {
+        try await LocalOCRProcessAdapter(
+            processExecutor: processExecutor,
+            documentExecutor: processExecutor
+        ).execute(request)
+    }
+}
+
 actor FakeProcessExecutor: ProcessExecutor {
     enum Stub: Sendable {
         case result(ProcessResult)
@@ -24,13 +39,16 @@ actor FakeProcessExecutor: ProcessExecutor {
 
     private var stubs: [Stub]
     private var recordedRequests: [ProcessRequest] = []
+    private var recordedOCRRequests: [OCRExecutionRequest] = []
+    private let ocrLocation: OCRExecutionLocation
     private var suspendedExecutions: [CheckedContinuation<Void, any Error>] = []
     private var requestWaiters: [RequestWaiter] = []
     private var ignoredCancellationCount = 0
     private var ignoredCancellationWaiters: [RequestWaiter] = []
 
-    init(stubs: [Stub]) {
+    init(stubs: [Stub], ocrLocation: OCRExecutionLocation = .local) {
         self.stubs = stubs
+        self.ocrLocation = ocrLocation
     }
 
     func execute(_ request: ProcessRequest) async throws -> ProcessResult {
@@ -97,6 +115,10 @@ actor FakeProcessExecutor: ProcessExecutor {
         recordedRequests
     }
 
+    func ocrRequests() -> [OCRExecutionRequest] {
+        recordedOCRRequests
+    }
+
     func waitForRequestCount(_ count: Int) async {
         guard recordedRequests.count < count else { return }
         await withCheckedContinuation { continuation in
@@ -143,5 +165,28 @@ actor FakeProcessExecutor: ProcessExecutor {
         for waiter in satisfied {
             waiter.continuation.resume()
         }
+    }
+}
+
+extension FakeProcessExecutor: OCRExecuting {
+    func execute(_ request: OCRExecutionRequest) async throws -> OCRExecutionResult {
+        recordedOCRRequests.append(request)
+        if ocrLocation == .local {
+            return try await LocalOCRProcessAdapter(
+                processExecutor: self,
+                documentExecutor: self
+            ).execute(request)
+        }
+
+        let result = try await execute(LocalOCRProcessAdapter(
+            processExecutor: self,
+            documentExecutor: self
+        ).processRequest(for: request))
+        return OCRExecutionResult(
+            outcome: result.succeeded ? .succeeded : .failed(exitStatus: result.exitStatus),
+            standardOutput: result.standardOutput,
+            standardError: result.standardError,
+            location: ocrLocation
+        )
     }
 }

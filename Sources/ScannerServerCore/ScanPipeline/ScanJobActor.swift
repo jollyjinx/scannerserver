@@ -121,7 +121,8 @@ public actor ScanJobActor {
         await currentWorker?.value
     }
 
-    private func finish(result: ProcessResult, configuration: ScanPipelineConfiguration) async {
+    private func finish(result scanResult: NativeScanResult, configuration: ScanPipelineConfiguration) async {
+        let result = scanResult.process
         let paths = ScanOutputPaths.existing(from: result.standardOutput)
         jobState.finished = Date()
         jobState.status = result.succeeded ? "done" : "failed (\(result.exitStatus))"
@@ -135,9 +136,8 @@ public actor ScanJobActor {
         }
 
         if result.succeeded,
-           let deferredProcessing = result.deferredScanProcessing,
-           ocrQueue == nil
-        {
+           case .deferred(let deferredProcessing) = scanResult.postProcessing,
+           ocrQueue == nil {
             deferredProcessing.removeCleanupDirectoryIfValid()
             jobState.status = "failed (70)"
             jobState.error = "Background scan processing is unavailable."
@@ -147,29 +147,31 @@ public actor ScanJobActor {
             return
         }
 
-        if result.succeeded, let ocrQueue, !result.postProcessingHandled {
-            if let deferredProcessing = result.deferredScanProcessing {
+        if result.succeeded, let ocrQueue {
+            if case .deferred(let deferredProcessing) = scanResult.postProcessing {
                 await ocrQueue.enqueue(deferredProcessing)
             }
-            let preprocessMultipagePDF = configuration.format == "pdf"
-                && configuration.pageMode == "multi"
-            let batchID = UUID()
-            for path in paths {
-                let shouldOCR = ScanOutputPaths.shouldEnqueueOCR(
-                    path: path,
-                    configuration: configuration
-                )
-                let shouldPreprocess = preprocessMultipagePDF
-                    && (configuration.removeBlankPages || configuration.cropPages)
-                guard shouldOCR || shouldPreprocess else { continue }
-                await ocrQueue.enqueue(
-                    path,
-                    batchID: batchID,
-                    environment: configuration.environment,
-                    ocrEnabled: shouldOCR,
-                    removeBlankPages: preprocessMultipagePDF && configuration.removeBlankPages,
-                    cropPages: preprocessMultipagePDF && configuration.cropPages
-                )
+            if scanResult.postProcessing == .queuePublishedOutputs {
+                let preprocessMultipagePDF = configuration.format == "pdf"
+                    && configuration.pageMode == "multi"
+                let batchID = UUID()
+                for path in paths {
+                    let shouldOCR = ScanOutputPaths.shouldEnqueueOCR(
+                        path: path,
+                        configuration: configuration
+                    )
+                    let shouldPreprocess = preprocessMultipagePDF
+                        && (configuration.removeBlankPages || configuration.cropPages)
+                    guard shouldOCR || shouldPreprocess else { continue }
+                    await ocrQueue.enqueue(
+                        path,
+                        batchID: batchID,
+                        environment: configuration.environment,
+                        ocrEnabled: shouldOCR,
+                        removeBlankPages: preprocessMultipagePDF && configuration.removeBlankPages,
+                        cropPages: preprocessMultipagePDF && configuration.cropPages
+                    )
+                }
             }
         }
         worker = nil

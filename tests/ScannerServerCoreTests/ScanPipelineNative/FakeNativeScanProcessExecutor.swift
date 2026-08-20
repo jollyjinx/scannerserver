@@ -96,3 +96,12 @@ actor FakeNativeScanProcessExecutor: ProcessExecutor {
         suspendedExecutions.removeFirst().resume(throwing: CancellationError())
     }
 }
+
+extension FakeNativeScanProcessExecutor: OCRExecuting {
+    func execute(_ request: OCRExecutionRequest) async throws -> OCRExecutionResult {
+        try await LocalOCRProcessAdapter(
+            processExecutor: self,
+            documentExecutor: self
+        ).execute(request)
+    }
+}

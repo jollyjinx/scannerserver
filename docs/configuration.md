@@ -96,6 +96,11 @@ Use **Scan Settings** in the web UI to add, edit, delete, or choose the mode use
 
 With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the background CPU limit and post-scan process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers a **Processing CPUs** dropdown: **Automatic** uses the container-aware background allowance, while a number lowers the limit for that mode. **Post-scan priority** selects normal or reduced (`nice`) priority for every external tool launched by background processing. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
 
+OCR dispatch is internally typed but does not change the configuration contract. The configured
+language, CPU limit, priority, crop settings, blank-page thresholds, remote timeouts, and worker
+metadata are translated into the existing protocol-v1 worker manifest fields. Remote assignment or
+execution failure retains local fallback; task cancellation does not fall back.
+
 ## Common Environment Variables
 
 | Variable | Default | Purpose |

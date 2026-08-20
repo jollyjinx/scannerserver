@@ -1138,7 +1138,7 @@ private struct HTTPFixture: Sendable {
             webUpdates: webUpdates
         )
         ocrQueue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: ProcessBackedOCRExecutor(executor),
             documentExecutor: documentExecutor,
             webUpdates: webUpdates
         )

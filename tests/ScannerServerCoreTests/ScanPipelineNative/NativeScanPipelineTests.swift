@@ -92,7 +92,10 @@ struct NativeScanPipelineTests {
 
         let result = try await pipeline.scan(configuration: configuration)
 
-        #expect(result == ProcessResult(exitStatus: 0, standardOutput: "\(finalPDF.path)\n"))
+        #expect(result.process == ProcessResult(
+            exitStatus: 0,
+            standardOutput: "\(finalPDF.path)\n"
+        ))
         #expect(await executor.requests().map(\.executable) == ["set-pdf-creator"])
         #expect(try Data(contentsOf: finalPDF) == Data("multipage-pdf".utf8))
     }
@@ -439,7 +442,7 @@ struct NativeScanPipelineTests {
             .materialize(Data("multipage-pdf".utf8), ScanSnapWiFiAcquisitionResult(pageCount: 1)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: ProcessBackedOCRExecutor(executor),
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
         )

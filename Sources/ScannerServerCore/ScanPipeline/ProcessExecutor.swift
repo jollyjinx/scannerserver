@@ -6,11 +6,6 @@ import Darwin
 import Glibc
 #endif
 
-public enum OCRExecutionPreference: Equatable, Sendable {
-    case automatic
-    case localOnly
-}
-
 public struct ProcessRequest: Equatable, Sendable {
     public let executable: String
     public let arguments: [String]
@@ -18,10 +13,6 @@ public struct ProcessRequest: Equatable, Sendable {
     public let workingDirectory: URL?
     public let timeoutMilliseconds: UInt64?
     public let niceLevel: Int?
-    public let ocrWorkerMetadata: OCRWorkerJobMetadata?
-    public let ocrWorkerCropConfiguration: OCRWorkerCropConfiguration?
-    public let ocrWorkerBlankPageConfiguration: OCRWorkerBlankPageConfiguration?
-    public let ocrExecutionPreference: OCRExecutionPreference
 
     public init(
         executable: String,
@@ -29,11 +20,7 @@ public struct ProcessRequest: Equatable, Sendable {
         environment: [String: String]? = nil,
         workingDirectory: URL? = nil,
         timeoutMilliseconds: UInt64? = nil,
-        niceLevel: Int? = nil,
-        ocrWorkerMetadata: OCRWorkerJobMetadata? = nil,
-        ocrWorkerCropConfiguration: OCRWorkerCropConfiguration? = nil,
-        ocrWorkerBlankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil,
-        ocrExecutionPreference: OCRExecutionPreference = .automatic
+        niceLevel: Int? = nil
     ) {
         self.executable = executable
         self.arguments = arguments
@@ -41,10 +28,6 @@ public struct ProcessRequest: Equatable, Sendable {
         self.workingDirectory = workingDirectory
         self.timeoutMilliseconds = timeoutMilliseconds
         self.niceLevel = niceLevel.map { min(max($0, 1), 19) }
-        self.ocrWorkerMetadata = ocrWorkerMetadata
-        self.ocrWorkerCropConfiguration = ocrWorkerCropConfiguration
-        self.ocrWorkerBlankPageConfiguration = ocrWorkerBlankPageConfiguration
-        self.ocrExecutionPreference = ocrExecutionPreference
     }
 
     func applyingNiceLevel(_ niceLevel: Int) -> ProcessRequest {
@@ -54,11 +37,7 @@ public struct ProcessRequest: Equatable, Sendable {
             environment: environment,
             workingDirectory: workingDirectory,
             timeoutMilliseconds: timeoutMilliseconds,
-            niceLevel: niceLevel,
-            ocrWorkerMetadata: ocrWorkerMetadata,
-            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration,
-            ocrWorkerBlankPageConfiguration: ocrWorkerBlankPageConfiguration,
-            ocrExecutionPreference: ocrExecutionPreference
+            niceLevel: niceLevel
         )
     }
 
@@ -69,42 +48,24 @@ public struct ProcessRequest: Equatable, Sendable {
             arguments: ["-n", String(niceLevel), executable] + arguments,
             environment: environment,
             workingDirectory: workingDirectory,
-            timeoutMilliseconds: timeoutMilliseconds,
-            ocrWorkerMetadata: ocrWorkerMetadata,
-            ocrWorkerCropConfiguration: ocrWorkerCropConfiguration,
-            ocrWorkerBlankPageConfiguration: ocrWorkerBlankPageConfiguration,
-            ocrExecutionPreference: ocrExecutionPreference
+            timeoutMilliseconds: timeoutMilliseconds
         )
     }
-}
-
-public enum ProcessExecutionLocation: String, Equatable, Sendable {
-    case local
-    case remote
 }
 
 public struct ProcessResult: Equatable, Sendable {
     public let exitStatus: Int32
     public let standardOutput: String
     public let standardError: String
-    public let deferredScanProcessing: DeferredScanProcessing?
-    public let postProcessingHandled: Bool
-    public let executionLocation: ProcessExecutionLocation
 
     public init(
         exitStatus: Int32,
         standardOutput: String = "",
-        standardError: String = "",
-        deferredScanProcessing: DeferredScanProcessing? = nil,
-        postProcessingHandled: Bool = false,
-        executionLocation: ProcessExecutionLocation = .local
+        standardError: String = ""
     ) {
         self.exitStatus = exitStatus
         self.standardOutput = standardOutput
         self.standardError = standardError
-        self.deferredScanProcessing = deferredScanProcessing
-        self.postProcessingHandled = postProcessingHandled
-        self.executionLocation = executionLocation
     }
 
     public var succeeded: Bool { exitStatus == 0 }

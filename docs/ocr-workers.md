@@ -42,7 +42,8 @@ do not need a fixed address or an inbound firewall rule.
   failure transitions, and validated result staging. If cancellation or reassignment changes a
   lease while a result is being validated, the coordinator removes any just-published result and
   preserves the newer durable job state.
-- `OCRQueueActor` gives approved, enabled, compatible workers first refusal on streaming OCR jobs,
+- `OCRQueueActor` creates typed OCR requests and gives approved, enabled, compatible workers first
+  refusal through `OCRExecutionModule`,
   including when a registered worker is temporarily offline. Capability-aware workers run OCR,
   configured autocrop, and blank-page filtering on each page. It retains FIFO admission, local and
   remote capacity selection, page-task cancellation, and timing. `StreamingOCRDocumentModule`
@@ -54,8 +55,9 @@ do not need a fixed address or an inbound firewall rule.
   unpaused workers. When the internal worker is enabled, its local CPU allowance is added to that
   total after remote slots are filled; pausing it removes those slower scanner-host slots without
   reducing remote concurrency.
-  Local fallback has its own shared CPU permit pool, so a worker outage cannot start more local OCR
-  processes than the scanner host allows.
+  Local fallback and queue-owned preprocessing use one shared CPU permit pool. The queue releases
+  preprocessing capacity at the typed OCR handoff and the execution module acquires and releases
+  the local OCR reservation, so a worker outage cannot oversubscribe the scanner host.
 - Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is reserved by the
   document actor before asynchronous PDF writing, then wrapped in a one-page PDF and queued before
   the scanner transfers the next page. Completed one-page OCR,
@@ -79,7 +81,8 @@ do not need a fixed address or an inbound firewall rule.
   staging file, validates it with `qpdf --check`, and atomically publishes the established
   `.ocr.pdf` output name.
 - No approved and enabled compatible worker, assignment timeout, or reported worker failure falls
-  back to local OCR and local per-page autocrop. Cancellation invalidates the remote lease.
+  back to local OCR and the same typed crop/blank operations. Cancellation invalidates the remote
+  lease and is never converted into local fallback.
 - A worker uses one long-polling lease request at a time and starts page-processing tasks until its
   announced capacity is full. Registration and heartbeats use a separate HTTP session, so many CPU
   slots cannot occupy every connection and make a healthy worker appear stale. The approved-session

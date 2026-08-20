@@ -273,9 +273,11 @@ private actor RuntimeButtonSessionRecordingScanner: NativeScanExecuting {
         self.results = results
     }
 
-    func scan(configuration: ScanPipelineConfiguration) async -> ProcessResult {
+    func scan(configuration: ScanPipelineConfiguration) async -> NativeScanResult {
         modes.append(await acquisitionSessions.consumeForAcquisition())
-        return results.isEmpty ? ProcessResult(exitStatus: 0) : results.removeFirst()
+        return NativeScanResult(
+            process: results.isEmpty ? ProcessResult(exitStatus: 0) : results.removeFirst()
+        )
     }
 }
 

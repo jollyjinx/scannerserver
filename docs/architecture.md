@@ -66,7 +66,10 @@ persisted stores, reachability, and physical-button session state.
 - Hummingbird and SwiftNIO provide the HTTP service.
 - `ScanJobActor` enforces single-flight acquisition, publishes a multipage source PDF or hands a
   captured single-page/PNG document to the background queue, and ends the scanner lifecycle before
-  document processing begins.
+  document processing begins. `NativeScanExecuting` returns `NativeScanResult`, whose typed
+  post-processing disposition distinguishes queue-owned published outputs, deferred processing,
+  and streaming work that was already handed off. Generic subprocess results no longer carry scan
+  lifecycle state.
 - `OCRQueueActor` is the compatibility-named background document-processing queue. It schedules
   blank-page removal, autocrop, and optional OCR against one cgroup-aware CPU budget while reserving
   one detected processor for acquisition and HTTP work. Deferred single-page PDF and PNG jobs keep
@@ -79,8 +82,10 @@ persisted stores, reachability, and physical-button session state.
   online approved worker's advertised concurrent page slots plus the internal OCR capacity when it
   is unpaused. Remote slots are assigned first and any added internal slots are explicitly kept
   local, avoiding remote queueing while scanner-host CPUs sit idle. A shared weighted local-capacity
-  pool separately gates queue-owned processing and distributed OCR fallback, so losing remote
-  workers cannot oversubscribe the scanner host. When reduced priority is enabled, the queue applies the
+  pool gates queue-owned processing and typed OCR local fallback, so losing remote workers cannot
+  oversubscribe the scanner host. When preprocessing hands a job to OCR, the queue releases its
+  reservation before the OCR execution module acquires the same shared pool; ownership is never
+  duplicated. When reduced priority is enabled, the queue applies the
   configured nice level to every external document-processing subprocess; the service and scanner
   acquisition remain at normal priority. The queue owns FIFO admission, CPU and worker-capacity
   selection, page-process task cancellation, and recent per-page timing, but not ordering-sensitive
@@ -148,8 +153,15 @@ persisted stores, reachability, and physical-button session state.
   capacity and its one in-progress long poll, so it fills all advertised page slots without issuing
   simultaneous lease requests. Narrow client, processor, sleeper, and event interfaces keep this
   lifecycle testable without launching the executable.
-- `DistributedOCRProcessExecutor` wraps the `ocrmypdf` process boundary and carries an optional
-  typed per-page crop configuration. Approved, enabled, language- and capability-compatible worker
+- `OCRExecuting` is the package-scoped typed OCR boundary. `OCRExecutionRequest` carries explicit
+  input/output URLs, OCR options, process context, worker metadata, optional per-page crop and
+  blank-page configurations, and a remote-first or reserved-internal dispatch preference.
+  `OCRExecutionResult` separates a typed success/nonzero outcome from the local/remote execution
+  location; infrastructure failures and cancellation throw. `OCRExecutionModule` is an immutable,
+  `Sendable` policy object that owns remote-first selection, protocol-v1 manifest construction,
+  assignment and completion waiting, timeout/cancellation handling, internal-worker pause and
+  takeover behavior, shared local-capacity acquisition, and local fallback. Approved, enabled,
+  language- and capability-compatible worker
   registrations get first refusal even across a temporary heartbeat outage; assignment timeout or
   remote failure preserves local OCR plus local per-page crop as the safety fallback. The persisted
   internal-worker control can pause that fallback, cancel active local OCR, and keep the same work
@@ -167,6 +179,13 @@ persisted stores, reachability, and physical-button session state.
   structured child tasks, while registration and heartbeats use an independent HTTP session so
   pending lease requests cannot starve liveness. The server verifies results with SHA-256 and
   `qpdf --check`, then atomically publishes them before reporting OCR completion.
+- `LocalOCRProcessAdapter` is the only server-side boundary that translates typed OCR requests into
+  OCRmyPDF arguments. It also owns local crop and blank-page post-processing, including the same
+  environment, working-directory, reduced-priority, nonzero-exit, and cancellation behavior.
+  `ProcessExecutor`, `ProcessRequest`, and `ProcessResult` remain the generic subprocess adapter:
+  executable, arguments, environment, working directory, timeout, nice level, exit status, stdout,
+  and stderr only. They carry no OCR routing, worker metadata, document-operation configuration,
+  execution location, or scan-finalization state.
 - The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
   It always exposes the internal fallback worker, current waiting/running work, compact terminal
   history, and successful pages-per-minute measurements without exposing authentication or lease

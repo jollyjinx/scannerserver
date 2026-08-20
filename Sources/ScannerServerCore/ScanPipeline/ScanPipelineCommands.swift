@@ -1,49 +1,5 @@
 import Foundation
 
-public enum ScanPipelineCommands {
-    public static func ocr(
-        inputPath: String,
-        outputPath: String? = nil,
-        environment: [String: String]? = nil,
-        workingDirectory: URL? = nil,
-        jobs: Int? = nil,
-        niceLevel: Int? = nil,
-        workerMetadata: OCRWorkerJobMetadata? = nil,
-        workerCropConfiguration: OCRWorkerCropConfiguration? = nil,
-        workerBlankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil,
-        executionPreference: OCRExecutionPreference = .automatic
-    ) -> ProcessRequest {
-        let language = environment?["SCAN_LANGUAGE"] ?? "deu+eng"
-        let rotatePagesThreshold = environment?["SCAN_OCR_ROTATE_PAGES_THRESHOLD"] ?? "2.0"
-        var arguments = [
-            "--language", language,
-            "--rotate-pages",
-            "--rotate-pages-threshold", rotatePagesThreshold,
-            "--deskew",
-            "--optimize", "1",
-        ]
-        if let jobs {
-            arguments += ["--jobs", String(max(1, jobs))]
-        }
-        arguments += [
-            inputPath,
-            outputPath ?? OCRInputPath.outputPath(for: inputPath) ?? inputPath,
-        ]
-        return ProcessRequest(
-            executable: "ocrmypdf",
-            arguments: arguments,
-            environment: environment,
-            workingDirectory: workingDirectory,
-            niceLevel: niceLevel,
-            ocrWorkerMetadata: workerMetadata,
-            ocrWorkerCropConfiguration: workerCropConfiguration,
-            ocrWorkerBlankPageConfiguration: workerBlankPageConfiguration,
-            ocrExecutionPreference: executionPreference
-        )
-    }
-
-}
-
 public enum OCRInputPath {
     public static func outputPath(for inputPath: String) -> String? {
         guard inputPath.hasSuffix(".pdf"), !inputPath.hasSuffix(".ocr.pdf") else {

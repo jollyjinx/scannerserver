@@ -256,16 +256,21 @@ public struct ScannerServerDependencies: Sendable {
                 capacity: queueConfiguration.cpuLimit,
                 webUpdates: webUpdates
             )
-            resolvedOCRQueue = OCRQueueActor(
-                executor: DistributedOCRProcessExecutor(
-                    local: processExecutor,
-                    workers: ocrWorkerRegistry,
-                    jobs: ocrWorkerJobs,
-                    internalWorker: internalOCRWorker,
-                    localCapacity: localCapacity,
-                    configuration: distributedConfiguration
+            let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
+            let ocrExecutor = OCRExecutionModule(
+                local: LocalOCRProcessAdapter(
+                    processExecutor: processExecutor,
+                    documentExecutor: documentExecutor
                 ),
-                documentExecutor: NativeDocumentToolExecutor(executor: processExecutor),
+                workers: ocrWorkerRegistry,
+                jobs: ocrWorkerJobs,
+                internalWorker: internalOCRWorker,
+                localCapacity: localCapacity,
+                configuration: distributedConfiguration
+            )
+            resolvedOCRQueue = OCRQueueActor(
+                ocrExecutor: ocrExecutor,
+                documentExecutor: documentExecutor,
                 configuration: queueConfiguration,
                 localCapacity: localCapacity,
                 workerCapacityProvider: {
@@ -343,8 +348,11 @@ public struct ScannerServerDependencies: Sendable {
             capacity: queueConfiguration.cpuLimit,
             webUpdates: webUpdates
         )
-        let distributedOCRExecutor = DistributedOCRProcessExecutor(
-            local: processExecutor,
+        let ocrExecutor = OCRExecutionModule(
+            local: LocalOCRProcessAdapter(
+                processExecutor: processExecutor,
+                documentExecutor: documentExecutor
+            ),
             workers: ocrWorkerRegistry,
             jobs: ocrWorkerJobs,
             internalWorker: internalOCRWorker,
@@ -352,7 +360,7 @@ public struct ScannerServerDependencies: Sendable {
             configuration: distributedConfiguration
         )
         let ocrQueue = OCRQueueActor(
-            executor: distributedOCRExecutor,
+            ocrExecutor: ocrExecutor,
             documentExecutor: documentExecutor,
             configuration: queueConfiguration,
             localCapacity: localCapacity,

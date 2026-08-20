@@ -22,7 +22,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 2)
         )
@@ -40,7 +40,8 @@ struct OCRQueueActorTests {
             page: ScanSnapAcquiredPage(pageNumber: 1, jpegData: Data([0xff, 0xd8, 0xff, 0xd9]))
         )
         await executor.waitForRequestCount(1)
-        #expect(await executor.requests().count == 1)
+        let requestCount = await executor.requests().count
+        #expect(requestCount == 1)
 
         try await queue.submitStreamingPage(
             batchID: batchID,
@@ -50,9 +51,10 @@ struct OCRQueueActorTests {
         await queue.waitUntilIdle()
 
         let requests = await executor.requests()
+        let ocrRequests = await executor.ocrRequests()
         #expect(requests.map(\.executable) == ["ocrmypdf", "ocrmypdf", "qpdf", "set-pdf-creator"])
-        #expect(requests[0].ocrWorkerMetadata?.documentName == "2026-08-15.143000.pdf")
-        #expect(Set(requests.prefix(2).compactMap { $0.ocrWorkerMetadata?.pageNumber }) == Set([1, 2]))
+        #expect(ocrRequests[0].metadata?.documentName == "2026-08-15.143000.pdf")
+        #expect(Set(ocrRequests.prefix(2).compactMap { $0.metadata?.pageNumber }) == Set([1, 2]))
         #expect(requests[2].arguments.contains { $0.hasSuffix("page-0001.ocr.pdf") })
         #expect(requests[2].arguments.contains { $0.hasSuffix("page-0002.ocr.pdf") })
         #expect(try Data(contentsOf: final) == pdf)
@@ -82,7 +84,7 @@ struct OCRQueueActorTests {
         ])
         let pageWriter = SuspendingStreamingPagePDFWriter()
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             streamingPageWriter: pageWriter,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
@@ -146,15 +148,12 @@ struct OCRQueueActorTests {
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let pdf = Data("%PDF-1.4\nstreamed\n".utf8)
         let executor = FakeProcessExecutor(stubs: [
-            .suspendedMaterializeLastArgument(pdf, ProcessResult(
-                exitStatus: 0,
-                executionLocation: .remote
-            )),
+            .suspendedMaterializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
             .suspendedMaterializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0)),
-        ])
+        ], ocrLocation: .remote)
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
         )
@@ -203,12 +202,12 @@ struct OCRQueueActorTests {
         try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
         let pdf = Data("%PDF-1.4\nremote cropped\n".utf8)
         let executor = FakeProcessExecutor(stubs: [
-            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0, executionLocation: .remote)),
+            .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
             .materializeLastArgument(pdf, ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0)),
-        ])
+        ], ocrLocation: .remote)
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
         )
@@ -233,7 +232,7 @@ struct OCRQueueActorTests {
 
         let requests = await executor.requests()
         #expect(requests.map(\.executable) == ["ocrmypdf", "qpdf", "set-pdf-creator"])
-        #expect(requests[0].ocrWorkerCropConfiguration?.marginPoints == 2.5)
+        #expect(await executor.ocrRequests().first?.cropConfiguration?.marginPoints == 2.5)
         #expect(try Data(contentsOf: final) == pdf)
     }
 
@@ -255,7 +254,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
         )
@@ -300,7 +299,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
         )
@@ -328,7 +327,7 @@ struct OCRQueueActorTests {
         #expect(requests.map(\.executable) == [
             "ocrmypdf", "remove-blank-pages", "qpdf", "qpdf", "set-pdf-creator",
         ])
-        #expect(requests[0].ocrWorkerBlankPageConfiguration == OCRWorkerBlankPageConfiguration(
+        #expect(await executor.ocrRequests().first?.blankPageConfiguration == OCRWorkerBlankPageConfiguration(
             whiteThreshold: 240,
             contentRatioThreshold: 0.004,
             meanThreshold: 249
@@ -356,7 +355,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
         )
@@ -397,7 +396,7 @@ struct OCRQueueActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1)
         )
         let batchID = await queue.beginStreamingScan(StreamingScanRequest(
@@ -438,7 +437,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/three.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let queue = OCRQueueActor(ocrExecutor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -485,7 +484,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             workspaceSuffixProvider: { "test" },
             configuration: serialOCRConfiguration
@@ -533,7 +532,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             workspaceSuffixProvider: { "processing-test" },
             configuration: serialOCRConfiguration
@@ -574,7 +573,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             workspaceSuffixProvider: { "nice-processing-test" },
             configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: 10)
@@ -650,7 +649,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -749,7 +748,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -836,7 +835,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -908,7 +907,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -969,7 +968,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -1024,7 +1023,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -1076,7 +1075,7 @@ struct OCRQueueActorTests {
             workingDirectory: work
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -1119,7 +1118,7 @@ struct OCRQueueActorTests {
             workingDirectory: root
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -1146,7 +1145,7 @@ struct OCRQueueActorTests {
         let output = root.appendingPathComponent("scan.ocr.pdf")
         try Data().write(to: output)
         let executor = FakeProcessExecutor(stubs: [])
-        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let queue = OCRQueueActor(ocrExecutor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue(root.appendingPathComponent("scan.png").path)
         await queue.enqueue(input.path)
@@ -1163,7 +1162,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 73, standardError: "already exists\n")),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let queue = OCRQueueActor(ocrExecutor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -1200,7 +1199,7 @@ struct OCRQueueActorTests {
             )),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -1250,7 +1249,7 @@ struct OCRQueueActorTests {
         let executor = FakeProcessExecutor(stubs: [
             .suspended(ProcessResult(exitStatus: 0)),
         ])
-        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let queue = OCRQueueActor(ocrExecutor: executor, configuration: serialOCRConfiguration)
         let deferred = DeferredScanProcessing(
             inputPath: input.path,
             cleanupDirectory: work,
@@ -1303,7 +1302,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             configuration: serialOCRConfiguration
         )
@@ -1343,7 +1342,7 @@ struct OCRQueueActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/two.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let queue = OCRQueueActor(ocrExecutor: executor, configuration: serialOCRConfiguration)
 
         await queue.enqueue("/scans/one.pdf")
         await queue.enqueue("/scans/two.pdf")
@@ -1363,7 +1362,19 @@ struct OCRQueueActorTests {
         let executor = FakeProcessExecutor(stubs: [
             .suspended(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
         ])
-        let queue = OCRQueueActor(executor: executor, configuration: serialOCRConfiguration)
+        let capacity = OCRLocalCapacityPool(capacity: 1)
+        let module = OCRExecutionModule(
+            local: executor,
+            workers: OCRWorkerRegistry(),
+            jobs: OCRWorkerJobStore(),
+            localCapacity: capacity,
+            configuration: DistributedOCRConfiguration(enabled: false)
+        )
+        let queue = OCRQueueActor(
+            ocrExecutor: module,
+            configuration: serialOCRConfiguration,
+            localCapacity: capacity
+        )
 
         await queue.enqueue("/scans/one.pdf")
         await executor.waitForRequestCount(1)
@@ -1372,7 +1383,8 @@ struct OCRQueueActorTests {
         await executor.resumeNextSuspendedExecution()
         await queue.waitUntilIdle()
 
-        #expect(await executor.requests().count == 1)
+        let requestCount = await executor.requests().count
+        #expect(requestCount == 1)
         #expect(await queue.state.status == "done")
         #expect(await queue.state.input == "/scans/one.pdf")
         #expect(await queue.state.queued == 0)
@@ -1387,7 +1399,7 @@ struct OCRQueueActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 3, niceLevel: 10)
         )
         let environment = ["SCAN_PAGE_MODE": "single"]
@@ -1427,7 +1439,7 @@ struct OCRQueueActorTests {
             OCRQueueWorkerCapacity(remoteJobSlots: 14, internalOCREnabled: false)
         )
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 3),
             workerCapacityProvider: { await capacity.value }
         )
@@ -1449,9 +1461,9 @@ struct OCRQueueActorTests {
 
         #expect(await queue.state.running == 17)
         #expect(await queue.state.queued == 1)
-        let requests = await executor.requests()
-        #expect(requests.filter { $0.ocrExecutionPreference == .automatic }.count == 14)
-        #expect(requests.filter { $0.ocrExecutionPreference == .localOnly }.count == 3)
+        let requests = await executor.ocrRequests()
+        #expect(requests.filter { $0.dispatchPreference == .remoteFirst }.count == 14)
+        #expect(requests.filter { $0.dispatchPreference == .reservedInternal }.count == 3)
 
         await queue.cancelAll()
     }
@@ -1462,7 +1474,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 8, niceLevel: nil)
         )
 
@@ -1501,7 +1513,7 @@ struct OCRQueueActorTests {
             .result(ProcessResult(exitStatus: 0, standardOutput: "/scans/one.ocr.pdf\n")),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: queueNiceLevel)
         )
 
@@ -1525,7 +1537,7 @@ struct OCRQueueActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             configuration: OCRQueueConfiguration(cpuLimit: 4, niceLevel: nil)
         )
         let batchID = UUID()

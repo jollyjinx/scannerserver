@@ -46,7 +46,6 @@ public struct DistributedOCRConfiguration: Equatable, Sendable {
 }
 
 public enum OCRRemoteDispatchError: Error, LocalizedError, Sendable {
-    case invalidOCRRequest
     case assignmentTimedOut
     case completionTimedOut
     case remoteFailed(String)
@@ -54,7 +53,6 @@ public enum OCRRemoteDispatchError: Error, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidOCRRequest: "Could not convert the OCR command into a remote job."
         case .assignmentTimedOut: "No OCR worker claimed the job before the assignment timeout."
         case .completionTimedOut: "The remote OCR job exceeded its completion timeout."
         case .remoteFailed(let message): "Remote OCR failed: \(message)"
@@ -63,27 +61,36 @@ public enum OCRRemoteDispatchError: Error, LocalizedError, Sendable {
     }
 }
 
-public struct DistributedOCRProcessExecutor: ProcessExecutor {
+package struct OCRExecutionModule: OCRExecuting, Sendable {
+    package typealias NowProvider = @Sendable () -> Date
+    package typealias Sleeper = @Sendable (Duration) async throws -> Void
+
     private enum LocalExecutionOutcome: Sendable {
-        case completed(ProcessResult)
+        case completed(OCRExecutionResult)
         case paused
         case atCapacity
     }
 
-    private let local: any ProcessExecutor
+    private let local: any OCRExecuting
     private let workers: OCRWorkerRegistry
     private let jobs: OCRWorkerJobStore
     private let internalWorker: InternalOCRWorkerControl
     private let localCapacity: OCRLocalCapacityPool
     private let configuration: DistributedOCRConfiguration
+    private let fileSystem: any NativeScanFileSystem
+    private let now: NowProvider
+    private let sleep: Sleeper
 
-    public init(
-        local: any ProcessExecutor,
+    package init(
+        local: any OCRExecuting,
         workers: OCRWorkerRegistry,
         jobs: OCRWorkerJobStore,
         internalWorker: InternalOCRWorkerControl = InternalOCRWorkerControl(),
         localCapacity: OCRLocalCapacityPool? = nil,
-        configuration: DistributedOCRConfiguration
+        configuration: DistributedOCRConfiguration = DistributedOCRConfiguration(),
+        fileSystem: any NativeScanFileSystem = FoundationNativeScanFileSystem(),
+        now: @escaping NowProvider = Date.init,
+        sleep: @escaping Sleeper = { try await Task.sleep(for: $0) }
     ) {
         self.local = local
         self.workers = workers
@@ -94,42 +101,36 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             webUpdates: internalWorker.webUpdates
         )
         self.configuration = configuration
+        self.fileSystem = fileSystem
+        self.now = now
+        self.sleep = sleep
     }
 
-    public func execute(_ request: ProcessRequest) async throws -> ProcessResult {
-        guard request.executable == "ocrmypdf",
-              let remoteRequest = try? makeRemoteRequest(request) else {
-            return try await local.execute(request)
-        }
-
-        var localOnly = request.ocrExecutionPreference == .localOnly
+    package func execute(_ request: OCRExecutionRequest) async throws -> OCRExecutionResult {
+        var reservedInternal = request.dispatchPreference == .reservedInternal
         var remoteFallbackRequired = false
+
         while !Task.isCancelled {
             let observedRevision = await internalWorker.webUpdates.currentRevision
-            if !localOnly,
+            if !reservedInternal,
                !remoteFallbackRequired,
                configuration.enabled,
                await workers.hasPreferredWorker(
-                   ocrLanguages: remoteRequest.languages,
-                   requiredCapabilities: remoteRequest.requiredCapabilities
+                   ocrLanguages: request.options.languages,
+                   requiredCapabilities: request.requiredWorkerCapabilities
                ) {
                 do {
-                    return try await executeRemotely(remoteRequest)
+                    return try await executeRemotely(request)
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch {
                     JLog.warning("Remote OCR unavailable: \(error.localizedDescription)")
                     remoteFallbackRequired = true
-                    if await internalWorker.isPaused {
-                        remoteFallbackRequired = false
-                        try await Task.sleep(for: .milliseconds(250))
-                        continue
-                    }
                 }
             }
 
             if await internalWorker.isPaused {
-                localOnly = false
+                reservedInternal = false
                 remoteFallbackRequired = false
                 JLog.notice("Internal OCR worker is paused; waiting for remote capacity or resume")
                 try await internalWorker.waitForDispatchChange(after: observedRevision)
@@ -140,46 +141,33 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
             case .completed(let result):
                 return result
             case .paused:
-                try? FileManager.default.removeItem(
-                    at: URL(fileURLWithPath: remoteRequest.outputPath, isDirectory: false)
-                )
-                // Recheck remote eligibility before waiting so a worker that
-                // appeared while local cancellation completed cannot be missed.
-                localOnly = false
+                try? fileSystem.removeItemIfPresent(at: request.outputURL)
+                reservedInternal = false
                 remoteFallbackRequired = false
-                continue
             case .atCapacity:
                 _ = await internalWorker.webUpdates.wait(after: observedRevision)
                 try Task.checkCancellation()
-                continue
             }
         }
         throw CancellationError()
     }
 
     private func executeLocallyUnlessPaused(
-        _ request: ProcessRequest
+        _ request: OCRExecutionRequest
     ) async throws -> LocalExecutionOutcome {
         guard !(await internalWorker.isPaused) else { return .paused }
-
-        guard let reservedCPUs = await localCapacity.tryAcquire(
-            localCPUReservation(for: request)
-        ) else {
+        guard let reservedCPUs = await localCapacity.tryAcquire(request.options.jobs) else {
             return .atCapacity
         }
 
         do {
             let outcome = try await withThrowingTaskGroup(of: LocalExecutionOutcome.self) { group in
-                group.addTask {
-                    .completed(try await local.execute(request))
-                }
+                group.addTask { .completed(try await local.execute(request)) }
                 group.addTask {
                     try await internalWorker.waitUntilPaused()
                     return .paused
                 }
-                guard let outcome = try await group.next() else {
-                    throw CancellationError()
-                }
+                guard let outcome = try await group.next() else { throw CancellationError() }
                 group.cancelAll()
                 return outcome
             }
@@ -191,122 +179,73 @@ public struct DistributedOCRProcessExecutor: ProcessExecutor {
         }
     }
 
-    private func localCPUReservation(for request: ProcessRequest) -> Int {
-        guard let jobsIndex = request.arguments.firstIndex(of: "--jobs"),
-              request.arguments.indices.contains(jobsIndex + 1),
-              let jobs = Int(request.arguments[jobsIndex + 1]),
-              jobs > 0 else {
-            return 1
-        }
-        return jobs
-    }
-
-    private func executeRemotely(_ request: RemoteRequest) async throws -> ProcessResult {
-        let sourceURL = URL(fileURLWithPath: request.inputPath, isDirectory: false)
-        let source = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
+    private func executeRemotely(_ request: OCRExecutionRequest) async throws -> OCRExecutionResult {
+        let source = try Data(contentsOf: request.inputURL, options: .mappedIfSafe)
         let manifest = OCRWorkerJobManifest(
-            sourcePath: request.inputPath,
-            outputPath: request.outputPath,
+            sourcePath: request.inputURL.path,
+            outputPath: request.outputURL.path,
             sourceByteCount: Int64(source.count),
             sourceSHA256: OCRWorkerSHA256.hexDigest(source),
-            ocrLanguages: request.languages,
+            ocrLanguages: request.options.languages,
             ocrEnabled: true,
             removeBlankPages: request.blankPageConfiguration != nil,
             blankPageConfiguration: request.blankPageConfiguration,
             cropPages: request.cropConfiguration != nil,
             cropConfiguration: request.cropConfiguration,
-            containerArguments: request.containerArguments,
-            metadata: request.metadata
+            containerArguments: OCRmyPDFCommandBuilder.arguments(
+                options: request.options,
+                inputPath: "/work/source.pdf",
+                outputPath: "/work/result.pdf"
+            ),
+            metadata: request.metadata,
+            createdAt: now()
         )
         _ = try await jobs.enqueue(manifest)
         JLog.notice("Queued remote OCR job \(manifest.jobID)")
 
         do {
-            let assignmentDeadline = Date().addingTimeInterval(configuration.assignmentWaitSeconds)
-            let completionDeadline = Date().addingTimeInterval(configuration.completionTimeoutSeconds)
+            let assignmentDeadline = now().addingTimeInterval(configuration.assignmentWaitSeconds)
+            let completionDeadline = now().addingTimeInterval(configuration.completionTimeoutSeconds)
             var queuedDeadline = assignmentDeadline
             while !Task.isCancelled {
-                _ = try await jobs.requeueExpiredLeases()
+                _ = try await jobs.requeueExpiredLeases(now: now())
                 let snapshot = try await jobs.snapshot(jobID: manifest.jobID)
                 switch snapshot.status {
                 case .queued:
-                    if Date() >= queuedDeadline {
-                        _ = try await jobs.cancel(jobID: manifest.jobID)
+                    if now() >= queuedDeadline {
+                        _ = try await jobs.cancel(jobID: manifest.jobID, now: now())
                         throw OCRRemoteDispatchError.assignmentTimedOut
                     }
                 case .leased:
-                    queuedDeadline = Date().addingTimeInterval(configuration.assignmentWaitSeconds)
+                    queuedDeadline = now().addingTimeInterval(configuration.assignmentWaitSeconds)
                 case .succeeded:
-                    guard FileManager.default.fileExists(atPath: request.outputPath) else {
+                    guard fileSystem.regularFileExists(at: request.outputURL) else {
                         throw OCRRemoteDispatchError.resultMissing
                     }
-                    return ProcessResult(
-                        exitStatus: 0,
-                        standardOutput: request.outputPath + "\n",
-                        executionLocation: .remote
+                    return OCRExecutionResult(
+                        outcome: .succeeded,
+                        standardOutput: request.outputURL.path + "\n",
+                        location: .remote
                     )
                 case .failed:
-                    throw OCRRemoteDispatchError.remoteFailed(snapshot.failure ?? "unknown worker failure")
+                    throw OCRRemoteDispatchError.remoteFailed(
+                        snapshot.failure ?? "unknown worker failure"
+                    )
                 case .cancelled:
                     throw CancellationError()
                 }
-                if Date() >= completionDeadline {
+                if now() >= completionDeadline {
                     if snapshot.status == .queued || snapshot.status == .leased {
-                        _ = try? await jobs.cancel(jobID: manifest.jobID)
+                        _ = try? await jobs.cancel(jobID: manifest.jobID, now: now())
                     }
                     throw OCRRemoteDispatchError.completionTimedOut
                 }
-                try await Task.sleep(for: .milliseconds(250))
+                try await sleep(.milliseconds(250))
             }
             throw CancellationError()
         } catch is CancellationError {
-            _ = try? await jobs.cancel(jobID: manifest.jobID)
+            _ = try? await jobs.cancel(jobID: manifest.jobID, now: now())
             throw CancellationError()
         }
-    }
-
-    private struct RemoteRequest: Sendable {
-        let inputPath: String
-        let outputPath: String
-        let languages: [String]
-        let containerArguments: [String]
-        let metadata: OCRWorkerJobMetadata?
-        let cropConfiguration: OCRWorkerCropConfiguration?
-        let blankPageConfiguration: OCRWorkerBlankPageConfiguration?
-
-        var requiredCapabilities: [String] {
-            var capabilities: [String] = []
-            if cropConfiguration != nil { capabilities.append(OCRWorkerCapability.cropPDFPages) }
-            if blankPageConfiguration != nil {
-                capabilities.append(OCRWorkerCapability.removeBlankPDFPages)
-            }
-            return capabilities
-        }
-    }
-
-    private func makeRemoteRequest(_ request: ProcessRequest) throws -> RemoteRequest {
-        guard request.arguments.count >= 2 else { throw OCRRemoteDispatchError.invalidOCRRequest }
-        let inputPath = request.arguments[request.arguments.count - 2]
-        let outputPath = request.arguments[request.arguments.count - 1]
-        guard inputPath.hasSuffix(".pdf"), outputPath.hasSuffix(".pdf") else {
-            throw OCRRemoteDispatchError.invalidOCRRequest
-        }
-        var arguments = Array(request.arguments.dropLast(2))
-        arguments += ["/work/source.pdf", "/work/result.pdf"]
-        let languages: [String]
-        if let index = arguments.firstIndex(of: "--language"), arguments.indices.contains(index + 1) {
-            languages = arguments[index + 1].split(separator: "+").map(String.init)
-        } else {
-            languages = ["eng"]
-        }
-        return RemoteRequest(
-            inputPath: inputPath,
-            outputPath: outputPath,
-            languages: languages,
-            containerArguments: arguments,
-            metadata: request.ocrWorkerMetadata,
-            cropConfiguration: request.ocrWorkerCropConfiguration,
-            blankPageConfiguration: request.ocrWorkerBlankPageConfiguration
-        )
     }
 }

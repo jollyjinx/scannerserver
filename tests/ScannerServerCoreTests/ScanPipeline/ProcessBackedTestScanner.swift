@@ -7,10 +7,11 @@ actor ProcessBackedTestScanner: NativeScanExecuting {
         self.executor = executor
     }
 
-    func scan(configuration: ScanPipelineConfiguration) async throws -> ProcessResult {
-        try await executor.execute(ProcessRequest(
+    func scan(configuration: ScanPipelineConfiguration) async throws -> NativeScanResult {
+        let process = try await executor.execute(ProcessRequest(
             executable: "test-native-scan",
             environment: configuration.environment
         ))
+        return NativeScanResult(process: process)
     }
 }

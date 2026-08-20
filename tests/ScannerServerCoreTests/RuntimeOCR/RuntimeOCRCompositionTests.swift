@@ -45,7 +45,7 @@ struct RuntimeOCRCompositionTests {
             )),
         ])
         let ocrQueue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: ProcessBackedOCRExecutor(executor),
             configuration: OCRQueueConfiguration(cpuLimit: 3, niceLevel: 10)
         )
         let dependencies = fixture.dependencies(ocrQueue: ocrQueue)
@@ -94,7 +94,7 @@ struct RuntimeOCRCompositionTests {
             .suspended(ProcessResult(exitStatus: 0)),
             .suspended(ProcessResult(exitStatus: 0)),
         ])
-        let ocrQueue = OCRQueueActor(executor: executor)
+        let ocrQueue = OCRQueueActor(ocrExecutor: ProcessBackedOCRExecutor(executor))
         let scanJobs = ScanJobActor(
             nativeScanner: ProcessBackedTestScanner(executor),
             ocrQueue: ocrQueue

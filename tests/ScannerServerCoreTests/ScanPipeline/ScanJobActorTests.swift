@@ -60,7 +60,7 @@ struct ScanJobActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let ocrQueue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             workspaceSuffixProvider: { "test" },
             configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
@@ -108,7 +108,7 @@ struct ScanJobActorTests {
             .result(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             workspaceSuffixProvider: { "processing-test" },
             configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
@@ -154,7 +154,7 @@ struct ScanJobActorTests {
             .suspended(ProcessResult(exitStatus: 0)),
         ])
         let queue = OCRQueueActor(
-            executor: executor,
+            ocrExecutor: executor,
             documentExecutor: executor,
             workspaceSuffixProvider: { "single-page-processing" },
             configuration: OCRQueueConfiguration(cpuLimit: 1, niceLevel: nil)
@@ -246,8 +246,11 @@ private actor FakeNativeScanner: NativeScanExecuting {
         self.result = result
     }
 
-    func scan(configuration: ScanPipelineConfiguration) -> ProcessResult {
+    func scan(configuration: ScanPipelineConfiguration) -> NativeScanResult {
         configurations.append(configuration)
-        return result
+        return NativeScanResult(
+            process: result,
+            postProcessing: result.succeeded ? .queuePublishedOutputs : .none
+        )
     }
 }
