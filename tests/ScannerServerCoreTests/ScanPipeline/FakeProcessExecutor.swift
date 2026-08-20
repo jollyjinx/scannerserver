@@ -14,6 +14,7 @@ actor FakeProcessExecutor: ProcessExecutor {
         case failure(FakeProcessError)
         case suspended(ProcessResult)
         case suspendedIgnoringCancellation(ProcessResult)
+        case suspendedIgnoringCancellationMaterializeLastArgument(Data, ProcessResult)
     }
 
     private struct RequestWaiter {
@@ -77,6 +78,17 @@ actor FakeProcessExecutor: ProcessExecutor {
             } onCancel: {
                 Task { await self.recordIgnoredCancellation() }
             }
+            return result
+        case let .suspendedIgnoringCancellationMaterializeLastArgument(data, result):
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    suspendedExecutions.append(continuation)
+                }
+            } onCancel: {
+                Task { await self.recordIgnoredCancellation() }
+            }
+            guard let path = request.arguments.last else { throw FakeProcessError.expectedFailure }
+            try data.write(to: URL(fileURLWithPath: path))
             return result
         }
     }

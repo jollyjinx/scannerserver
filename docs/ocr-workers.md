@@ -44,17 +44,21 @@ do not need a fixed address or an inbound firewall rule.
   preserves the newer durable job state.
 - `OCRQueueActor` gives approved, enabled, compatible workers first refusal on streaming OCR jobs,
   including when a registered worker is temporarily offline. Capability-aware workers run OCR,
-  configured autocrop, and blank-page filtering on each page. Scan acquisition, the all-blank
-  keep-one safeguard, naming, ordered assembly, verification, and final publication stay on
-  scannerserver.
+  configured autocrop, and blank-page filtering on each page. It retains FIFO admission, local and
+  remote capacity selection, page-task cancellation, and timing. `StreamingOCRDocumentModule`
+  receives typed page completions and owns the all-blank keep-one safeguard, naming, ordered
+  assembly, verification, origin-specific failure policy, final publication, and workspace cleanup.
+  Its finalizer creates only a private staging file; an actor generation check guards the exclusive
+  publication commit against cancellation and late results.
 - The OCR scheduler fills the aggregate page capacity announced by all online, approved, enabled,
   unpaused workers. When the internal worker is enabled, its local CPU allowance is added to that
   total after remote slots are filled; pausing it removes those slower scanner-host slots without
   reducing remote concurrency.
   Local fallback has its own shared CPU permit pool, so a worker outage cannot start more local OCR
   processes than the scanner host allows.
-- Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is wrapped in a
-  one-page PDF and queued before the scanner transfers the next page. Completed one-page OCR,
+- Multipage ScanSnap Wi-Fi scans are streamed page by page. Each accepted JPEG is reserved by the
+  document actor before asynchronous PDF writing, then wrapped in a one-page PDF and queued before
+  the scanner transfers the next page. Completed one-page OCR,
   crop, and blank-filter results are uploaded immediately, retained in the scan workspace, and
   assembled in source order after the feeder is empty. With `SCAN_OCR_ONLY`, the raw `.pdf` stays
   private and is removed once the assembled `.ocr.pdf` is published; if processing fails it is
@@ -64,9 +68,10 @@ do not need a fixed address or an inbound firewall rule.
   assembly.
   The SANE backend remains whole-document because `scanimage` does not expose the same page-arrival
   callback.
-- PDFs dropped onto the Documents page are split into one-page jobs and dispatched through the same
-  aggregate remote capacity. The uploaded source remains unchanged while completed pages are
-  reassembled in order as the sibling `.ocr.pdf`.
+- PDFs dropped onto the Documents page are counted and split by the same document module. Each
+  prepared page is yielded immediately to the queue and dispatched through the same aggregate
+  remote capacity. The uploaded source remains unchanged while completed pages are reassembled in
+  order as the sibling `.ocr.pdf`.
 - The worker downloads a size- and SHA-256-verified PDF, runs OCRmyPDF plus the native autocrop and
   blank-page implementations directly in worker-container mode or inside the existing image with Apple
   `container` in native macOS mode, and uploads the result through its authenticated lease.

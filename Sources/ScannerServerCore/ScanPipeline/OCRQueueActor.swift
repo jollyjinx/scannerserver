@@ -173,22 +173,8 @@ public actor OCRQueueActor {
         let cropPages: Bool
         let deferredProcessing: DeferredScanProcessing?
         let workerMetadata: OCRWorkerJobMetadata?
-        let streamingPageNumber: Int?
+        let streamingPageWork: StreamingOCRPageWork?
         let outputDirectory: String?
-    }
-
-    private struct StreamingPage: Sendable {
-        let inputPath: String
-        var outputPath: String?
-        var status: String?
-    }
-
-    private struct StreamingBatch: Sendable {
-        let request: StreamingScanRequest
-        var pages: [Int: StreamingPage]
-        var acquisitionFinished: Bool
-        var expectedPageCount: Int?
-        var finalizationStarted: Date?
     }
 
     private struct ActiveJob: Sendable {
@@ -257,14 +243,13 @@ public actor OCRQueueActor {
 
     private let executor: any ProcessExecutor
     private let documentExecutor: any ProcessExecutor
-    private let streamingPageWriter: any StreamingPagePDFWriting
+    private let streamingDocuments: StreamingOCRDocumentModule
     private let workspaceSuffixProvider: WorkspaceSuffixProvider
     private let configuration: OCRQueueConfiguration
     private let localCapacity: OCRLocalCapacityPool
     private let workerCapacityProvider: WorkerCapacityProvider
     private var queue: [Job] = []
     private var activeJobs: [UUID: ActiveJob] = [:]
-    private var streamingBatches: [UUID: StreamingBatch] = [:]
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var isCancellingAll = false
     private var finishingJobCount = 0
@@ -287,8 +272,13 @@ public actor OCRQueueActor {
         webUpdates: WebUpdateNotifier = WebUpdateNotifier()
     ) {
         self.executor = executor
-        self.documentExecutor = documentExecutor ?? NativeDocumentToolExecutor(executor: executor)
-        self.streamingPageWriter = streamingPageWriter
+        let resolvedDocumentExecutor = documentExecutor ?? NativeDocumentToolExecutor(executor: executor)
+        self.documentExecutor = resolvedDocumentExecutor
+        self.streamingDocuments = StreamingOCRDocumentModule(
+            documentExecutor: resolvedDocumentExecutor,
+            pageWriter: streamingPageWriter,
+            webUpdates: webUpdates
+        )
         self.workspaceSuffixProvider = workspaceSuffixProvider
         self.configuration = configuration
         self.localCapacity = localCapacity ?? OCRLocalCapacityPool(
@@ -303,7 +293,28 @@ public actor OCRQueueActor {
         )
     }
 
-    public var state: OCRQueueState { queueState }
+    public var state: OCRQueueState {
+        get async {
+            var state = queueState
+            let documentState = await streamingDocuments.state
+            state.finalizingJobs = documentState.finalizingJobs
+            if state.running == 0, state.queued == 0, !documentState.finalizingJobs.isEmpty {
+                state.status = "running"
+            }
+            let latestQueueEvent = [state.started, state.finished].compactMap { $0 }.max()
+            if let completion = documentState.latestCompletion,
+               state.running == 0,
+               state.queued == 0,
+               documentState.finalizingJobs.isEmpty,
+               latestQueueEvent.map({ completion.finished >= $0 }) ?? true {
+                state.finished = completion.finished
+                state.status = completion.status
+                state.output = completion.output
+                state.error = completion.error
+            }
+            return state
+        }
+    }
 
     public func enqueue(
         _ inputPath: String,
@@ -324,7 +335,7 @@ public actor OCRQueueActor {
             cropPages: cropPages,
             deferredProcessing: nil,
             workerMetadata: nil,
-            streamingPageNumber: nil,
+            streamingPageWork: nil,
             outputDirectory: nil
         ))
         await scheduleAvailableJobs()
@@ -342,237 +353,97 @@ public actor OCRQueueActor {
             cropPages: deferredProcessing.plan.cropPages != nil,
             deferredProcessing: deferredProcessing,
             workerMetadata: nil,
-            streamingPageNumber: nil,
+            streamingPageWork: nil,
             outputDirectory: nil
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
     }
 
-    public func beginStreamingScan(_ request: StreamingScanRequest) -> UUID {
-        let batchID = UUID()
-        streamingBatches[batchID] = StreamingBatch(
-            request: request,
-            pages: [:],
-            acquisitionFinished: false,
-            expectedPageCount: nil,
-            finalizationStarted: nil
+    public func beginStreamingScan(_ request: StreamingScanRequest) async -> UUID {
+        let rawPDF = request.workDirectory.appendingPathComponent("raw.pdf", isDirectory: false)
+        let rawDestination = request.workDirectory.deletingLastPathComponent()
+            .appendingPathComponent(request.documentName, isDirectory: false)
+        let failurePolicy: StreamingOCRFailurePolicy = isTruthy(
+            request.environment["SCAN_OCR_ONLY"]
         )
-        return batchID
+            ? .publishRawOnFailure(source: rawPDF, destination: rawDestination)
+            : .sourceAlreadyPublished
+        return await streamingDocuments.begin(StreamingOCRDocumentRequest(
+            documentName: request.documentName,
+            finalOutputURL: URL(fileURLWithPath: request.finalOutputPath),
+            workDirectory: request.workDirectory,
+            environment: request.environment,
+            removeBlankPages: request.removeBlankPages,
+            cropPages: request.cropPages,
+            failurePolicy: failurePolicy
+        )).rawValue
     }
 
     public func enqueueImportedPDF(_ imported: ImportedPDFOCRRequest) async throws -> Int {
-        try FileManager.default.createDirectory(
-            at: imported.workDirectory,
-            withIntermediateDirectories: false
+        try await streamingDocuments.prepareImportedPDF(
+            imported,
+            yieldPage: { [weak self] work in
+                guard let self else { throw CancellationError() }
+                await self.enqueueStreamingPageWork(work)
+            },
+            cancelScheduledPages: { [weak self] documentID in
+                await self?.cancelScheduledJobs(batchIDs: [documentID.rawValue])
+            }
         )
-        let batchID = beginStreamingScan(StreamingScanRequest(
-            documentName: imported.documentName,
-            finalOutputPath: imported.finalOutputPath,
-            workDirectory: imported.workDirectory,
-            environment: imported.environment,
-            removeBlankPages: imported.removeBlankPages,
-            cropPages: imported.cropPages
-        ))
-
-        do {
-            let pageCountResult = try await documentExecutor.execute(ProcessRequest(
-                executable: "qpdf",
-                arguments: ["--show-npages", imported.sourcePath],
-                environment: imported.environment,
-                workingDirectory: imported.workDirectory
-            ))
-            guard pageCountResult.succeeded,
-                  let pageCount = Int(
-                    pageCountResult.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-                  ),
-                  pageCount > 0 else {
-                throw StreamingScanError.importPreparationFailed(
-                    pageCountResult.standardError.isEmpty
-                        ? "The uploaded PDF has no readable pages."
-                        : pageCountResult.standardError
-                )
-            }
-
-            for pageNumber in 1...pageCount {
-                try Task.checkCancellation()
-                let pageURL = imported.workDirectory.appendingPathComponent(
-                    String(format: "page-%04d.pdf", pageNumber),
-                    isDirectory: false
-                )
-                let splitResult = try await documentExecutor.execute(ProcessRequest(
-                    executable: "qpdf",
-                    arguments: [
-                        imported.sourcePath,
-                        "--pages", ".", String(pageNumber), "--", pageURL.path,
-                    ],
-                    environment: imported.environment,
-                    workingDirectory: imported.workDirectory
-                ))
-                guard splitResult.succeeded,
-                      FileManager.default.fileExists(atPath: pageURL.path) else {
-                    throw StreamingScanError.importPreparationFailed(
-                        splitResult.standardError.isEmpty
-                            ? "Could not extract page \(pageNumber)."
-                            : splitResult.standardError
-                    )
-                }
-                try await submitPreparedStreamingPage(
-                    batchID: batchID,
-                    pageNumber: pageNumber,
-                    inputURL: pageURL
-                )
-            }
-
-            try await finishStreamingScan(batchID: batchID, pageCount: pageCount)
-            return pageCount
-        } catch {
-            await cancelStreamingScan(batchID: batchID)
-            throw error
-        }
     }
 
     public func submitStreamingPage(
         batchID: UUID,
         page: ScanSnapAcquiredPage
     ) async throws {
-        guard var batch = streamingBatches[batchID], !batch.acquisitionFinished else {
-            throw StreamingScanError.unknownBatch
-        }
-        guard page.pageNumber > 0, batch.pages[page.pageNumber] == nil else {
-            throw StreamingScanError.invalidPageNumber
-        }
-        let inputURL = batch.request.workDirectory.appendingPathComponent(
-            String(format: "page-%04d.pdf", page.pageNumber),
-            isDirectory: false
+        let work = try await streamingDocuments.reserveJPEGPage(
+            documentID: StreamingOCRDocumentID(rawValue: batchID),
+            page: page
         )
-        batch.pages[page.pageNumber] = StreamingPage(
-            inputPath: inputURL.path,
-            outputPath: nil,
-            status: nil
-        )
-        streamingBatches[batchID] = batch
-
-        do {
-            try await streamingPageWriter.write(pages: [page.jpegData], to: inputURL)
-            try Task.checkCancellation()
-        } catch {
-            removeStreamingPageReservation(
-                batchID: batchID,
-                pageNumber: page.pageNumber,
-                inputPath: inputURL.path
-            )
-            try? FileManager.default.removeItem(at: inputURL)
-            throw error
-        }
-        guard streamingBatches[batchID]?.pages[page.pageNumber]?.inputPath == inputURL.path else {
-            try? FileManager.default.removeItem(at: inputURL)
-            throw StreamingScanError.unknownBatch
-        }
-
-        try await enqueueReservedStreamingPage(
-            batchID: batchID,
-            pageNumber: page.pageNumber,
-            inputURL: inputURL
-        )
+        await enqueueStreamingPageWork(work)
     }
 
-    private func submitPreparedStreamingPage(
-        batchID: UUID,
-        pageNumber: Int,
-        inputURL: URL
-    ) async throws {
-        guard var batch = streamingBatches[batchID], !batch.acquisitionFinished else {
-            throw StreamingScanError.unknownBatch
-        }
-        guard pageNumber > 0, batch.pages[pageNumber] == nil else {
-            throw StreamingScanError.invalidPageNumber
-        }
-        batch.pages[pageNumber] = StreamingPage(
-            inputPath: inputURL.path,
-            outputPath: nil,
-            status: nil
-        )
-        streamingBatches[batchID] = batch
-        try await enqueueReservedStreamingPage(
-            batchID: batchID,
-            pageNumber: pageNumber,
-            inputURL: inputURL
-        )
-    }
-
-    private func enqueueReservedStreamingPage(
-        batchID: UUID,
-        pageNumber: Int,
-        inputURL: URL
-    ) async throws {
-        guard let request = streamingBatches[batchID]?.request,
-              streamingBatches[batchID]?.pages[pageNumber]?.inputPath == inputURL.path else {
-            throw StreamingScanError.unknownBatch
-        }
-        var operations: [String] = []
-        if request.removeBlankPages { operations.append("remove blank pages") }
-        if request.cropPages { operations.append("trim/crop") }
-        let language = request.environment["SCAN_LANGUAGE"] ?? "deu+eng"
-        operations.append("OCR (\(language))")
+    private func enqueueStreamingPageWork(_ work: StreamingOCRPageWork) async {
         queue.append(Job(
-            inputPath: inputURL.path,
-            batchID: batchID,
-            environment: request.environment,
-            workingDirectory: request.workDirectory,
+            inputPath: work.reservation.inputURL.path,
+            batchID: work.reservation.documentID.rawValue,
+            environment: work.environment,
+            workingDirectory: work.reservation.inputURL.deletingLastPathComponent(),
             ocrEnabled: true,
-            removeBlankPages: request.removeBlankPages,
-            cropPages: request.cropPages,
+            removeBlankPages: work.removeBlankPages,
+            cropPages: work.cropPages,
             deferredProcessing: nil,
-            workerMetadata: OCRWorkerJobMetadata(
-                documentName: request.documentName,
-                batchID: batchID.uuidString.lowercased(),
-                pageNumber: pageNumber,
-                operations: operations
-            ),
-            streamingPageNumber: pageNumber,
+            workerMetadata: work.metadata,
+            streamingPageWork: work,
             outputDirectory: nil
         ))
         await scheduleAvailableJobs()
         await publishQueueState()
     }
 
-    private func removeStreamingPageReservation(
-        batchID: UUID,
-        pageNumber: Int,
-        inputPath: String
-    ) {
-        guard var batch = streamingBatches[batchID],
-              let page = batch.pages[pageNumber],
-              page.inputPath == inputPath,
-              page.status == nil else {
-            return
-        }
-        batch.pages.removeValue(forKey: pageNumber)
-        streamingBatches[batchID] = batch
-    }
-
     public func finishStreamingScan(batchID: UUID, pageCount: Int) async throws {
-        guard var batch = streamingBatches[batchID] else {
-            throw StreamingScanError.unknownBatch
-        }
-        guard pageCount == batch.pages.count else {
-            throw StreamingScanError.pageCountMismatch(expected: pageCount, received: batch.pages.count)
-        }
-        batch.acquisitionFinished = true
-        batch.expectedPageCount = pageCount
-        streamingBatches[batchID] = batch
-        try await finalizeStreamingBatchIfReady(batchID)
+        try await streamingDocuments.seal(
+            StreamingOCRDocumentID(rawValue: batchID),
+            expectedPageCount: pageCount
+        )
         await publishQueueState()
     }
 
     @discardableResult
     public func cancelStreamingScan(batchID: UUID, publishRawFallback: Bool = false) async -> Bool {
-        queue.removeAll { $0.batchID == batchID }
-        let tasks = activeJobs.values.filter { $0.job.batchID == batchID }.map(\.task)
-        for task in tasks { task.cancel() }
-        for task in tasks { await task.value }
-        let removed = disposeStreamingBatch(batchID: batchID, publishRawFallback: publishRawFallback)
+        let documentID = StreamingOCRDocumentID(rawValue: batchID)
+        let reason: StreamingOCRTerminationReason = publishRawFallback
+            ? .failed("Streaming scan failed before document finalization completed.")
+            : .cancelled
+        let handle = await streamingDocuments.invalidate(documentID, reason: reason)
+        await cancelScheduledJobs(batchIDs: [batchID])
+        let removed: Bool
+        if let handle {
+            removed = await streamingDocuments.finishCancellation(handle).workspaceRemoved
+        } else {
+            removed = true
+        }
         await scheduleAvailableJobs()
         resumeIdleWaitersIfIdle()
         await publishQueueState()
@@ -580,32 +451,32 @@ public actor OCRQueueActor {
     }
 
     public func waitUntilIdle() async {
+        let documentState = await streamingDocuments.state
         guard !queue.isEmpty
                 || !activeJobs.isEmpty
-                || !streamingBatches.isEmpty
-                || finishingJobCount > 0 else { return }
-        await withCheckedContinuation { continuation in
-            idleWaiters.append(continuation)
+                || finishingJobCount > 0
+                || !documentState.activeDocumentIDs.isEmpty else { return }
+        if !queue.isEmpty || !activeJobs.isEmpty || finishingJobCount > 0 {
+            await withCheckedContinuation { continuation in
+                idleWaiters.append(continuation)
+            }
         }
+        await streamingDocuments.waitUntilIdle()
     }
 
     public func cancelAll() async {
+        let documentHandles = await streamingDocuments.invalidateAll(reason: .cancelled)
         let queuedJobs = queue
         queue.removeAll()
         for job in queuedJobs {
             disposeDeferredJob(job, publishFallback: false)
         }
-        let cancelledBatches: [(UUID, StreamingBatch)] = Array(streamingBatches.keys).compactMap { batchID in
-            guard let batch = streamingBatches[batchID] else { return nil }
-            streamingBatches[batchID] = nil
-            return (batchID, batch)
-        }
         isCancellingAll = true
         let tasks = activeJobs.values.map(\.task)
         for task in tasks { task.cancel() }
         for task in tasks { await task.value }
-        for (_, batch) in cancelledBatches {
-            cleanupStreamingBatch(batch, publishRawFallback: false)
+        for handle in documentHandles {
+            _ = await streamingDocuments.finishCancellation(handle)
         }
         isCancellingAll = false
         for batchID in Array(pendingCleanups.keys) {
@@ -616,9 +487,14 @@ public actor OCRQueueActor {
     }
 
     public func cancelJobs(referencing path: String) async {
-        let matchingBatchIDs = Set(streamingBatches.compactMap { batchID, batch in
-            streamingBatch(batch, references: path) ? batchID : nil
-        })
+        let matchingDocumentIDs = await streamingDocuments.documentIDs(referencing: path)
+        let matchingBatchIDs = Set(matchingDocumentIDs.map(\.rawValue))
+        var documentHandles: [StreamingOCRCancellationHandle] = []
+        for documentID in matchingDocumentIDs {
+            if let handle = await streamingDocuments.invalidate(documentID, reason: .cancelled) {
+                documentHandles.append(handle)
+            }
+        }
         let removedJobs = queue.filter {
             matchingBatchIDs.contains($0.batchID)
                 || jobReferencesPath($0, path: path)
@@ -640,25 +516,32 @@ public actor OCRQueueActor {
                     || jobReferencesPath($0.job, path: path)
             }
             .map(\.task)
-        let cancelledBatches: [(UUID, StreamingBatch)] = matchingBatchIDs.compactMap { batchID in
-            guard let batch = streamingBatches[batchID] else { return nil }
-            streamingBatches[batchID] = nil
-            return (batchID, batch)
-        }
         for task in matchingTasks { task.cancel() }
         for task in matchingTasks { await task.value }
-        for (_, batch) in cancelledBatches {
-            cleanupStreamingBatch(batch, publishRawFallback: false)
+        for handle in documentHandles {
+            _ = await streamingDocuments.finishCancellation(handle)
         }
         for batchID in Array(pendingCleanups.keys) {
             sweepPendingCleanupsIfPossible(batchID: batchID)
         }
 
-        if removedQueuedJob || !matchingTasks.isEmpty || !cancelledBatches.isEmpty {
+        if removedQueuedJob || !matchingTasks.isEmpty || !documentHandles.isEmpty {
             await scheduleAvailableJobs()
             resumeIdleWaitersIfIdle()
             await publishQueueState()
         }
+    }
+
+    private func cancelScheduledJobs(batchIDs: Set<UUID>) async {
+        queue.removeAll { batchIDs.contains($0.batchID) }
+        let tasks = activeJobs.values
+            .filter { batchIDs.contains($0.job.batchID) }
+            .map(\.task)
+        for task in tasks { task.cancel() }
+        for task in tasks { await task.value }
+        await scheduleAvailableJobs()
+        resumeIdleWaitersIfIdle()
+        await publishQueueState()
     }
 
     @discardableResult
@@ -864,27 +747,22 @@ public actor OCRQueueActor {
             await localCapacity.release(activeJob.localReservationCPUs)
         }
         await scheduleAvailableJobs()
-        if let pageNumber = activeJob.job.streamingPageNumber,
-           var batch = streamingBatches[activeJob.job.batchID],
-           var page = batch.pages[pageNumber]
-        {
-            page.outputPath = effectiveCompletion.publishedOutputPath.isEmpty
-                ? nil
-                : effectiveCompletion.publishedOutputPath
-            page.status = effectiveCompletion.status
-            batch.pages[pageNumber] = page
-            streamingBatches[activeJob.job.batchID] = batch
-            do {
-                try await finalizeStreamingBatchIfReady(activeJob.job.batchID)
-            } catch {
-                latestCompletionStatus = "failed"
-                queueState.status = "failed"
-                let retainedWorkDirectory = streamingBatches[activeJob.job.batchID]?.request.workDirectory
-                queueState.error = error.localizedDescription
-                    + (disposeStreamingBatch(batchID: activeJob.job.batchID, publishRawFallback: true)
-                        ? ""
-                        : cleanupRetentionNote(retainedWorkDirectory))
+        if let work = activeJob.job.streamingPageWork {
+            let outcome: StreamingOCRPageOutcome
+            if effectiveCompletion.status == "cancelled" {
+                outcome = .cancelled
+            } else if effectiveCompletion.status == "done",
+                      !effectiveCompletion.publishedOutputPath.isEmpty {
+                outcome = .succeeded(outputURL: URL(
+                    fileURLWithPath: effectiveCompletion.publishedOutputPath
+                ))
+            } else {
+                outcome = .failed(
+                    status: effectiveCompletion.status,
+                    diagnostic: effectiveCompletion.error
+                )
             }
+            await streamingDocuments.completePage(work.reservation, outcome: outcome)
         }
         finishingJobCount -= 1
         let remainingFinishing = (finishingJobBatchCounts[activeJob.job.batchID] ?? 1) - 1
@@ -896,7 +774,6 @@ public actor OCRQueueActor {
         sweepPendingCleanupsIfPossible(batchID: activeJob.job.batchID)
         if activeJobs.isEmpty,
            queue.isEmpty,
-           streamingBatches.isEmpty,
            finishingJobCount == 0 {
             queueState.status = latestCompletionStatus ?? effectiveCompletion.status
             resumeIdleWaiters()
@@ -925,7 +802,7 @@ public actor OCRQueueActor {
         if job.deferredProcessing != nil {
             return cpuLimit(for: job)
         }
-        if job.streamingPageNumber != nil { return 1 }
+        if job.streamingPageWork != nil { return 1 }
         let pageMode = job.environment?["SCAN_PAGE_MODE"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -1000,7 +877,7 @@ public actor OCRQueueActor {
         job.deferredProcessing == nil
             && job.ocrEnabled
             && (
-                job.streamingPageNumber != nil
+                job.streamingPageWork != nil
                     || (!job.removeBlankPages && !job.cropPages && pageMode(for: job) == "single")
             )
     }
@@ -1031,20 +908,6 @@ public actor OCRQueueActor {
         queueState.processingJobs = activeJobs.values
             .sorted { $0.started < $1.started }
             .map { queueSnapshot(job: $0.job, phase: .processing, started: $0.started) }
-        queueState.finalizingJobs = streamingBatches.values.compactMap { batch in
-            guard let started = batch.finalizationStarted else { return nil }
-            var operations = ["assemble OCR pages"]
-            operations.append("publish searchable PDF")
-            return OCRQueueJobSnapshot(
-                input: batch.request.finalOutputPath,
-                documentName: batch.request.documentName,
-                pageNumber: nil,
-                operations: operations,
-                phase: .finalizing,
-                started: started
-            )
-        }
-        .sorted { ($0.started ?? .distantPast) < ($1.started ?? .distantPast) }
         await webUpdates.notify()
     }
 
@@ -1096,18 +959,6 @@ public actor OCRQueueActor {
         return false
     }
 
-    private func streamingBatch(_ batch: StreamingBatch, references path: String) -> Bool {
-        let candidate = standardizedPath(path)
-        if standardizedPath(batch.request.finalOutputPath) == candidate {
-            return true
-        }
-        if OCRInputPath.outputPath(for: path).map(standardizedPath)
-            == standardizedPath(batch.request.finalOutputPath) {
-            return true
-        }
-        return batch.request.documentName == URL(fileURLWithPath: candidate).lastPathComponent
-    }
-
     private func standardizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path, isDirectory: false)
             .resolvingSymlinksInPath()
@@ -1121,7 +972,7 @@ public actor OCRQueueActor {
         jobs: Int,
         executionPreference: OCRExecutionPreference
     ) async throws -> ProcessResult {
-        if job.streamingPageNumber != nil {
+        if job.streamingPageWork != nil {
             return try await executeStreamingPage(
                 job: job,
                 outputPath: outputPath,
@@ -1316,7 +1167,7 @@ public actor OCRQueueActor {
                         cropPages: false,
                         deferredProcessing: nil,
                         workerMetadata: nil,
-                        streamingPageNumber: nil,
+                        streamingPageWork: nil,
                         outputDirectory: deferredProcessing.ocrOnly
                             ? deferredProcessing.cleanupDirectory.deletingLastPathComponent().path
                             : nil
@@ -1401,133 +1252,15 @@ public actor OCRQueueActor {
         )
     }
 
-    private func finalizeStreamingBatchIfReady(_ batchID: UUID) async throws {
-        guard var batch = streamingBatches[batchID],
-              batch.acquisitionFinished,
-              let expectedPageCount = batch.expectedPageCount,
-              batch.pages.count == expectedPageCount,
-              batch.pages.values.allSatisfy({ $0.status != nil }),
-              batch.finalizationStarted == nil
-        else { return }
-
-        let failedPages = batch.pages
-            .filter { $0.value.status != "done" }
-            .map(\.key)
-            .sorted()
-        guard failedPages.isEmpty else {
-            disposeStreamingBatch(batchID: batchID, publishRawFallback: true)
-            throw StreamingScanError.pageProcessingFailed(failedPages)
-        }
-        var outputPaths = batch.pages.keys.sorted().compactMap { batch.pages[$0]?.outputPath }
-        guard outputPaths.count == expectedPageCount else {
-            throw StreamingScanError.pageProcessingFailed(Array(1...expectedPageCount))
-        }
-
-        batch.finalizationStarted = Date()
-        streamingBatches[batchID] = batch
-        await publishQueueState()
-
-        let stagingURL = batch.request.workDirectory.appendingPathComponent("assembled.ocr.pdf")
-        if batch.request.removeBlankPages {
-            var retainedOutputPaths: [String] = []
-            for outputPath in outputPaths {
-                let pageCount = try await documentExecutor.execute(ProcessRequest(
-                    executable: "qpdf",
-                    arguments: ["--show-npages", outputPath],
-                    environment: batch.request.environment,
-                    workingDirectory: batch.request.workDirectory
-                ))
-                guard pageCount.succeeded,
-                      let count = Int(
-                        pageCount.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-                      ) else {
-                    throw StreamingScanError.assemblyFailed(pageCount.standardError)
-                }
-                if count > 0 { retainedOutputPaths.append(outputPath) }
-            }
-            outputPaths = retainedOutputPaths
-        }
-        if outputPaths.isEmpty {
-            guard batch.request.removeBlankPages,
-               let firstPageNumber = batch.pages.keys.min(),
-               let firstPage = batch.pages[firstPageNumber] else {
-                throw StreamingScanError.pageProcessingFailed(Array(1...expectedPageCount))
-            }
-            try FileManager.default.copyItem(
-                at: URL(fileURLWithPath: firstPage.inputPath),
-                to: stagingURL
-            )
-        } else {
-            let merge = try await documentExecutor.execute(ProcessRequest(
-                executable: "qpdf",
-                arguments: ["--empty", "--pages"] + outputPaths + ["--", stagingURL.path],
-                environment: batch.request.environment,
-                workingDirectory: batch.request.workDirectory
-            ))
-            guard merge.succeeded else {
-                throw StreamingScanError.assemblyFailed(merge.standardError)
-            }
-        }
-        let options = try DocumentProcessingOptions(environment: batch.request.environment)
-        let metadata = try await documentExecutor.execute(
-            SetPDFCreatorRequest(pdfPath: stagingURL.path, creator: options.creator).command.processRequest(
-                environment: batch.request.environment,
-                workingDirectory: batch.request.workDirectory
-            )
-        )
-        guard metadata.succeeded else {
-            throw StreamingScanError.assemblyFailed(metadata.standardError)
-        }
-        try FoundationNativeScanFileSystem().placeFileExclusively(
-            at: stagingURL,
-            destination: URL(fileURLWithPath: batch.request.finalOutputPath)
-        )
-        streamingBatches.removeValue(forKey: batchID)
-        try? FileManager.default.removeItem(at: batch.request.workDirectory)
-        resumeIdleWaitersIfIdle()
-    }
-
     private func resumeIdleWaitersIfIdle() {
         if queue.isEmpty,
            activeJobs.isEmpty,
-           streamingBatches.isEmpty,
            finishingJobCount == 0 {
             for batchID in Array(pendingCleanups.keys) {
                 sweepPendingCleanupsIfPossible(batchID: batchID)
             }
             resumeIdleWaiters()
         }
-    }
-
-    @discardableResult
-    private func disposeStreamingBatch(batchID: UUID, publishRawFallback: Bool) -> Bool {
-        guard let batch = streamingBatches[batchID] else {
-            return true
-        }
-        streamingBatches.removeValue(forKey: batchID)
-        return cleanupStreamingBatch(batch, publishRawFallback: publishRawFallback)
-    }
-
-    @discardableResult
-    private func cleanupStreamingBatch(_ batch: StreamingBatch, publishRawFallback: Bool) -> Bool {
-        if publishRawFallback, isTruthy(batch.request.environment["SCAN_OCR_ONLY"]) {
-            let rawPDF = batch.request.workDirectory.appendingPathComponent("raw.pdf")
-            if FileManager.default.fileExists(atPath: rawPDF.path) {
-                let destination = batch.request.workDirectory
-                    .deletingLastPathComponent()
-                    .appendingPathComponent(batch.request.documentName)
-                do {
-                    try FoundationNativeScanFileSystem().placeFileExclusively(
-                        at: rawPDF,
-                        destination: destination
-                    )
-                } catch {
-                    return false
-                }
-            }
-        }
-        try? FileManager.default.removeItem(at: batch.request.workDirectory)
-        return true
     }
 
     private func disposeDeferredJob(_ job: Job, publishFallback: Bool) {

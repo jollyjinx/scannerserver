@@ -42,12 +42,18 @@ private workspace and the error is reported.
 For OCR-enabled multipage ScanSnap Wi-Fi scans, each page is OCRed, autocropped, and blank-filtered
 before ordered assembly. A capable remote worker performs those CPU-heavy operations; local
 fallback preserves the same settings. Scannerserver performs only ordered assembly, the all-blank
-keep-one safeguard, metadata, and atomic publication. Other backends and output modes retain their
-established whole-document processing order.
+keep-one safeguard, metadata, and atomic publication. One actor owns that document lifecycle and
+commits the final file only after its staging task returns for the still-current document generation;
+cancellation invalidates the generation first, so late page results cannot publish. Other backends
+and output modes retain their established whole-document processing order.
 
 PDFs imported on the Documents page use the same page-oriented path: scannerserver preserves the
 uploaded source, splits a private working copy into one-page jobs, fills the aggregate capacity of
-all compatible remote workers, and assembles the resulting `.ocr.pdf` in source order.
+all compatible remote workers, and assembles the resulting `.ocr.pdf` in source order. Each split
+page is yielded to the OCR scheduler immediately instead of waiting for the entire upload to be
+split. Imported documents share ordering, all-blank, metadata, atomic-publication, cancellation, and
+workspace-cleanup semantics with Wi-Fi streaming scans; their explicit failure policy preserves the
+uploaded source instead of using the Wi-Fi-only raw fallback.
 
 The Documents page reads and removes visible PDF/PNG outputs through one serialized collection
 lifecycle. Deleting a source scan while processing is active cancels that document's work before

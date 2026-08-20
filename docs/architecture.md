@@ -82,15 +82,23 @@ persisted stores, reachability, and physical-button session state.
   pool separately gates queue-owned processing and distributed OCR fallback, so losing remote
   workers cannot oversubscribe the scanner host. When reduced priority is enabled, the queue applies the
   configured nice level to every external document-processing subprocess; the service and scanner
-  acquisition remain at normal priority. The queue exposes aggregate running/queued state, targeted
-  cancellation, and recent jobs.
+  acquisition remain at normal priority. The queue owns FIFO admission, CPU and worker-capacity
+  selection, page-process task cancellation, and recent per-page timing, but not ordering-sensitive
+  document assembly or publication policy. It exposes aggregate running/queued state and composes
+  the document module's finalization state into the compatibility status snapshot.
+- `StreamingOCRDocumentModule` is the package-scoped actor for page-oriented OCR document state.
+  It owns document creation, page reservation and typed completion, sealing, source-order assembly,
+  the all-blank keep-one safeguard, creator metadata, exclusive publication, origin-specific failure
+  policy, cancellation invalidation, and workspace cleanup. Finalization runs in an owned task that
+  may only create a staging PDF in the private workspace. The actor records an opaque generation
+  before that task suspends and revalidates it when the task returns; only the actor may perform the
+  synchronous exclusive publication commit. Cancellation invalidates the generation before queue
+  work is cancelled, so a late page or finalizer result cannot publish a deleted document.
 - For OCR-enabled multipage ScanSnap Wi-Fi scans, acquisition calls the queue after every accepted
-  JPEG side. The queue immediately creates and schedules a one-page PDF, owns the private scan
-  workspace (retaining the raw PDF there under `SCAN_OCR_ONLY`), receives each remote result
-  independently, and assembles pages
-  in source order. It reserves each page in actor-isolated batch state before the asynchronous PDF
+  JPEG side. The document module reserves each page before the asynchronous PDF
   writer runs, so an earlier page completion cannot be overwritten by a stale pre-suspension batch
-  snapshot. Workers advertising the relevant capabilities run the same native autocrop and blank
+  snapshot, then the queue schedules the returned one-page work immediately. Workers advertising
+  the relevant capabilities run the same native autocrop and blank
   filtering after OCR on each page; an unavailable or failed remote worker falls back to local OCR
   and the same per-page operations. The scanner host retains the all-blank keep-one safeguard,
   creator metadata, and exclusive `.ocr.pdf` publication. With `SCAN_OCR_ONLY`, the raw PDF stays
@@ -105,6 +113,12 @@ persisted stores, reachability, and physical-button session state.
   path retains the raw PDF, local fallback, cancellation, CPU
   budgeting, crop settings, and failure atomicity contracts. SANE acquisition still enters the
   established whole-document path.
+- PDFs imported through the Documents page use the same document actor and page-completion
+  Interface. The module creates their private workspace, counts and splits the source with `qpdf`,
+  reserves each prepared page, and yields it immediately to the queue so OCR begins before the
+  complete source has been split. Imports explicitly preserve their visible source on processing
+  failure; Wi-Fi OCR-only scans explicitly publish `raw.pdf` as fallback. That difference is a typed
+  creation policy rather than a cleanup-time environment check.
 - `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
   snapshots.
