@@ -21,6 +21,7 @@ package struct StreamingOCRDocumentRequest: Equatable, Sendable {
     package let environment: [String: String]
     package let removeBlankPages: Bool
     package let cropPages: Bool
+    package let replaceExistingText: Bool
     package let failurePolicy: StreamingOCRFailurePolicy
 
     package init(
@@ -30,6 +31,7 @@ package struct StreamingOCRDocumentRequest: Equatable, Sendable {
         environment: [String: String],
         removeBlankPages: Bool,
         cropPages: Bool,
+        replaceExistingText: Bool = false,
         failurePolicy: StreamingOCRFailurePolicy
     ) {
         self.documentName = documentName
@@ -38,6 +40,7 @@ package struct StreamingOCRDocumentRequest: Equatable, Sendable {
         self.environment = environment
         self.removeBlankPages = removeBlankPages
         self.cropPages = cropPages
+        self.replaceExistingText = replaceExistingText
         self.failurePolicy = failurePolicy
     }
 }
@@ -54,6 +57,7 @@ package struct StreamingOCRPageWork: Sendable {
     package let environment: [String: String]
     package let removeBlankPages: Bool
     package let cropPages: Bool
+    package let replaceExistingText: Bool
     package let metadata: OCRWorkerJobMetadata
 }
 
@@ -370,6 +374,7 @@ package actor StreamingOCRDocumentModule {
             environment: imported.environment,
             removeBlankPages: imported.removeBlankPages,
             cropPages: imported.cropPages,
+            replaceExistingText: imported.replaceExistingText,
             failurePolicy: .preserveImportedSource(sourceURL)
         ))
 
@@ -486,6 +491,7 @@ package actor StreamingOCRDocumentModule {
             environment: request.environment,
             removeBlankPages: request.removeBlankPages,
             cropPages: request.cropPages,
+            replaceExistingText: request.replaceExistingText,
             metadata: OCRWorkerJobMetadata(
                 documentName: request.documentName,
                 batchID: reservation.documentID.rawValue.uuidString.lowercased(),

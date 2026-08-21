@@ -361,7 +361,8 @@ private func submitOCRAPIJob(
                 workDirectory: workDirectory,
                 environment: environment,
                 removeBlankPages: mode.settings.removeBlankPages,
-                cropPages: mode.settings.cropPages
+                cropPages: mode.settings.cropPages,
+                replaceExistingText: true
             )
         )
         await dependencies.webUpdates.notify()
@@ -589,7 +590,7 @@ private let ocrAPIOpenAPIDocument = #"""
   "info": {
     "title": "scannerserver OCR API",
     "version": "1.0.0",
-    "description": "Submit PDFs to the existing scannerserver OCR queue and retrieve searchable PDFs or UTF-8 text."
+    "description": "Submit PDFs to the existing scannerserver OCR queue and retrieve searchable PDFs or UTF-8 text. Pages are rasterized so existing OCR or text layers are discarded and replaced by fresh OCR."
   },
   "paths": {
     "/api/v1/ocr/presets": {
@@ -606,7 +607,7 @@ private let ocrAPIOpenAPIDocument = #"""
           {"name": "filename", "in": "query", "description": "Visible PDF filename; generated when omitted", "schema": {"type": "string"}},
           {"name": "mode_id", "in": "query", "description": "OCR preset ID; the default preset is used when omitted", "schema": {"type": "string"}}
         ],
-        "requestBody": {"required": true, "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}},
+        "requestBody": {"required": true, "description": "PDF input; pages are rasterized and any existing OCR or text layer is discarded and replaced", "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}},
         "responses": {"202": {"description": "OCR job accepted", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Job"}}}}}
       }
     },

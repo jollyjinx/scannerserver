@@ -51,6 +51,9 @@ curl --fail --silent \
 
 Submit a PDF. `filename` is optional; scannerserver generates a unique PDF name when it is omitted.
 `mode_id` is optional and defaults to the configured default preset.
+The input may already contain OCR or another text layer. API jobs deliberately rasterize each page,
+discard that layer, and run fresh OCR, so a newer scannerserver/Tesseract setup replaces older
+recognition results instead of rejecting or retaining them.
 
 ```bash
 curl --fail --silent \
@@ -112,6 +115,7 @@ DELETE /api/v1/ocr/jobs/{job}
 
 - Uploads use `SCAN_PDF_UPLOAD_MAX_BYTES`, PDF signature validation, exclusive file publication,
   the selected preset, page-oriented OCR, configured local CPU capacity, and approved remote workers.
+- Existing OCR and text layers are replaced with fresh OCR for both local and remote execution.
 - The uploaded source PDF and completed `.ocr.pdf` appear in the Documents collection, matching
   browser PDF imports.
 - Job states are derived from atomically published files and the actor-isolated OCR queue rather than

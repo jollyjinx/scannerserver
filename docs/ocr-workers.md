@@ -1,6 +1,6 @@
 ---
 title: Distributed OCR Workers
-description: Running and operating optional macOS OCR workers for scannerserver.
+description: Running and operating optional Linux-container and macOS OCR workers for scannerserver.
 type: reference
 audience: maintainers and operators
 status: current
@@ -119,6 +119,44 @@ worker identity and scannerserver approval when the container is replaced.
 If scannerserver is another container on the same Docker network, use its service name in
 `--server`. To reach a scannerserver published on the Docker host, use
 `http://host.docker.internal:PORT` on Docker Desktop.
+
+### Managed Apple Container worker on macOS
+
+macOS users running the complete worker image through Apple's `container` CLI can use the included
+launcher. It pulls and recreates the worker on demand, persists its identity in the user's Library,
+and can install a LaunchAgent that starts the existing container at login:
+
+```sh
+export SCANNERSERVER_WORKER_SERVER_URL=http://SCANNERSERVER-IP
+./scripts/scannerserverworker.zsh
+./scripts/scannerserverworker.zsh --install
+```
+
+Run the first command once before installing the LaunchAgent. It starts Apple Container with kernel
+installation enabled, pulls the configured image, and creates the worker. The LaunchAgent starts
+that existing container at later logins; it deliberately does not pull or replace images during
+login. Rerun the launcher without an option when a new scannerserver image should replace the
+worker container, then rerun `--install` only if its recorded settings changed.
+
+The LaunchAgent records the resolved settings, so it does not depend on interactive shell startup
+files. By default, the launcher uses the Mac's local host name, reserves one active CPU for macOS,
+allocates 8 GB to the worker container, and stores the persistent identity under
+`~/Library/Application Support/scannerserver-worker/`. Override those defaults before running the
+launcher or installing the LaunchAgent:
+
+```sh
+export SCANNERSERVER_WORKER_NAME=office-mac
+export SCANNERSERVER_WORKER_CPUS=8
+export SCANNERSERVER_WORKER_MEMORY=12G
+export SCANNERSERVER_WORKER_IMAGE=ghcr.io/jollyjinx/scannerserver:latest
+```
+
+Run `./scripts/scannerserverworker.zsh --help` for every override and `--dry-run` to inspect the
+resolved `container run` command. The launcher deliberately keeps transient OCR work under the
+container's `/tmp`; only the generated worker ID and authentication token are persisted on the Mac.
+The LaunchAgent stores the launcher's absolute path, so keep the checkout at that path after
+installation. Its combined output is written to
+`~/Library/Logs/eu.jinx.scannerserver-worker.log`.
 
 Open the **Workers** page on scannerserver and approve the new worker. Worker capacity is derived
 from its detected CPUs: an 11-CPU worker leases up to 11 pages concurrently, and every one-page PDF

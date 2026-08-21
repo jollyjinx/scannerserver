@@ -128,7 +128,9 @@ persisted stores, reachability, and physical-button session state.
 - The versioned OCR HTTP API is an OpenAPI-described adapter over that same imported-PDF path. It
   accepts raw PDF request bodies, derives status from actor-isolated queue snapshots and atomic
   source/result publication, returns the searchable PDF, and extracts UTF-8 text from the completed
-  PDF with Poppler without rerunning OCR. Optional bearer authentication is controlled by
+  PDF with Poppler without rerunning OCR. API-submitted pages use OCRmyPDF's force mode so an
+  existing OCR or text layer is discarded and replaced by the newly configured OCR result, through
+  both local and remote execution. Optional bearer authentication is controlled by
   `SCAN_OCR_API_TOKEN`. API uploads do not introduce a second scheduler or durable job database;
   completed results remain discoverable after restart, while interrupted jobs retain their source
   and report failure.
@@ -206,7 +208,10 @@ persisted stores, reachability, and physical-button session state.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for
-  state already covered by that notifier.
+  state already covered by that notifier. The Documents page uses the same revision source through
+  `/documents/updates`, which renders only the replaceable results region after a change. Its browser
+  client applies that fragment in the background and restores checked files, keyboard focus, and
+  scroll position instead of navigating or rebuilding the complete page.
 - Blocking subprocess pipe reads and `waitpid` calls stay off Swift’s cooperative executor.
 
 ## External Tool Boundary

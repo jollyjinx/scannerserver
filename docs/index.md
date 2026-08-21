@@ -19,8 +19,9 @@ Use this page as the entry point for repository documentation. The root [`README
 | [`architecture.md`](architecture.md) | Current Swift architecture, scope guardrails, compatibility contracts, and validation | Maintainers and agents |
 | [`configuration.md`](configuration.md) | Environment variables, scan modes, output names, OCR, blank-page removal, and cropping | Operators |
 | [`ocr-api.md`](ocr-api.md) | OpenAPI-described PDF OCR jobs for LLM tools and service integrations | Integrators and operators |
-| [`ocr-workers.md`](ocr-workers.md) | Remote OCR worker registration, approval, status, and distributed-execution roadmap | Operators and maintainers |
+| [`ocr-workers.md`](ocr-workers.md) | Built-in and remote worker setup, registration, approval, scheduling, status, and protocol | Operators and maintainers |
 | [`deployment.md`](deployment.md) | Published images, host networking, Compose, local builds, and image publishing | Operators |
+| [`releasing.md`](releasing.md) | Release validation, version selection, Git tags, GitHub Releases, and GHCR verification | Maintainers |
 | [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, directed port map, startup advertisements, heartbeat, and physical-button session lifecycle | Maintainers |
 | [`swift-hardware-validation.md`](swift-hardware-validation.md) | Manual acceptance testing with a real scanner | Maintainers |
 | [`history/swift-migration.md`](history/swift-migration.md) | Completed Python-to-Swift migration evidence and historical milestones | Maintainers |

@@ -145,7 +145,9 @@ docker compose up -d
 
 `git_commit_version.sh` formats the commit timestamp recorded by Git as `YYYY.MM.DD.HHMMSS`.
 The image exposes that value in the web page header, at `/version`, through
-`SCANNERSERVER_VERSION`, and in the OCI image version label. The full commit SHA remains available
+`SCANNERSERVER_VERSION`, and in the OCI image version label. The header version links to the
+project's [GitHub releases](https://github.com/jollyjinx/scannerserver/releases), while `/version`
+remains a plain-text endpoint for scripts and health tooling. The full commit SHA remains available
 as `SCANNERSERVER_REVISION` and in the OCI revision label. Automated GitHub, Gitmaster, and
 `build_and_push_image.sh` builds set both values.
 
@@ -205,6 +207,11 @@ Run `--help` for the complete interface:
 ```bash
 ./scripts/build_and_push_image.sh --help
 ```
+
+Publishing a numbered project release also requires validation, an annotated Git tag, a GitHub
+Release, and verification of the multi-platform GHCR manifest. Follow the
+[maintainer release checklist](releasing.md) instead of using this development-image script as the
+release procedure.
 
 If Docker reports `Structure needs cleaning`, `input/output error`, `read-only file system`,
 `metadata_v2.db`, or `UNEXPECTED INCONSISTENCY`, its VM filesystem is unhealthy. Free host disk

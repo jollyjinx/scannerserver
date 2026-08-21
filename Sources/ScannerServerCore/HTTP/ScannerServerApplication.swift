@@ -480,6 +480,22 @@ public enum ScannerServerApplication {
                 buildInformation: buildInformation
             )
         }
+        router.get("/documents/updates") { request, _ -> Response in
+            let value = queryValues(request.uri.query)["since"] ?? ""
+            guard let since = UInt64(value) else {
+                return textResponse("Invalid revision\n", status: .badRequest)
+            }
+
+            let revision = await dependencies.webUpdates.wait(after: since)
+            let localTime = ScannerServerLocalTime(environment: dependencies.environment)
+            let groups = await dependencies.documentCollection.groups(timeZone: localTime.timeZone)
+            return jsonResponse(
+                DocumentsUpdateResponse(
+                    revision: revision,
+                    html: renderDocumentResults(groups)
+                )
+            )
+        }
         router.post("/documents/import") { request, context -> Response in
             guard request.headers[.contentType]?.lowercased().hasPrefix("application/pdf") == true else {
                 return textResponse("Only PDF uploads are supported.\n", status: .unsupportedMediaType)
@@ -1354,6 +1370,11 @@ private enum ScannerServerPage: String, CaseIterable {
     }
 }
 
+private struct DocumentsUpdateResponse: Encodable {
+    let revision: UInt64
+    let html: String
+}
+
 private func webPageResponse(
     request: Request,
     page: ScannerServerPage,
@@ -2218,8 +2239,14 @@ private func renderFiles(_ groups: [ScanDayGroup], settings: ScanSettings) -> St
     }
     html += "</select></label><button type=\"button\" data-pdf-choose>Choose PDFs</button></div>"
     html += "<p class=\"pdf-import-status muted\" data-pdf-import-status role=\"status\" aria-live=\"polite\"></p></div>"
+    html += renderDocumentResults(groups)
+    return html + "</section>"
+}
+
+private func renderDocumentResults(_ groups: [ScanDayGroup]) -> String {
+    var html = "<div data-document-results>"
     guard !groups.isEmpty else {
-        return html + "<div class=\"empty-state compact\"><h3>No scans yet</h3><p class=\"muted\">Completed scans will appear here.</p><a class=\"button-link\" href=\"/\">Start a scan</a></div></section>"
+        return html + "<div class=\"empty-state compact\"><h3>No scans yet</h3><p class=\"muted\">Completed scans will appear here.</p><a class=\"button-link\" href=\"/\">Start a scan</a></div></div>"
     }
     html += "<form class=\"documents-form\" method=\"post\" action=\"/files/delete-selected\"><div class=\"document-actions\">"
     html += "<label class=\"select-all\"><input type=\"checkbox\" data-select-all> Select all</label>"
@@ -2241,7 +2268,7 @@ private func renderFiles(_ groups: [ScanDayGroup], settings: ScanSettings) -> St
         }
         html += "</ul></div>"
     }
-    return html + "</div></form></section>"
+    return html + "</div></form></div>"
 }
 
 private func statusPill(_ status: String) -> String {

@@ -32,7 +32,7 @@
     <main>
       <div class="page-head">
         <h1>scannerserver</h1>
-        <span class="muted">Version <!-- SCANNER_SERVER_VERSION --></span>
+        <span class="muted">Version <a href="https://github.com/jollyjinx/scannerserver/releases"><!-- SCANNER_SERVER_VERSION --></a></span>
       </div>
       <!-- SCANNER_SERVER_CONTENT -->
     </main>
@@ -88,7 +88,6 @@
               if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
             }
             if (pdfImportStatus) pdfImportStatus.textContent = `${files.length} PDF${files.length === 1 ? "" : "s"} queued for OCR.`;
-            window.location.reload();
           } catch (error) {
             if (pdfImportStatus) {
               pdfImportStatus.textContent = error.message || "PDF import failed.";
@@ -125,20 +124,53 @@
         }
         pdfDropZone?.addEventListener("drop", (event) => importPDFs(event.dataTransfer.files));
 
-        const selectAll = document.querySelector("[data-select-all]");
-        const fileCheckboxes = Array.from(document.querySelectorAll('input[name="files"]'));
-        const updateSelectAll = () => {
-          if (!selectAll) return;
-          const selectedCount = fileCheckboxes.filter((checkbox) => checkbox.checked).length;
-          selectAll.checked = selectedCount === fileCheckboxes.length;
-          selectAll.indeterminate = selectedCount > 0 && selectedCount < fileCheckboxes.length;
-        };
-        selectAll?.addEventListener("change", () => {
-          fileCheckboxes.forEach((checkbox) => { checkbox.checked = selectAll.checked; });
+        const bindDocumentSelection = (root = document) => {
+          const selectAll = root.querySelector("[data-select-all]");
+          const fileCheckboxes = Array.from(root.querySelectorAll('input[name="files"]'));
+          const updateSelectAll = () => {
+            if (!selectAll) return;
+            const selectedCount = fileCheckboxes.filter((checkbox) => checkbox.checked).length;
+            selectAll.checked = fileCheckboxes.length > 0 && selectedCount === fileCheckboxes.length;
+            selectAll.indeterminate = selectedCount > 0 && selectedCount < fileCheckboxes.length;
+          };
+          selectAll?.addEventListener("change", () => {
+            fileCheckboxes.forEach((checkbox) => { checkbox.checked = selectAll.checked; });
+            updateSelectAll();
+          });
+          fileCheckboxes.forEach((checkbox) => checkbox.addEventListener("change", updateSelectAll));
           updateSelectAll();
-        });
-        fileCheckboxes.forEach((checkbox) => checkbox.addEventListener("change", updateSelectAll));
-        updateSelectAll();
+        };
+        bindDocumentSelection();
+
+        const replaceDocumentResults = (html) => {
+          const currentResults = document.querySelector("[data-document-results]");
+          if (!currentResults) return;
+          const parsed = new DOMParser().parseFromString(html, "text/html");
+          const nextResults = parsed.querySelector("[data-document-results]");
+          if (!nextResults || currentResults.outerHTML === nextResults.outerHTML) return;
+
+          const currentCheckboxes = Array.from(currentResults.querySelectorAll('input[name="files"]'));
+          const selectedFiles = new Set(
+            currentCheckboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value)
+          );
+          const selectedAll = currentResults.querySelector("[data-select-all]")?.checked === true;
+          const focusedFile = document.activeElement?.matches('input[name="files"]')
+            ? document.activeElement.value
+            : null;
+          const scrollPosition = { x: window.scrollX, y: window.scrollY };
+
+          nextResults.querySelectorAll('input[name="files"]').forEach((checkbox) => {
+            checkbox.checked = selectedAll || selectedFiles.has(checkbox.value);
+          });
+          currentResults.replaceWith(nextResults);
+          bindDocumentSelection(nextResults);
+          if (focusedFile) {
+            Array.from(nextResults.querySelectorAll('input[name="files"]'))
+              .find((checkbox) => checkbox.value === focusedFile)
+              ?.focus({ preventScroll: true });
+          }
+          window.scrollTo(scrollPosition.x, scrollPosition.y);
+        };
 
         const scannerSetup = document.querySelector("[data-scanner-setup]");
         const scannerDevices = scannerSetup?.querySelector("[data-scanner-devices]");
@@ -234,12 +266,23 @@
           pollScannerSetup();
         }
 
-        const revision = SCANNER_SERVER_REVISION;
+        let revision = SCANNER_SERVER_REVISION;
+        const hasDocumentResults = document.querySelector("[data-document-results]") !== null;
         const reconnect = () => window.setTimeout(waitForUpdate, 5000);
         async function waitForUpdate() {
           try {
-            const response = await fetch(`/updates?since=${revision}`, { cache: "no-store" });
+            const path = hasDocumentResults
+              ? `/documents/updates?since=${revision}`
+              : `/updates?since=${revision}`;
+            const response = await fetch(path, { cache: "no-store" });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (hasDocumentResults) {
+              const update = await response.json();
+              revision = update.revision;
+              replaceDocumentResults(update.html);
+              window.setTimeout(waitForUpdate, 0);
+              return;
+            }
             const nextRevision = Number.parseInt(await response.text(), 10);
             if (nextRevision > revision) {
               if (pdfImportInProgress) reconnect();

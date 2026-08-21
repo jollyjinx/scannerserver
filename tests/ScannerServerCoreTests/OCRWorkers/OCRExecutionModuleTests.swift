@@ -34,6 +34,7 @@ struct OCRExecutionModuleTests {
             outputPath: outputURL.path,
             environment: ["SCAN_LANGUAGE": "deu+eng"],
             jobs: 8,
+            forceOCR: true,
             metadata: OCRWorkerJobMetadata(
                 documentName: "scan.pdf",
                 batchID: "batch",
@@ -46,6 +47,7 @@ struct OCRExecutionModuleTests {
         let lease = try await requireLease(jobs: jobs, registration: registration)
         #expect(lease.manifest.containerArguments == [
             "--language", "deu+eng",
+            "--force-ocr",
             "--rotate-pages", "--rotate-pages-threshold", "2.0",
             "--deskew", "--optimize", "1",
             "--jobs", "8",
@@ -525,6 +527,7 @@ private func ocrTestRequest(
     outputPath: String,
     environment: [String: String]? = nil,
     jobs: Int = 1,
+    forceOCR: Bool = false,
     workerCropConfiguration: OCRWorkerCropConfiguration? = nil,
     workerBlankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil,
     metadata: OCRWorkerJobMetadata? = nil,
@@ -533,7 +536,7 @@ private func ocrTestRequest(
     OCRExecutionRequest(
         inputURL: URL(fileURLWithPath: inputPath),
         outputURL: URL(fileURLWithPath: outputPath),
-        options: OCRProcessingOptions(environment: environment, jobs: jobs),
+        options: OCRProcessingOptions(environment: environment, jobs: jobs, forceOCR: forceOCR),
         context: OCRProcessContext(environment: environment),
         metadata: metadata,
         cropConfiguration: workerCropConfiguration,

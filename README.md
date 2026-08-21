@@ -70,7 +70,8 @@ The web UI separates routine use from administration:
 
 - **Scanner** starts a scan with a saved preset and shows live activity.
 - **Documents** groups output by day, generates previews, opens or downloads files, supports bulk
-  deletion, and accepts existing PDFs by drag and drop for OCR.
+  deletion, and accepts existing PDFs by drag and drop for OCR. New and completed files appear in
+  place without clearing checked files or jumping away from the current scroll position.
 - **Scan Settings** manages presets and shared blank-page detector thresholds.
 - **Workers** configures or pauses the built-in worker, manages remote OCR workers, and shows
   waiting, running, recent, and throughput information.
@@ -108,6 +109,10 @@ validation, and atomic publication as browser imports. Its OpenAPI 3.1 descripti
 ```text
 GET /api/v1/openapi.json
 ```
+
+Uploaded PDFs may already contain OCR or another text layer. The API rasterizes their pages,
+discards that layer, and creates a fresh one with the selected preset, allowing newer recognition
+to replace older results.
 
 Set `SCAN_OCR_API_TOKEN` on the server when clients should authenticate, then submit a PDF:
 
@@ -154,8 +159,10 @@ retains queue ownership, naming, verification, ordered assembly, cancellation, a
 publication. If no suitable worker is available or a remote job fails, local processing is the
 safety fallback.
 
-Native macOS workers can use Bonjour discovery and Apple Container for per-job isolation. See
-[distributed OCR workers](docs/ocr-workers.md) for macOS startup, discovery, approval, security,
+On macOS, the included `scripts/scannerserverworker.zsh` launcher can run the worker image directly
+with Apple Container and install a login LaunchAgent. The native Swift worker remains available
+when Bonjour discovery or per-job Apple Container isolation is preferred. See
+[distributed OCR workers](docs/ocr-workers.md) for both macOS modes, discovery, approval, security,
 pause/resume behavior, and resource controls.
 
 ## Compose
@@ -205,7 +212,9 @@ docker compose pull
 docker compose up -d
 ```
 
-The page header and `/version` report the running release. Published builds use the Git commit time
+The page header reports the running release and links directly to the project's
+[GitHub releases](https://github.com/jollyjinx/scannerserver/releases). The plain-text `/version`
+endpoint remains available for scripts and health tooling. Published builds use the Git commit time
 in `YYYY.MM.DD.HHMMSS` form.
 
 ## Troubleshooting
@@ -234,6 +243,7 @@ checks, see [configuration troubleshooting](docs/configuration.md#troubleshootin
 - [OCR HTTP API for LLMs and services](docs/ocr-api.md)
 - [Distributed OCR workers](docs/ocr-workers.md)
 - [Deployment and builds](docs/deployment.md)
+- [Maintainer release checklist](docs/releasing.md)
 - [ScanSnap iX500 protocol notes](docs/protocol.md)
 - [Current Swift architecture](docs/architecture.md)
 - [Real-hardware validation](docs/swift-hardware-validation.md)

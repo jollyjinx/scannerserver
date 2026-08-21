@@ -127,6 +127,7 @@ public struct ImportedPDFOCRRequest: Sendable {
     public let environment: [String: String]
     public let removeBlankPages: Bool
     public let cropPages: Bool
+    public let replaceExistingText: Bool
 
     public init(
         sourcePath: String,
@@ -135,7 +136,8 @@ public struct ImportedPDFOCRRequest: Sendable {
         workDirectory: URL,
         environment: [String: String],
         removeBlankPages: Bool,
-        cropPages: Bool
+        cropPages: Bool,
+        replaceExistingText: Bool = false
     ) {
         self.sourcePath = sourcePath
         self.documentName = documentName
@@ -144,6 +146,7 @@ public struct ImportedPDFOCRRequest: Sendable {
         self.environment = environment
         self.removeBlankPages = removeBlankPages
         self.cropPages = cropPages
+        self.replaceExistingText = replaceExistingText
     }
 }
 
@@ -185,6 +188,7 @@ public actor OCRQueueActor {
         let ocrEnabled: Bool
         let removeBlankPages: Bool
         let cropPages: Bool
+        let replaceExistingText: Bool
         let deferredProcessing: DeferredScanProcessing?
         let workerMetadata: OCRWorkerJobMetadata?
         let streamingPageWork: StreamingOCRPageWork?
@@ -382,6 +386,7 @@ public actor OCRQueueActor {
             ocrEnabled: ocrEnabled,
             removeBlankPages: removeBlankPages,
             cropPages: cropPages,
+            replaceExistingText: false,
             deferredProcessing: nil,
             workerMetadata: nil,
             streamingPageWork: nil,
@@ -400,6 +405,7 @@ public actor OCRQueueActor {
             ocrEnabled: deferredProcessing.ocrEnabled,
             removeBlankPages: deferredProcessing.plan.removeBlankPages != nil,
             cropPages: deferredProcessing.plan.cropPages != nil,
+            replaceExistingText: false,
             deferredProcessing: deferredProcessing,
             workerMetadata: nil,
             streamingPageWork: nil,
@@ -462,6 +468,7 @@ public actor OCRQueueActor {
             ocrEnabled: true,
             removeBlankPages: work.removeBlankPages,
             cropPages: work.cropPages,
+            replaceExistingText: work.replaceExistingText,
             deferredProcessing: nil,
             workerMetadata: work.metadata,
             streamingPageWork: work,
@@ -1177,7 +1184,11 @@ public actor OCRQueueActor {
         OCRExecutionRequest(
             inputURL: inputURL,
             outputURL: outputURL,
-            options: OCRProcessingOptions(environment: job.environment, jobs: jobs),
+            options: OCRProcessingOptions(
+                environment: job.environment,
+                jobs: jobs,
+                forceOCR: job.replaceExistingText
+            ),
             context: OCRProcessContext(
                 environment: job.environment,
                 workingDirectory: workingDirectory ?? job.workingDirectory,
@@ -1245,6 +1256,7 @@ public actor OCRQueueActor {
                         ocrEnabled: true,
                         removeBlankPages: false,
                         cropPages: false,
+                        replaceExistingText: false,
                         deferredProcessing: nil,
                         workerMetadata: nil,
                         streamingPageWork: nil,

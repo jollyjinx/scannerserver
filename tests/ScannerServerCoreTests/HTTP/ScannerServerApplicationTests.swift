@@ -45,7 +45,9 @@ struct ScannerServerApplicationTests {
                 #expect(response.status == .ok)
                 #expect(response.headers[.contentType] == "text/html; charset=utf-8")
                 #expect(body.contains("<h1>scannerserver</h1>"))
-                #expect(body.contains("Version 2026.08.08.231742"))
+                #expect(body.contains(
+                    "Version <a href=\"https://github.com/jollyjinx/scannerserver/releases\">2026.08.08.231742</a>"
+                ))
                 #expect(body.contains("action=\"/scan\""))
                 #expect(body.contains("name=\"mode_id\""))
                 #expect(body.contains("href=\"/documents\""))
@@ -54,7 +56,8 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("href=\"/settings\""))
                 #expect(body.contains(">Scan Settings</a>"))
                 #expect(body.contains(">Network Setup</a>"))
-                #expect(body.contains("fetch(`/updates?since=${revision}`"))
+                #expect(body.contains("`/updates?since=${revision}`"))
+                #expect(body.contains("`/documents/updates?since=${revision}`"))
                 #expect(!body.contains("SCANNER_SERVER_REVISION"))
                 #expect(!body.contains("SCANNER_SERVER_VERSION"))
             }
@@ -143,6 +146,40 @@ struct ScannerServerApplicationTests {
                 #expect(String(buffer: response.body) == "\(revision)\n")
             }
             try await client.execute(uri: "/updates?since=invalid", method: .get) { response in
+                #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("Document updates return replaceable results without navigating the page")
+    func documentUpdates() async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "sane"])
+        defer { fixture.remove() }
+        let fileName = "2026-08-21.100003.pdf"
+        try Data("pdf".utf8).write(to: fixture.outputDirectory.appendingPathComponent(fileName))
+        let application = try fixture.application()
+        let revision = await fixture.scanJobs.webUpdates.notify()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/documents/updates?since=0", method: .get) { response in
+                let data = Data(buffer: response.body)
+                let object = try #require(
+                    try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                )
+                let html = try #require(object["html"] as? String)
+
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "application/json; charset=utf-8")
+                #expect(object["revision"] as? Int == Int(revision))
+                #expect(html.hasPrefix("<div data-document-results>"))
+                #expect(html.contains(fileName))
+                #expect(!html.contains("<html"))
+                #expect(!html.contains("data-pdf-drop-zone"))
+            }
+            try await client.execute(
+                uri: "/documents/updates?since=invalid",
+                method: .get
+            ) { response in
                 #expect(response.status == .badRequest)
             }
         }
@@ -1014,7 +1051,10 @@ struct ScannerServerApplicationTests {
                 #expect(!body.contains("2026-07-10.<script>.pdf"))
                 #expect(body.contains("/files/2026-07-10.%3Cscript%3E.pdf"))
                 #expect(body.contains(#"<input type="checkbox" data-select-all> Select all"#))
-                #expect(body.contains(#"document.querySelectorAll('input[name="files"]')"#))
+                #expect(body.contains(#"root.querySelectorAll('input[name="files"]')"#))
+                #expect(body.contains("data-document-results"))
+                #expect(body.contains("replaceDocumentResults(update.html)"))
+                #expect(body.contains("window.scrollTo(scrollPosition.x, scrollPosition.y)"))
             }
         }
     }
@@ -1172,6 +1212,11 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#""processing_pages":"#))
                 #expect(body.contains(#""queued_pages":"#))
             }
+
+            let ocrRequest = try #require(await executor.requests.first {
+                $0.executable == "ocrmypdf"
+            })
+            #expect(ocrRequest.arguments.contains("--force-ocr"))
 
             try await client.execute(
                 uri: "/api/v1/ocr/jobs/\(jobID)/text",

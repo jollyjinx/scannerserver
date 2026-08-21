@@ -59,6 +59,30 @@ struct LocalOCRProcessAdapterTests {
         ])
     }
 
+    @Test("Force OCR discards an existing text layer before creating a fresh one")
+    func forceOCRCommand() {
+        let typedRequest = OCRExecutionRequest(
+            inputURL: URL(fileURLWithPath: "/scans/existing-text.pdf"),
+            outputURL: URL(fileURLWithPath: "/scans/existing-text.ocr.pdf"),
+            options: OCRProcessingOptions(languages: ["eng"], jobs: 1, forceOCR: true)
+        )
+        let request = LocalOCRProcessAdapter(
+            processExecutor: FakeProcessExecutor(stubs: [])
+        ).processRequest(for: typedRequest)
+
+        #expect(request.arguments == [
+            "--language", "eng",
+            "--force-ocr",
+            "--rotate-pages",
+            "--rotate-pages-threshold", "2.0",
+            "--deskew",
+            "--optimize", "1",
+            "--jobs", "1",
+            "/scans/existing-text.pdf",
+            "/scans/existing-text.ocr.pdf",
+        ])
+    }
+
     @Test("Local OCR owns crop and blank-page post-processing and preserves failures")
     func localPostProcessingOutcome() async throws {
         let executor = FakeProcessExecutor(stubs: [

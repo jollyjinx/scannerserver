@@ -12,6 +12,7 @@ package enum OCRDispatchPreference: Equatable, Sendable {
 package struct OCRProcessingOptions: Equatable, Sendable {
     package let languages: [String]
     package let jobs: Int
+    package let forceOCR: Bool
     package let rotatePages: Bool
     package let rotatePagesThreshold: String
     package let deskew: Bool
@@ -20,6 +21,7 @@ package struct OCRProcessingOptions: Equatable, Sendable {
     package init(
         languages: [String],
         jobs: Int,
+        forceOCR: Bool = false,
         rotatePages: Bool = true,
         rotatePagesThreshold: String = "2.0",
         deskew: Bool = true,
@@ -27,17 +29,19 @@ package struct OCRProcessingOptions: Equatable, Sendable {
     ) {
         self.languages = languages.isEmpty ? ["eng"] : languages
         self.jobs = max(1, jobs)
+        self.forceOCR = forceOCR
         self.rotatePages = rotatePages
         self.rotatePagesThreshold = rotatePagesThreshold
         self.deskew = deskew
         self.optimizationLevel = optimizationLevel
     }
 
-    package init(environment: [String: String]?, jobs: Int) {
+    package init(environment: [String: String]?, jobs: Int, forceOCR: Bool = false) {
         let language = environment?["SCAN_LANGUAGE"] ?? "deu+eng"
         self.init(
             languages: language.split(separator: "+").map(String.init),
             jobs: jobs,
+            forceOCR: forceOCR,
             rotatePagesThreshold: environment?["SCAN_OCR_ROTATE_PAGES_THRESHOLD"] ?? "2.0"
         )
     }
@@ -145,6 +149,7 @@ package enum OCRmyPDFCommandBuilder {
         outputPath: String
     ) -> [String] {
         var arguments = ["--language", options.languages.joined(separator: "+")]
+        if options.forceOCR { arguments.append("--force-ocr") }
         if options.rotatePages {
             arguments += ["--rotate-pages", "--rotate-pages-threshold", options.rotatePagesThreshold]
         }
