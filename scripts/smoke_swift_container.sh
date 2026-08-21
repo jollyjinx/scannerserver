@@ -109,7 +109,8 @@ fi
 curl --fail --silent "${base_url}/" | grep -q '<h1>scannerserver</h1>'
 if [ -n "${SCANNERSERVER_EXPECTED_VERSION:-}" ]; then
   test "$(curl --fail --silent "${base_url}/version")" = "${SCANNERSERVER_EXPECTED_VERSION}"
-  curl --fail --silent "${base_url}/" | grep -Fq "Version ${SCANNERSERVER_EXPECTED_VERSION}"
+  curl --fail --silent "${base_url}/" |
+    grep -Fq ">${SCANNERSERVER_EXPECTED_VERSION}</a>"
 fi
 curl --fail --silent \
   "${base_url}/files/${fixture_name}/preview" \
