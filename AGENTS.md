@@ -11,6 +11,10 @@ This package is the Swift 6.3, Linux-first, containerized replacement for the fo
 
 Use this skill together with `spm-multiplatform-swift-package`, `swift-linux-service`, `swift-concurrency`, and `swift-testing-expert` when those topics apply.
 
+Load [`AI/skills/scannerserver-ocr-api/SKILL.md`](AI/skills/scannerserver-ocr-api/SKILL.md) when
+changing the versioned OCR HTTP/OpenAPI interface, its authentication or text extraction, or an
+LLM/MCP adapter over that interface.
+
 Read `docs/architecture.md` before broad source changes. It is the normative description of the current service. `docs/history/swift-migration.md` is historical evidence only and must not be treated as an active plan or backlog.
 
 ## Task Interpretation

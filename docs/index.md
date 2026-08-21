@@ -15,6 +15,7 @@ Use this page as the entry point for repository documentation. The root [`README
 | Document | Use it for | Primary audience |
 | --- | --- | --- |
 | [`../AI/README.md`](../AI/README.md) | Agent routing, package shape, compatibility boundaries, and validation baseline | Agents |
+| [`../AI/skills/scannerserver-ocr-api/SKILL.md`](../AI/skills/scannerserver-ocr-api/SKILL.md) | Agent guidance for OCR API and LLM/MCP integration changes | Agents |
 | [`architecture.md`](architecture.md) | Current Swift architecture, scope guardrails, compatibility contracts, and validation | Maintainers and agents |
 | [`configuration.md`](configuration.md) | Environment variables, scan modes, output names, OCR, blank-page removal, and cropping | Operators |
 | [`ocr-api.md`](ocr-api.md) | OpenAPI-described PDF OCR jobs for LLM tools and service integrations | Integrators and operators |

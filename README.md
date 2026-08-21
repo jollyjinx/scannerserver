@@ -1,17 +1,36 @@
-# iX500 scannerserver
+# ScanSnap iX500 scanner server
 
-`scannerserver` is a containerized web scanner service for the Fujitsu/Ricoh ScanSnap iX500.
+Turn a Fujitsu/Ricoh ScanSnap iX500 into a self-hosted network document service.
 
-It runs on a Raspberry Pi or other Linux host, finds the iX500 on your local network, and lets you scan from a web page or by pressing the scanner's physical button. Scans are written to a host directory as PDFs, with OCR running in the background.
+`scannerserver` discovers and configures the scanner, accepts scans from its web UI or physical
+button, writes documents to your own storage, and produces cropped, blank-filtered, searchable PDFs
+in the background. OCR can run on the scanner host, spread across approved worker machines, or be
+used directly by LLM tools and other services through an OpenAPI-described HTTP API.
 
-The service is implemented as a Swift 6.3 package, including ScanSnap discovery, pairing, button
-sessions, JPEG acquisition, and PDF assembly. OCRmyPDF, Tesseract, qpdf, Poppler, libvips,
-ExifTool, and the optional SANE backend remain external command-line tools used for document
-processing and compatibility.
+The service runs as a non-root Linux container on Raspberry Pi (`arm64`) and x86-64 hosts. Scanning,
+document processing, and OCR stay on machines you operate.
 
-## Quick Start
+## What you get
 
-On the Linux host that can reach the scanner, create a scan directory and start the container. Host networking and restart policies require options that are not available in Apple’s `container` CLI, so this deployment command uses Docker:
+| Area | Included |
+| --- | --- |
+| ScanSnap integration | Native iX500 Wi-Fi discovery, setup, pairing, reachability, JPEG acquisition, PDF assembly, and resilient physical-button sessions |
+| Ways to scan | Web button, physical scanner button, PDF drag-and-drop import, and asynchronous HTTP API |
+| Output | Multipage PDF, individual PDFs, PNG pages, searchable `.ocr.pdf`, and optional OCR-only publication |
+| Document processing | Automatic page cropping, configurable blank-page removal, previews, metadata, source-order assembly, and safe failure fallbacks |
+| Presets | Saved simplex/duplex modes with format, OCR language, CPU budget, priority, crop, and blank-page settings |
+| OCR capacity | Container-aware local CPU scheduling plus optional approved Linux-container or native macOS workers with automatic local fallback |
+| Integrations | OpenAPI 3.1 job API returning searchable PDFs or UTF-8 text, with optional bearer authentication |
+| Operations | Browser status and worker controls, cancellation, throughput history, atomic file publication, persistent settings, health/version endpoints, and arbitrary host UID/GID support |
+
+The normal deployment needs no proprietary desktop ScanSnap software, Docker socket, privileged
+worker container, nested container, or cloud OCR account. An optional SANE backend remains
+available for compatible non-Wi-Fi acquisition setups.
+
+## Quick start
+
+Run the container on a Linux host that can reach the scanner's network. Host networking is important
+for UDP discovery and physical-button notifications.
 
 ```bash
 mkdir -p scans
@@ -26,52 +45,121 @@ docker run -d \
   ghcr.io/jollyjinx/scannerserver:latest
 ```
 
-Open:
+Open `http://YOUR_LINUX_HOST/`.
+
+The published image supports `linux/amd64` and `linux/arm64`. Your `./scans` directory holds the
+documents and persistent service settings, so replacing the container does not lose them.
+
+### First run
+
+1. Open **Network Setup**. Scannerserver continuously discovers reachable iX500 devices while
+   leaving manual setup available.
+2. Select the scanner. If exactly one is found, scannerserver can derive and test its factory
+   password from the product serial number automatically.
+3. Open **Scan Settings** to choose the physical-button default or create presets for duplex,
+   simplex, PDF, PNG, OCR, crop, blank removal, processing CPUs, and background priority.
+4. Start a scan in the browser or press the iX500's physical scan button.
+
+The header shows the configured scanner and a live reachability indicator. The page also reports
+scan, processing, OCR, and worker activity without requiring a manual refresh loop.
+
+## Everyday document workflow
+
+The web UI separates routine use from administration:
+
+- **Scanner** starts a scan with a saved preset and shows live activity.
+- **Documents** groups output by day, generates previews, opens or downloads files, supports bulk
+  deletion, and accepts existing PDFs by drag and drop for OCR.
+- **Scan Settings** manages presets and shared blank-page detector thresholds.
+- **Workers** approves, pauses, resumes, disables, or removes OCR workers and shows waiting,
+  running, recent, and throughput information.
+- **Network Setup** discovers, pairs, tests, changes, or clears the scanner configuration.
+
+The scanner becomes available again before most document processing finishes. For an OCR-enabled
+Wi-Fi scan, pages can enter OCR, crop, and blank filtering as they arrive instead of waiting for the
+feeder to empty. The final searchable document is assembled in source order and published
+atomically.
+
+### Output and failure safety
+
+The default multipage PDF flow publishes both files:
 
 ```text
-http://YOUR_LINUX_HOST/
+2026-08-21.143015.pdf
+2026-08-21.143015.ocr.pdf
 ```
 
-The web page header shows the running release version. Published images derive it from the Git
-commit date in `YYYY.MM.DD.HHMMSS` format; `/version` returns the same value for scripts and
-deployment checks.
+With `SCAN_OCR_ONLY=true`, the raw PDF stays private while processing succeeds and only the
+searchable PDF is published. If OCR or document processing fails, scannerserver publishes the raw
+PDF as a fallback rather than losing the scan. Imported PDFs always preserve their uploaded source.
 
-On first start, open **Network Setup** to set up the scanner. Discovery keeps running in the background while the manual fields remain usable. When exactly one ScanSnap is found, setup automatically derives and tests its factory-default password from the scanner serial number. Multiple scanners are listed for manual selection.
+Deleting a document cancels its queued and active work before removing its output and cached
+preview. Late worker results cannot recreate a deleted or cancelled document.
 
-The web UI separates everyday scanning from management: **Scanner** starts scans and shows live activity, **Documents** contains completed output and accepts PDF drag-and-drop imports for OCR, **Scan Settings** manages presets and blank-page detection thresholds shared by every preset, and **Network Setup** manages the scanner connection.
+See [configuration and scan behavior](docs/configuration.md) for single-page PDF/PNG names,
+crop and blank-page tuning, OCR-only behavior, environment variables, and troubleshooting.
 
-After setup, scan either way:
+## Use scannerserver as an OCR service
 
-- Press **Start scan** in the web UI.
-- Press the physical scan button on the iX500.
+The asynchronous REST API uses the same presets, bounded queue, local capacity, remote workers,
+validation, and atomic publication as browser imports. Its OpenAPI 3.1 description is available at:
 
-The top of the page shows the configured scanner name with a live reachability indicator: green
-when the scanner's control port is reachable and grey when it is not reachable.
+```text
+GET /api/v1/openapi.json
+```
 
-The physical button uses a volatile notification session stored in the scanner. While that session
-is armed, scannerserver retains it with a 500 ms heartbeat. Web and button scans borrow that same
-scanner-side session: scannerserver pauses the heartbeat, completes the button control sequence,
-and tells the native acquisition client to skip duplicate registration. After a successful scan it
-resumes the heartbeat without re-registering. Failed or cancelled scans use the slower recovery-arm
-path. The service also
-listens for the scanner's UDP `53220` power-on advertisement and re-arms after a restart without
-waiting for a periodic refresh. See [ScanSnap protocol notes](docs/protocol.md#physical-button-support)
-for packet directions and [configuration](docs/configuration.md#physical-button-troubleshooting)
-for firewall and log checks.
+Set `SCAN_OCR_API_TOKEN` on the server when clients should authenticate, then submit a PDF:
 
-Raw multipage PDFs appear immediately in `./scans` after acquisition, and the scanner button is
-rearmed before document processing begins. For single-page PDF and PNG modes, the captured raw
-document is handed directly to the bounded background queue; blank-page removal, autocrop, and
-final file splitting or image export happen there while the scanner is already available again.
-Without OCR, a processed multipage copy atomically replaces its raw PDF. With OCR, both files are
-published by default. With `SCAN_OCR_ONLY=true`, only the searchable `.ocr.pdf` is published: the
-raw PDF stays in the private scan workspace and is deleted after OCR succeeds, and it is published
-as a fallback only if OCR or document processing fails. If that fallback publication fails, the raw
-PDF remains in the private workspace and the error is reported.
+```bash
+curl --fail --silent \
+  -H "Authorization: Bearer $SCAN_OCR_API_TOKEN" \
+  -H "Content-Type: application/pdf" \
+  --data-binary @invoice.pdf \
+  "http://YOUR_LINUX_HOST/api/v1/ocr/jobs?filename=invoice.pdf"
+```
+
+The `202 Accepted` response contains a status URL. Poll it until the job completes, then follow the
+returned links to download either the searchable PDF or extracted UTF-8 text. Jobs can also be
+cancelled and deleted through the API.
+
+See the [OCR HTTP API guide](docs/ocr-api.md) for presets, response fields, authentication, recovery
+semantics, and every endpoint.
+
+## Scale OCR across other machines
+
+The same image contains `scannerserver-worker`. Start it on another Linux or Docker-capable machine
+and point it at the scanner server:
+
+```bash
+docker run -d \
+  --name scannerserver-worker \
+  --restart unless-stopped \
+  --cpus 8 \
+  --memory 8g \
+  -v scannerserver-worker-state:/home/scansnap/.config/scannerserver-worker \
+  ghcr.io/jollyjinx/scannerserver:latest \
+  scannerserver-worker \
+  --server http://YOUR_LINUX_HOST \
+  --name "Office OCR"
+```
+
+Open **Workers** and approve the registration. The worker detects its container CPU allowance and
+uses that many concurrent one-page slots. Cap it with `--max-concurrent-jobs` when memory or thermal
+limits matter.
+
+Workers initiate all connections, retain an authenticated identity in their named volume, and need
+no inbound firewall rule. Compatible workers can perform OCR, crop, and blank filtering; the server
+retains queue ownership, naming, verification, ordered assembly, cancellation, and final
+publication. If no suitable worker is available or a remote job fails, local processing is the
+safety fallback.
+
+Native macOS workers can use Bonjour discovery and Apple Container for per-job isolation. See
+[distributed OCR workers](docs/ocr-workers.md) for macOS startup, discovery, approval, security,
+pause/resume behavior, and resource controls.
 
 ## Compose
 
-Compose is optional. If you prefer it, clone the repo and use the included host-network compose file:
+The included host-network Compose configuration is an alternative to `docker run`:
 
 ```bash
 git clone https://gitmaster.jinx.eu/jnxpublic/scannerserver.git
@@ -80,84 +168,32 @@ mkdir -p scans
 docker compose up -d
 ```
 
-Then open:
+Then open `http://YOUR_LINUX_HOST/`.
 
-```text
-http://YOUR_LINUX_HOST/
-```
+See [deployment and builds](docs/deployment.md) for image platforms, macvlan deployment, local
+builds, publishing, and the complete container contract.
 
-## What The Setup Does
+## Network and security model
 
-The setup flow:
-
-1. Continuously discovers scanners on the local network using broadcast and ARP/neighbor entries while setup is open.
-2. Automatically chooses the scanner when exactly one iX500 is found; with multiple scanners, it shows them for manual selection.
-3. Keeps manual setup available while discovery runs, using an IPv4 address/host name and one field that accepts either the scanner password or product serial number.
-4. Reads the scanner serial number before pairing when the network permits it.
-5. Tries the factory-default password derived from the serial number.
-6. Tries the unified value as a serial-derived factory password and as the complete scanner password, retaining the entered form values in the browser when pairing fails.
-7. Saves the working scanner config in `/scans/.scannerserver-scanner.json`.
-
-It does not sweep every IP address in your subnet.
-
-For a scanner on another routed network, enter its IPv4 address or host name and either its product
-serial number or scanner password. Setup resolves host names to IPv4 and first attempts targeted
-discovery. It derives the factory password from a discovered or entered serial number, then falls
-back to treating the complete entered value as the scanner password. The manual form does not ask
-for an Ethernet/MAC address or generated pairing key.
-
-## Features
-
-- First-run ScanSnap Wi-Fi setup in the browser.
-- Web scan button and physical iX500 button support.
-- Saved scan modes for duplex/simplex, PDF/PNG, post-scan CPU count and priority, autocrop, and blank-page removal.
-- Scan list grouped by day with previews and download/delete controls.
-- CPU-budgeted background blank-page removal, autocrop, and OCR, including automatic container CPU
-  detection, bounded per-page concurrency, configurable caps, and optional reduced-priority nice mode.
-- Optional approved OCR worker containers that use their assigned CPUs and automatically fall back
-  to local OCR when unavailable.
-- An asynchronous, OpenAPI-described PDF OCR interface for LLM tools and other services, with
-  searchable-PDF and UTF-8 text results.
-- Runs as a non-root user while still binding the web UI to port `80`.
-
-## Optional OCR Worker Container
-
-Start a worker with the same image. The named volume preserves its identity and approval across
-container replacement:
-
-```bash
-docker run -d \
-  --name scannerserver-worker \
-  --restart unless-stopped \
-  --cpus 11 \
-  --memory 8g \
-  -v scannerserver-worker-state:/home/scansnap/.config/scannerserver-worker \
-  gitmaster.jinx.eu/jnxpublic/scannerserver:jinx \
-  scannerserver-worker \
-  --server http://YOUR_LINUX_HOST \
-  --name "Mac OCR"
-```
-
-Open **Workers** in scannerserver and approve it. New OCR PDFs are then dispatched automatically;
-for streaming ScanSnap scans, capable workers also autocrop and blank-filter each searchable page
-before returning it. The scanner host retains scanning, the all-blank keep-one safeguard, filenames,
-verification, ordered assembly, and final publication. The Workers page reports throughput in pages/minute and can pause
-or resume both remote workers and the internal fallback worker. Pausing active internal OCR returns
-that page to remote dispatch instead of continuing to consume scannerserver CPU. The worker detects
-the container CPU allowance and runs the job
-directly—no Docker socket or nested container is required. See
-[Distributed OCR workers](docs/ocr-workers.md) for native macOS mode, resource options, security,
-and failure behavior.
+- The scanner service is designed for a trusted LAN and does not terminate TLS.
+- Use host networking or a correctly routed macvlan/static address for automatic discovery and
+  physical-button traffic. Manual setup remains available for routed networks.
+- Set `SCAN_OCR_API_TOKEN` for OCR API bearer authentication. Put an authenticating TLS reverse
+  proxy in front of the service before exposing it outside a trusted network.
+- The container runs as the host UID/GID you provide. All visible documents and settings live under
+  the `/scans` bind mount.
+- Remote OCR workers use registered identities, explicit approval, authenticated leases, digest
+  verification, bounded uploads, `qpdf` validation, and atomic result publication.
 
 ## Updating
 
-For the standalone Docker deployment:
+For a standalone Docker deployment:
 
 ```bash
 docker pull ghcr.io/jollyjinx/scannerserver:latest
 docker stop scannerserver
 docker rm scannerserver
-# rerun the docker run command from Quick Start
+# rerun the docker run command from Quick start
 ```
 
 For Compose:
@@ -168,55 +204,47 @@ docker compose pull
 docker compose up -d
 ```
 
+The page header and `/version` report the running release. Published builds use the Git commit time
+in `YYYY.MM.DD.HHMMSS` form.
+
 ## Troubleshooting
 
-Check logs:
+Follow service logs:
 
 ```bash
 docker logs -f scannerserver
 ```
 
-For Compose:
+If discovery finds no scanner, verify that the iX500 is powered on with Wi-Fi enabled, the Linux
+host can reach its network, and the container uses host networking or an appropriate macvlan/static
+address. Manual setup accepts an IPv4 address or host name plus either the scanner password or
+product serial number; scannerserver does not sweep every address in the subnet.
 
-```bash
-docker compose logs -f scansnap
-```
+If the UI reports **Scan directory is not accessible**, fix the bind mount path or host UID/GID
+permissions and refresh. The service repeats the access check, so a restart is not required.
 
-If setup finds no scanner, make sure:
+For protocol ports, button-session diagnostics, crop and blank-page logging, and other operator
+checks, see [configuration troubleshooting](docs/configuration.md#troubleshooting).
 
-- The scanner is powered on and Wi-Fi is enabled.
-- The Linux host can reach the scanner network.
-- The container uses host networking or a macvlan/static IP on the scanner VLAN.
-- The scanner appears in the host/container ARP table.
-
-With Compose:
-
-```bash
-docker compose exec scansnap ip neigh show
-```
-
-If discovery still fails but you know the scanner IPv4 address or host name, enter it manually on
-the setup page.
-
-If the web UI reports **Scan directory is not accessible**, verify that the `SCAN_OUTPUT_DIR`
-bind mount exists and that the container user can list it and create, read, and delete files in
-it. Correct the directory or host UID/GID permissions, then refresh the page; restarting the
-container is not required.
-
-## More Documentation
+## Documentation
 
 - [Documentation index](docs/index.md)
-- [Current Swift architecture](docs/architecture.md)
-- [Deployment and builds](docs/deployment.md)
 - [Configuration and scan behavior](docs/configuration.md)
 - [OCR HTTP API for LLMs and services](docs/ocr-api.md)
 - [Distributed OCR workers](docs/ocr-workers.md)
-- [ScanSnap protocol notes](docs/protocol.md)
-- [Swift hardware validation](docs/swift-hardware-validation.md)
+- [Deployment and builds](docs/deployment.md)
+- [ScanSnap iX500 protocol notes](docs/protocol.md)
+- [Current Swift architecture](docs/architecture.md)
+- [Real-hardware validation](docs/swift-hardware-validation.md)
 - [Completed Python-to-Swift migration history](docs/history/swift-migration.md)
 
-## References
+## Implementation
 
-- [`bramheerink/scansnap`](https://github.com/bramheerink/scansnap) was an important reference for the reverse-engineered ScanSnap iX500 Wi-Fi protocol now implemented natively in Swift.
-- [OCRmyPDF](https://ocrmypdf.readthedocs.io/) creates searchable PDFs.
-- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) provides OCR language support.
+The always-running service, ScanSnap Wi-Fi protocol, JPEG acquisition, PDF assembly, queueing,
+settings, worker coordination, and HTTP application are implemented as a Swift 6.3 package with
+strict concurrency. OCRmyPDF/Tesseract, qpdf, Poppler, libvips, ExifTool, `img2pdf`, and the optional
+SANE backend remain focused external document tools inside the container.
+
+The reverse-engineered ScanSnap protocol work builds on findings from
+[`bramheerink/scansnap`](https://github.com/bramheerink/scansnap). Searchable PDF creation uses
+[OCRmyPDF](https://ocrmypdf.readthedocs.io/) and [Tesseract OCR](https://github.com/tesseract-ocr/tesseract).
