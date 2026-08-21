@@ -81,7 +81,10 @@ public struct ScanSettings: Codable, Equatable, Sendable {
         let base = ModeSettings(environment: environment)
 
         func mode(_ id: String, _ name: String, _ overrides: [String: String] = [:]) -> ScanMode {
-            var modeOverrides = ["SCAN_OCR_CPU_LIMIT": ""]
+            var modeOverrides = [
+                "SCAN_OCR_CPU_LIMIT": "",
+                "SCAN_OCR_NICE": "false",
+            ]
             modeOverrides.merge(overrides) { _, override in override }
             return ScanMode(
                 id: id,
@@ -133,6 +136,10 @@ public struct ScanSettings: Codable, Equatable, Sendable {
 
     public func environment(for mode: ScanMode, trigger: String) -> [String: String] {
         var values = mode.environment(trigger: trigger)
+        // These keys remain decodable for persisted preset compatibility, but local worker
+        // capacity and scheduling priority are owned by InternalOCRWorkerControl.
+        values.removeValue(forKey: "SCAN_OCR_CPU_LIMIT")
+        values.removeValue(forKey: "SCAN_OCR_NICE")
         values.merge(blankPageSettings.environment) { _, shared in shared }
         return values
     }

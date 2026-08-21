@@ -28,6 +28,8 @@ do not need a fixed address or an inbound firewall rule.
 - Registration reports its name, hostname, architecture, CPU capacity, derived concurrency limit,
   version, and OCR languages.
 - New workers require approval on the scannerserver **Workers** page.
+- The same page owns the built-in worker's persisted processing CPU allowance and normal/reduced
+  post-scan priority. These are worker-wide settings, not scan-preset fields.
 - Heartbeats report liveness and running-job count. Approved workers become offline after missed
   heartbeats. They can be paused temporarily or disabled without forgetting their approval.
 - Registrations and approvals are stored atomically in
@@ -227,7 +229,7 @@ GET  /api/ocr-workers
 ```
 
 The browser approval, pause/resume, enable/disable, and delete controls use server-rendered form
-routes under `/workers/{worker-id}/...`; internal fallback pause/resume uses
+routes under `/workers/{worker-id}/...`; internal fallback pause/resume and settings use
 `/internal-worker/...`.
 The public listing contains worker metadata and status but never authentication tokens.
 

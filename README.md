@@ -18,8 +18,8 @@ document processing, and OCR stay on machines you operate.
 | Ways to scan | Web button, physical scanner button, PDF drag-and-drop import, and asynchronous HTTP API |
 | Output | Multipage PDF, individual PDFs, PNG pages, searchable `.ocr.pdf`, and optional OCR-only publication |
 | Document processing | Automatic page cropping, configurable blank-page removal, previews, metadata, source-order assembly, and safe failure fallbacks |
-| Presets | Saved simplex/duplex modes with format, OCR language, CPU budget, priority, crop, and blank-page settings |
-| OCR capacity | Container-aware local CPU scheduling plus optional approved Linux-container or native macOS workers with automatic local fallback |
+| Presets | Saved simplex/duplex modes with format, OCR language, crop, and blank-page settings |
+| OCR capacity | A configurable built-in worker with container-aware CPU scheduling and priority, plus optional approved Linux-container or native macOS workers with automatic local fallback |
 | Integrations | OpenAPI 3.1 job API returning searchable PDFs or UTF-8 text, with optional bearer authentication |
 | Operations | Browser status and worker controls, cancellation, throughput history, atomic file publication, persistent settings, health/version endpoints, and arbitrary host UID/GID support |
 
@@ -57,8 +57,9 @@ documents and persistent service settings, so replacing the container does not l
 2. Select the scanner. If exactly one is found, scannerserver can derive and test its factory
    password from the product serial number automatically.
 3. Open **Scan Settings** to choose the physical-button default or create presets for duplex,
-   simplex, PDF, PNG, OCR, crop, blank removal, processing CPUs, and background priority.
-4. Start a scan in the browser or press the iX500's physical scan button.
+   simplex, PDF, PNG, OCR, crop, and blank removal.
+4. Open **Workers** to set the built-in worker's processing CPU allowance and post-scan priority.
+5. Start a scan in the browser or press the iX500's physical scan button.
 
 The header shows the configured scanner and a live reachability indicator. The page also reports
 scan, processing, OCR, and worker activity without requiring a manual refresh loop.
@@ -71,8 +72,8 @@ The web UI separates routine use from administration:
 - **Documents** groups output by day, generates previews, opens or downloads files, supports bulk
   deletion, and accepts existing PDFs by drag and drop for OCR.
 - **Scan Settings** manages presets and shared blank-page detector thresholds.
-- **Workers** approves, pauses, resumes, disables, or removes OCR workers and shows waiting,
-  running, recent, and throughput information.
+- **Workers** configures or pauses the built-in worker, manages remote OCR workers, and shows
+  waiting, running, recent, and throughput information.
 - **Network Setup** discovers, pairs, tests, changes, or clears the scanner configuration.
 
 The scanner becomes available again before most document processing finishes. For an OCR-enabled

@@ -85,12 +85,13 @@ persisted stores, reachability, and physical-button session state.
   pool gates queue-owned processing and typed OCR local fallback, so losing remote workers cannot
   oversubscribe the scanner host. When preprocessing hands a job to OCR, the queue releases its
   reservation before the OCR execution module acquires the same shared pool; ownership is never
-  duplicated. When reduced priority is enabled, the queue applies the
-  configured nice level to every external document-processing subprocess; the service and scanner
-  acquisition remain at normal priority. The queue owns FIFO admission, CPU and worker-capacity
-  selection, page-process task cancellation, and recent per-page timing, but not ordering-sensitive
-  document assembly or publication policy. It exposes aggregate running/queued state and composes
-  the document module's finalization state into the compatibility status snapshot.
+  duplicated. The persisted internal-worker control owns the scanner host's CPU limit and
+  normal/reduced priority independently of scan presets. When reduced priority is enabled, the
+  queue applies the configured nice level to every external document-processing subprocess; the
+  service and scanner acquisition remain at normal priority. The queue owns FIFO admission, CPU and
+  worker-capacity selection, page-process task cancellation, and recent per-page timing, but not
+  ordering-sensitive document assembly or publication policy. It exposes aggregate running/queued
+  state and composes the document module's finalization state into the compatibility status snapshot.
 - `StreamingOCRDocumentModule` is the package-scoped actor for page-oriented OCR document state.
   It owns document creation, page reservation and typed completion, sealing, source-order assembly,
   the all-blank keep-one safeguard, creator metadata, exclusive publication, origin-specific failure
@@ -171,7 +172,8 @@ persisted stores, reachability, and physical-button session state.
   language- and capability-compatible worker
   registrations get first refusal even across a temporary heartbeat outage; assignment timeout or
   remote failure preserves local OCR plus local per-page crop as the safety fallback. The persisted
-  internal-worker control can pause that fallback, cancel active local OCR, and keep the same work
+  internal-worker control persists CPU capacity and process priority, can pause that fallback,
+  cancel active local OCR, and keep the same work
   dispatchable so newly available remote capacity can take over. Older OCR-only workers cannot lease
   crop or blank-filter jobs unless they advertise the matching capability. Paused workers are
   excluded from dispatch, and pausing immediately requeues their active
@@ -194,7 +196,8 @@ persisted stores, reachability, and physical-button session state.
   and stderr only. They carry no OCR routing, worker metadata, document-operation configuration,
   execution location, or scan-finalization state.
 - The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
-  It always exposes the internal fallback worker, current waiting/running work, compact terminal
+  It always exposes the internal fallback worker and its CPU/priority settings, current
+  waiting/running work, compact terminal
   history, and successful pages-per-minute measurements without exposing authentication or lease
   tokens.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for

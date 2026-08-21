@@ -94,10 +94,20 @@ On first start, the web UI creates `/scans/.scanner-settings.json` with default 
 
 Use **Scan Settings** in the web UI to add, edit, delete, or choose the mode used by the physical scanner button and to configure blank-page detection thresholds shared by every preset. The **Scanner** page only selects a preset and starts a scan. **Network Setup** contains scanner connection management.
 
-With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR, the background CPU limit and post-scan process priority, blank-page removal, autocrop, and the extra margin kept around cropped content. The OCR card offers a **Processing CPUs** dropdown: **Automatic** uses the container-aware background allowance, while a number lowers the limit for that mode. **Post-scan priority** selects normal or reduced (`nice`) priority for every external tool launched by background processing. The reverse-engineered Wi-Fi scanner command does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode setting.
+With the ScanSnap Wi-Fi backend, modes control simplex/duplex, output conversion, OCR language,
+blank-page removal, autocrop, and the extra margin kept around cropped content. Processing CPU
+capacity and post-scan process priority belong to the built-in worker and are configured once on the
+**Workers** page rather than repeated in every preset. The reverse-engineered Wi-Fi scanner command
+does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are
+mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode
+setting.
+
+Older `.scanner-settings.json` files that contain `SCAN_OCR_CPU_LIMIT` or `SCAN_OCR_NICE` inside a
+preset remain readable. Those legacy per-preset values are ignored when a scan starts; saving a
+preset through the current UI uses the built-in worker policy instead.
 
 OCR dispatch is internally typed but does not change the configuration contract. The configured
-language, CPU limit, priority, crop settings, blank-page thresholds, remote timeouts, and worker
+language, crop settings, blank-page thresholds, remote timeouts, and worker
 metadata are translated into the existing protocol-v1 worker manifest fields. Remote assignment or
 execution failure retains local fallback; task cancellation does not fall back.
 
@@ -116,12 +126,12 @@ execution failure retains local fallback; task cancellation does not fall back.
 | `SCAN_PAGE_MODE` | `multi` | `multi` for one multipage PDF, `single` for one PDF per page |
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
 | `SCAN_OCR_ONLY` | `false` | Publish only the OCR result for PDF scans. The raw PDF stays in the private scan workspace and is deleted after OCR succeeds; on OCR/processing failure it is published as a fallback, while cancellation publishes nothing. If the fallback publication fails, the raw PDF remains in the private scan workspace and the error is reported. PNG output and imported PDFs are unaffected |
-| `SCAN_OCR_CPU_LIMIT` | detected CPUs minus one | Optional positive cap on CPUs used by background page processing and OCR; values above the background allowance are clamped |
-| `SCAN_OCR_NICE` | `false` | Run post-scan document-processing subprocesses with reduced CPU scheduling priority |
-| `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when `SCAN_OCR_NICE` is enabled |
+| `SCAN_OCR_CPU_LIMIT` | detected CPUs minus one | Startup cap/default for the built-in worker's processing CPUs; the persisted Workers-page setting may lower it |
+| `SCAN_OCR_NICE` | `false` | Initial reduced-priority setting for the built-in worker when no persisted worker preference exists |
+| `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when the built-in worker uses reduced priority |
 | `SCAN_OCR_WORKERS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-workers.json` | Registered OCR worker identities, approvals, and last-known state |
 | `SCAN_OCR_WORKER_JOBS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-jobs.json` | Durable remote OCR job manifests, lease state, and terminal results |
-| `SCAN_INTERNAL_OCR_WORKER_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-internal-ocr-worker.json` | Persisted pause state for scannerserver's internal OCR fallback worker |
+| `SCAN_INTERNAL_OCR_WORKER_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-internal-ocr-worker.json` | Persisted pause, CPU-limit, and priority state for scannerserver's internal OCR fallback worker |
 | `SCAN_OCR_REMOTE_ENABLED` | `true` | Dispatch OCRmyPDF work to approved compatible workers when available; local OCR remains the fallback |
 | `SCAN_OCR_REMOTE_ASSIGNMENT_WAIT_SECONDS` | `30` | Time an eligible remote job may remain unclaimed (including after lease expiry) before local fallback |
 | `SCAN_OCR_REMOTE_COMPLETION_TIMEOUT_SECONDS` | `3600` | Maximum total remote job duration before cancellation and local fallback |
@@ -172,8 +182,9 @@ Background page processing and OCR automatically use the CPU allowance visible t
 process's active processor count plus Linux cgroup CPU quota and cpuset restrictions, so Docker
 CPU limits are honored. One detected processor is reserved for acquisition, button handling, and
 HTTP work (a one-CPU container still gets one worker). `SCAN_OCR_CPU_LIMIT` can lower the remaining
-allowance but cannot raise it. It can be configured globally in the container environment or per
-scan mode with the web UI. A mode set to **Automatic** inherits this container-aware allowance.
+allowance but cannot raise it. On the **Workers** page, the internal worker's **Processing CPUs**
+setting can lower that allowance further; **Automatic** uses the complete container-aware allowance.
+The choice is worker-wide and persists independently of scan presets.
 
 The queue treats the resulting value as one shared CPU budget:
 
@@ -198,12 +209,14 @@ Whole-document remote jobs remain supported but use one CPU per document; stream
 and imported PDFs avoid that limitation by scheduling individual pages.
 
 Post-scan processing runs at normal process priority by default so a busy service host cannot starve
-background work. Reduced-priority mode remains available as an explicit opt-in, globally through
-the environment or per scan mode through **Post-scan priority** in the web UI. When enabled, the
+background work. Reduced-priority mode remains available as an explicit opt-in through the built-in
+worker's **Post-scan priority** setting on the **Workers** page. `SCAN_OCR_NICE` supplies its initial
+value when no worker preference has been persisted. When enabled, the
 nice level applies to every external tool launched after scanner acquisition releases its foreground
 lifecycle, including blank removal, autocrop, final output conversion, metadata updates, and OCR.
 The scannerserver process and scanner acquisition remain at normal priority. The global nice level
-controls the increment used by niced modes. To use at most four CPUs and a nice level of `+15`:
+controls the increment used by the niced internal worker. To make four CPUs the maximum/default and
+use a nice level of `+15` initially:
 
 ```yaml
 environment:

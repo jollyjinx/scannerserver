@@ -235,8 +235,12 @@ public struct ScannerServerDependencies: Sendable {
         self.scanJobs = scanJobs
         self.scanSnapAcquisitionSessions = scanSnapAcquisitionSessions
         let webUpdates = webUpdates ?? scanJobs.webUpdates
+        let queueConfiguration = OCRQueueConfiguration(environment: environment)
         let internalOCRWorker = internalOCRWorker ?? InternalOCRWorkerControl(
             fileURL: InternalOCRWorkerControl.defaultFileURL(environment: environment),
+            maximumCPUs: queueConfiguration.cpuLimit,
+            defaultReducedPriority: queueConfiguration.niceLevel != nil,
+            niceLevel: queueConfiguration.niceLevel ?? 10,
             webUpdates: webUpdates
         )
         let ocrWorkerRegistry = ocrWorkerRegistry ?? OCRWorkerRegistry(
@@ -252,7 +256,6 @@ public struct ScannerServerDependencies: Sendable {
             resolvedOCRQueue = ocrQueue
         } else {
             let processExecutor = FoundationProcessExecutor()
-            let queueConfiguration = OCRQueueConfiguration(environment: environment)
             let distributedConfiguration = DistributedOCRConfiguration(environment: environment)
             let localCapacity = OCRLocalCapacityPool(
                 capacity: queueConfiguration.cpuLimit,
@@ -279,9 +282,12 @@ public struct ScannerServerDependencies: Sendable {
                     let remoteJobSlots = distributedConfiguration.enabled
                         ? await ocrWorkerRegistry.availableJobCapacity()
                         : 0
+                    let internalSettings = await internalOCRWorker.settings
                     return OCRQueueWorkerCapacity(
                         remoteJobSlots: remoteJobSlots,
-                        internalOCREnabled: !(await internalOCRWorker.isPaused)
+                        internalOCREnabled: !(await internalOCRWorker.isPaused),
+                        internalCPULimit: internalSettings.cpuLimit,
+                        internalNiceLevel: internalSettings.niceLevel
                     )
                 },
                 webUpdates: webUpdates
@@ -333,8 +339,12 @@ public struct ScannerServerDependencies: Sendable {
         let processExecutor = FoundationProcessExecutor()
         let documentExecutor = NativeDocumentToolExecutor(executor: processExecutor)
         let webUpdates = WebUpdateNotifier()
+        let queueConfiguration = OCRQueueConfiguration(environment: environment)
         let internalOCRWorker = InternalOCRWorkerControl(
             fileURL: InternalOCRWorkerControl.defaultFileURL(environment: environment),
+            maximumCPUs: queueConfiguration.cpuLimit,
+            defaultReducedPriority: queueConfiguration.niceLevel != nil,
+            niceLevel: queueConfiguration.niceLevel ?? 10,
             webUpdates: webUpdates
         )
         let ocrWorkerRegistry = OCRWorkerRegistry(
@@ -345,7 +355,6 @@ public struct ScannerServerDependencies: Sendable {
             fileURL: OCRWorkerJobStore.defaultFileURL(environment: environment)
         )
         let ocrWorkerResultValidator = QPDFOCRWorkerResultValidator(executor: processExecutor)
-        let queueConfiguration = OCRQueueConfiguration(environment: environment)
         let distributedConfiguration = DistributedOCRConfiguration(environment: environment)
         let localCapacity = OCRLocalCapacityPool(
             capacity: queueConfiguration.cpuLimit,
@@ -371,9 +380,12 @@ public struct ScannerServerDependencies: Sendable {
                 let remoteJobSlots = distributedConfiguration.enabled
                     ? await ocrWorkerRegistry.availableJobCapacity()
                     : 0
+                let internalSettings = await internalOCRWorker.settings
                 return OCRQueueWorkerCapacity(
                     remoteJobSlots: remoteJobSlots,
-                    internalOCREnabled: !(await internalOCRWorker.isPaused)
+                    internalOCREnabled: !(await internalOCRWorker.isPaused),
+                    internalCPULimit: internalSettings.cpuLimit,
+                    internalNiceLevel: internalSettings.niceLevel
                 )
             },
             webUpdates: webUpdates
@@ -648,6 +660,23 @@ public enum ScannerServerApplication {
         }
         router.post("/internal-worker/resume") { _, _ -> Response in
             try? await dependencies.internalOCRWorker.setPaused(false)
+            await dependencies.ocrQueue.capacityDidChange()
+            return .redirect(to: "/workers")
+        }
+        router.post("/internal-worker/settings") { request, context -> Response in
+            let form = try await decodeForm(
+                InternalWorkerSettingsForm.self,
+                request: request,
+                context: context
+            )
+            let cpuLimit = form.cpuLimit.flatMap { value -> Int? in
+                let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return value.isEmpty ? nil : Int(value)
+            }
+            try await dependencies.internalOCRWorker.setSettings(
+                cpuLimit: cpuLimit,
+                reducedPriority: form.reducedPriority == "true"
+            )
             await dependencies.ocrQueue.capacityDidChange()
             return .redirect(to: "/workers")
         }
@@ -994,6 +1023,16 @@ private struct ModeIDForm: Decodable {
     enum CodingKeys: String, CodingKey { case modeID = "mode_id" }
 }
 
+private struct InternalWorkerSettingsForm: Decodable {
+    let cpuLimit: String?
+    let reducedPriority: String?
+
+    enum CodingKeys: String, CodingKey {
+        case cpuLimit = "cpu_limit"
+        case reducedPriority = "reduced_priority"
+    }
+}
+
 private struct ModeSaveForm: Decodable {
     let modeID: String?
     let name: String?
@@ -1005,8 +1044,6 @@ private struct ModeSaveForm: Decodable {
     let format: String?
     let pageMode: String?
     let ocrEnabled: String?
-    let ocrCPULimit: String?
-    let ocrNice: String?
     let removeBlankPages: String?
     let cropPages: String?
     let cropMarginPoints: String?
@@ -1024,8 +1061,6 @@ private struct ModeSaveForm: Decodable {
         case format = "SCAN_FORMAT"
         case pageMode = "SCAN_PAGE_MODE"
         case ocrEnabled = "SCAN_OCR_ENABLED"
-        case ocrCPULimit = "SCAN_OCR_CPU_LIMIT"
-        case ocrNice = "SCAN_OCR_NICE"
         case removeBlankPages = "SCAN_REMOVE_BLANK_PAGES"
         case cropPages = "SCAN_CROP_PAGES"
         case cropMarginPoints = "SCAN_CROP_MARGIN_POINTS"
@@ -1044,8 +1079,6 @@ private struct ModeSaveForm: Decodable {
             "SCAN_FORMAT": format ?? "pdf",
             "SCAN_PAGE_MODE": pageMode ?? "multi",
             "SCAN_OCR_ENABLED": ocrEnabled == nil ? "false" : "true",
-            "SCAN_OCR_CPU_LIMIT": ocrCPULimit ?? "",
-            "SCAN_OCR_NICE": ocrNice ?? "false",
             "SCAN_REMOVE_BLANK_PAGES": removeBlankPages == nil ? "false" : "true",
             "SCAN_CROP_PAGES": cropPages == nil ? "false" : "true",
             "SCAN_CROP_MARGIN_POINTS": cropMarginPoints ?? "",
@@ -1376,6 +1409,7 @@ private func indexResponse(
     let job = await dependencies.scanJobs.state
     let ocr = await dependencies.ocrQueue.state
     let internalWorkerPaused = await dependencies.internalOCRWorker.isPaused
+    let internalWorkerSettings = await dependencies.internalOCRWorker.settings
     let workers = await dependencies.ocrWorkerRegistry.snapshots()
     let workerJobs = await dependencies.ocrWorkerJobs.snapshots()
     let setup = await dependencies.scannerSetup.state()
@@ -1396,6 +1430,7 @@ private func indexResponse(
         job: job,
         ocr: ocr,
         internalWorkerPaused: internalWorkerPaused,
+        internalWorkerSettings: internalWorkerSettings,
         workers: workers,
         workerJobs: workerJobs,
         groups: groups,
@@ -1425,6 +1460,7 @@ private func renderIndexContent(
     job: ScanJobState,
     ocr: OCRQueueState,
     internalWorkerPaused: Bool,
+    internalWorkerSettings: InternalOCRWorkerSettings,
     workers: [OCRWorkerSnapshot],
     workerJobs: [OCRWorkerJobSnapshot],
     groups: [ScanDayGroup],
@@ -1467,8 +1503,7 @@ private func renderIndexContent(
         html += renderBlankPageSettings(settings.blankPageSettings)
         html += renderModes(
             settings: settings,
-            selectedMode: selectedMode,
-            maximumOCRCPUs: ocr.cpuLimit
+            selectedMode: selectedMode
         )
     case .workers:
         html += renderWorkers(
@@ -1476,6 +1511,7 @@ private func renderIndexContent(
             jobs: workerJobs,
             ocr: ocr,
             internalWorkerPaused: internalWorkerPaused,
+            internalWorkerSettings: internalWorkerSettings,
             localTime: localTime
         )
     case .settings:
@@ -1494,6 +1530,7 @@ private func renderWorkers(
     jobs: [OCRWorkerJobSnapshot],
     ocr: OCRQueueState,
     internalWorkerPaused: Bool,
+    internalWorkerSettings: InternalOCRWorkerSettings,
     localTime: ScannerServerLocalTime
 ) -> String {
     var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
@@ -1513,7 +1550,8 @@ private func renderWorkers(
     html += renderInternalWorker(
         ocr: ocr,
         activeRemoteJobs: activeJobs,
-        paused: internalWorkerPaused
+        paused: internalWorkerPaused,
+        settings: internalWorkerSettings
     )
     for worker in workers {
         let workerJobs = activeJobs.filter { $0.workerID == worker.workerID }
@@ -1581,7 +1619,8 @@ private func renderWorkers(
 private func renderInternalWorker(
     ocr: OCRQueueState,
     activeRemoteJobs: [OCRWorkerJobSnapshot],
-    paused: Bool
+    paused: Bool,
+    settings: InternalOCRWorkerSettings
 ) -> String {
     let remoteKeys = Set(activeRemoteJobs.compactMap(workerJobKey))
     let scheduledLocally = ocr.processingJobs.filter { !remoteKeys.contains(queueJobKey($0)) }.count
@@ -1601,10 +1640,10 @@ private func renderInternalWorker(
     } else {
         html += "<span class=\"status-pill success\">Available</span>"
     }
-    html += "</div><dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(ocr.cpuLimit) CPUs</dd></div>"
+    html += "</div><dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(settings.cpuLimit) CPUs</dd></div>"
     html += "<div><dt>Running</dt><dd>\(localRunning)</dd></div>"
     html += "<div><dt>Speed</dt><dd>\(localSpeed(localPages))</dd></div>"
-    html += "<div><dt>Priority</dt><dd>Remote workers first</dd></div></dl>"
+    html += "<div><dt>Priority</dt><dd>\(settings.reducedPriority ? "Reduced" : "Normal")</dd></div></dl>"
     if paused {
         html += "<p class=\"muted\">Local OCR is stopped. Waiting work remains available to remote workers.</p>"
         html += "<div class=\"button-row\"><form class=\"inline-form\" method=\"post\" action=\"/internal-worker/resume\"><button>Resume</button></form></div>"
@@ -1612,6 +1651,25 @@ private func renderInternalWorker(
         html += "<p class=\"muted\">Available when no compatible remote worker takes a job.</p>"
         html += "<div class=\"button-row\"><form class=\"inline-form\" method=\"post\" action=\"/internal-worker/pause\"><button class=\"secondary-button\">Pause</button></form></div>"
     }
+    var cpuChoices = [("", "Automatic (up to \(settings.maximumCPUs))")]
+    cpuChoices += (1...settings.maximumCPUs).map { (String($0), "\($0)") }
+    html += "<form method=\"post\" action=\"/internal-worker/settings\"><fieldset class=\"setting-group\"><legend>Built-in worker settings</legend>"
+    html += "<div class=\"settings-grid settings-grid-two\">"
+    html += select(
+        name: "cpu_limit",
+        label: "Processing CPUs",
+        values: cpuChoices,
+        selected: settings.configuredCPULimit.map(String.init) ?? "",
+        help: "Automatic uses the scanner host's background CPU allowance while reserving one processor for scanning and the web service."
+    )
+    html += select(
+        name: "reduced_priority",
+        label: "Post-scan priority",
+        values: [("false", "Normal"), ("true", "Niced (reduced)")],
+        selected: settings.reducedPriority ? "true" : "false",
+        help: "Reduced priority lets scanning and the web service take precedence over local document processing."
+    )
+    html += "</div><div class=\"button-row\"><button type=\"submit\">Save worker settings</button></div></fieldset></form>"
     html += "</article>"
     return html
 }
@@ -1957,8 +2015,7 @@ private func renderBlankPageSettings(_ settings: BlankPageSettings) -> String {
 
 private func renderModes(
     settings: ScanSettings,
-    selectedMode: ScanMode,
-    maximumOCRCPUs: Int
+    selectedMode: ScanMode
 ) -> String {
     var html = "<section class=\"preset-workspace\"><div class=\"section-heading\"><div>"
     html += "<p class=\"eyebrow\">Reusable configurations</p><h2>Scan presets</h2>"
@@ -2041,29 +2098,6 @@ private func renderModes(
         ],
         selected: selectedMode.settings.language,
         help: "Languages used by Tesseract when OCR is enabled."
-    )
-    var cpuChoices = [("", "Automatic (up to \(maximumOCRCPUs))")]
-    cpuChoices += (1...max(1, maximumOCRCPUs)).map { (String($0), "\($0)") }
-    if let selectedLimit = selectedMode.settings.ocrCPULimit,
-       selectedLimit > maximumOCRCPUs {
-        cpuChoices.append((
-            String(selectedLimit),
-            "\(selectedLimit) (currently capped to \(maximumOCRCPUs))"
-        ))
-    }
-    html += select(
-        name: "SCAN_OCR_CPU_LIMIT",
-        label: "Processing CPUs",
-        values: cpuChoices,
-        selected: selectedMode.settings.ocrCPULimitText,
-        help: "Automatic uses the background CPU allowance while reserving one processor for scanning and the web service."
-    )
-    html += select(
-        name: "SCAN_OCR_NICE",
-        label: "Post-scan priority",
-        values: [("false", "Normal"), ("true", "Niced (reduced)")],
-        selected: selectedMode.settings.ocrNiceText,
-        help: "Niced background processing yields CPU time while scanning and the web service remain at normal priority."
     )
     html += "</div><div class=\"setting-card\">"
     html += checkbox(

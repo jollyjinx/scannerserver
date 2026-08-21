@@ -44,7 +44,7 @@ struct ScanSettingsTests {
         #expect(!settings.defaultMode.settings.cropPages)
         #expect(settings.defaultMode.settings.cropMarginPoints == 3.5)
         #expect(settings.defaultMode.settings.ocrCPULimit == nil)
-        #expect(settings.defaultMode.settings.ocrNice)
+        #expect(!settings.defaultMode.settings.ocrNice)
         #expect(settings.mode(id: "photo-png")?.settings.resolution == "600")
         #expect(settings.blankPageSettings == BlankPageSettings(
             whiteThreshold: 220,
@@ -228,6 +228,20 @@ struct ScanSettingsTests {
             #expect(values["SCAN_BLANK_CONTENT_RATIO_THRESHOLD"] == "0.006")
             #expect(values["SCAN_BLANK_MEAN_THRESHOLD"] == "242")
         }
+    }
+
+    @Test("Legacy worker settings in a preset are not emitted into scan environments")
+    func legacyWorkerSettingsAreIgnored() {
+        let mode = ScanMode(
+            id: "legacy",
+            name: "Legacy",
+            settings: ModeSettings(ocrCPULimit: 2, ocrNice: true)
+        )
+        let settings = ScanSettings(defaultModeID: mode.id, modes: [mode])
+
+        let environment = settings.environment(for: settings.defaultMode, trigger: "web")
+        #expect(environment["SCAN_OCR_CPU_LIMIT"] == nil)
+        #expect(environment["SCAN_OCR_NICE"] == nil)
     }
 
     @Test("Blank-page settings accept compatible JSON and reject invalid form values")

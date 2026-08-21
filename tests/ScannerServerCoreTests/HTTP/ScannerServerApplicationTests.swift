@@ -180,6 +180,9 @@ struct ScannerServerApplicationTests {
                 #expect(response.status == .ok)
                 #expect(body.contains("Internal worker"))
                 #expect(body.contains("action=\"/internal-worker/pause\""))
+                #expect(body.contains("action=\"/internal-worker/settings\""))
+                #expect(body.contains(#"<select name="cpu_limit">"#))
+                #expect(body.contains(#"<select name="reduced_priority">"#))
                 #expect(body.contains("Mac Studio &amp; OCR"))
                 #expect(body.contains("12 CPUs · 1 concurrent page max"))
                 #expect(body.contains("Approval required"))
@@ -198,6 +201,15 @@ struct ScannerServerApplicationTests {
                 expectRedirect(response, to: "/workers")
             }
             #expect(await fixture.internalOCRWorker.isPaused == false)
+            try await postForm(
+                client,
+                uri: "/internal-worker/settings",
+                body: "cpu_limit=2&reduced_priority=true"
+            ) { response in
+                expectRedirect(response, to: "/workers")
+            }
+            #expect(await fixture.internalOCRWorker.settings.configuredCPULimit == 2)
+            #expect(await fixture.internalOCRWorker.settings.reducedPriority)
             try await client.execute(
                 uri: "/workers/mac-studio-1/approve",
                 method: .post
@@ -649,8 +661,8 @@ struct ScannerServerApplicationTests {
             #expect(mode.settings.format == "png")
             #expect(mode.settings.pageMode == "single")
             #expect(mode.settings.ocrEnabled)
-            #expect(mode.settings.ocrCPULimit == 4)
-            #expect(mode.settings.ocrNice)
+            #expect(mode.settings.ocrCPULimit == nil)
+            #expect(!mode.settings.ocrNice)
             #expect(!mode.settings.removeBlankPages)
             #expect(mode.settings.cropPages)
             #expect(mode.settings.cropMarginPoints == 2.5)
@@ -665,11 +677,8 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains(#"<option value="deu">German</option>"#))
                 #expect(body.contains(#"<option value="eng" selected>English</option>"#))
                 #expect(!body.contains(#"<input name="SCAN_LANGUAGE""#))
-                #expect(body.contains(#"<select name="SCAN_OCR_CPU_LIMIT">"#))
-                #expect(body.contains(#"<option value="4" selected>"#))
-                #expect(body.contains("Automatic uses the background CPU allowance while reserving one processor"))
-                #expect(body.contains(#"<select name="SCAN_OCR_NICE">"#))
-                #expect(body.contains(#"<option value="true" selected>Niced (reduced)</option>"#))
+                #expect(!body.contains(#"<select name="SCAN_OCR_CPU_LIMIT">"#))
+                #expect(!body.contains(#"<select name="SCAN_OCR_NICE">"#))
                 #expect(body.contains(#"name="SCAN_CROP_MARGIN_POINTS" value="2.5" min="0" step="0.1""#))
                 #expect(body.contains(#"class="preset-layout""#))
                 #expect(body.contains(#"class="mode-editor-form""#))
@@ -1270,6 +1279,8 @@ private struct HTTPFixture: Sendable {
         )
         internalOCRWorker = InternalOCRWorkerControl(
             fileURL: outputDirectory.appendingPathComponent(".test-internal-ocr-worker.json"),
+            maximumCPUs: 4,
+            defaultReducedPriority: false,
             webUpdates: webUpdates
         )
         ocrWorkerRegistry = OCRWorkerRegistry(

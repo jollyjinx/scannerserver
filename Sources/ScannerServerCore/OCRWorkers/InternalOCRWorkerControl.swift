@@ -1,27 +1,66 @@
 import Foundation
 
+public struct InternalOCRWorkerSettings: Equatable, Sendable {
+    public let configuredCPULimit: Int?
+    public let cpuLimit: Int
+    public let maximumCPUs: Int
+    public let reducedPriority: Bool
+    public let niceLevel: Int?
+
+    public init(
+        configuredCPULimit: Int?,
+        maximumCPUs: Int,
+        reducedPriority: Bool,
+        niceLevel: Int
+    ) {
+        let maximumCPUs = max(1, maximumCPUs)
+        let configuredCPULimit = configuredCPULimit.map { min(max(1, $0), maximumCPUs) }
+        self.configuredCPULimit = configuredCPULimit
+        self.cpuLimit = configuredCPULimit ?? maximumCPUs
+        self.maximumCPUs = maximumCPUs
+        self.reducedPriority = reducedPriority
+        self.niceLevel = reducedPriority ? min(max(niceLevel, 1), 19) : nil
+    }
+}
+
 public actor InternalOCRWorkerControl {
     private struct StoredState: Codable, Sendable {
         let paused: Bool
+        let cpuLimit: Int?
+        let reducedPriority: Bool?
     }
 
     public nonisolated let webUpdates: WebUpdateNotifier
     public let fileURL: URL?
 
     private var paused: Bool
+    private var configuredCPULimit: Int?
+    private var reducedPriority: Bool
+    private let maximumCPUs: Int
+    private let niceLevel: Int
 
     public init(
         fileURL: URL? = nil,
+        maximumCPUs: Int = OCRQueueConfiguration().cpuLimit,
+        defaultReducedPriority: Bool = OCRQueueConfiguration().niceLevel != nil,
+        niceLevel: Int = OCRQueueConfiguration().niceLevel ?? 10,
         webUpdates: WebUpdateNotifier = WebUpdateNotifier()
     ) {
+        let resolvedMaximumCPUs = max(1, maximumCPUs)
         self.fileURL = fileURL
         self.webUpdates = webUpdates
+        self.maximumCPUs = resolvedMaximumCPUs
+        self.niceLevel = min(max(niceLevel, 1), 19)
         if let fileURL,
            let data = try? Data(contentsOf: fileURL),
            let stored = try? JSONDecoder().decode(StoredState.self, from: data) {
             paused = stored.paused
+            configuredCPULimit = stored.cpuLimit.map { min(max(1, $0), resolvedMaximumCPUs) }
+            reducedPriority = stored.reducedPriority ?? defaultReducedPriority
         } else {
             paused = false
+            configuredCPULimit = nil
+            reducedPriority = defaultReducedPriority
         }
     }
 
@@ -38,6 +77,15 @@ public actor InternalOCRWorkerControl {
 
     public var isPaused: Bool { paused }
 
+    public var settings: InternalOCRWorkerSettings {
+        InternalOCRWorkerSettings(
+            configuredCPULimit: configuredCPULimit,
+            maximumCPUs: maximumCPUs,
+            reducedPriority: reducedPriority,
+            niceLevel: niceLevel
+        )
+    }
+
     public func setPaused(_ newValue: Bool) async throws {
         guard paused != newValue else { return }
         let previousValue = paused
@@ -46,6 +94,28 @@ public actor InternalOCRWorkerControl {
             try persist()
         } catch {
             paused = previousValue
+            throw error
+        }
+        await webUpdates.notify()
+    }
+
+    public func setSettings(
+        cpuLimit: Int?,
+        reducedPriority newReducedPriority: Bool
+    ) async throws {
+        let newCPULimit = cpuLimit.map { min(max(1, $0), maximumCPUs) }
+        guard configuredCPULimit != newCPULimit || reducedPriority != newReducedPriority else {
+            return
+        }
+        let previousCPULimit = configuredCPULimit
+        let previousReducedPriority = reducedPriority
+        configuredCPULimit = newCPULimit
+        reducedPriority = newReducedPriority
+        do {
+            try persist()
+        } catch {
+            configuredCPULimit = previousCPULimit
+            reducedPriority = previousReducedPriority
             throw error
         }
         await webUpdates.notify()
@@ -80,7 +150,11 @@ public actor InternalOCRWorkerControl {
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        var data = try encoder.encode(StoredState(paused: paused))
+        var data = try encoder.encode(StoredState(
+            paused: paused,
+            cpuLimit: configuredCPULimit,
+            reducedPriority: reducedPriority
+        ))
         data.append(0x0A)
         try data.write(to: fileURL, options: .atomic)
     }

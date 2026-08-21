@@ -43,17 +43,6 @@ public struct OCRQueueConfiguration: Equatable, Sendable {
         }
     }
 
-    func niceLevel(for environment: [String: String]?) -> Int? {
-        guard let requestedMode = environment?["SCAN_OCR_NICE"] else {
-            return niceLevel
-        }
-        guard Self.isTruthy(requestedMode) else { return nil }
-
-        let requestedLevel = Self.nonEmpty(environment?["SCAN_OCR_NICE_LEVEL"])
-            .flatMap(Int.init) ?? niceLevel ?? 10
-        return min(max(requestedLevel, 1), 19)
-    }
-
     private static func isTruthy(_ value: String) -> Bool {
         switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "1", "true", "yes", "on": true

@@ -150,10 +150,19 @@ public struct ImportedPDFOCRRequest: Sendable {
 public struct OCRQueueWorkerCapacity: Equatable, Sendable {
     public let remoteJobSlots: Int
     public let internalOCREnabled: Bool
+    public let internalCPULimit: Int?
+    public let internalNiceLevel: Int?
 
-    public init(remoteJobSlots: Int = 0, internalOCREnabled: Bool = true) {
+    public init(
+        remoteJobSlots: Int = 0,
+        internalOCREnabled: Bool = true,
+        internalCPULimit: Int? = nil,
+        internalNiceLevel: Int? = nil
+    ) {
         self.remoteJobSlots = max(0, remoteJobSlots)
         self.internalOCREnabled = internalOCREnabled
+        self.internalCPULimit = internalCPULimit.map { max(1, $0) }
+        self.internalNiceLevel = internalNiceLevel.map { min(max(1, $0), 19) }
     }
 }
 
@@ -196,6 +205,7 @@ public actor OCRQueueActor {
         let reservedCPUs: Int
         let localReservationCPUs: Int
         let executionPreference: OCRDispatchPreference
+        let niceLevel: Int?
     }
 
     private struct JobCompletion: Sendable {
@@ -587,6 +597,8 @@ public actor OCRQueueActor {
     private func scheduleAvailableJobs() async -> Bool {
         guard !isCancellingAll else { return false }
         let workerCapacity = await workerCapacityProvider()
+        queueState.cpuLimit = cpuLimit(for: workerCapacity)
+        queueState.niceLevel = niceLevel(for: workerCapacity)
         var startedJob = false
 
         while let candidate = await nextSchedulableJob(workerCapacity: workerCapacity) {
@@ -596,7 +608,8 @@ public actor OCRQueueActor {
                 job: job,
                 reservedCPUs: candidate.reservedCPUs,
                 localReservationCPUs: candidate.localReservationCPUs,
-                executionPreference: candidate.executionPreference
+                executionPreference: candidate.executionPreference,
+                niceLevel: candidate.niceLevel
             )
             startedJob = true
         }
@@ -612,16 +625,16 @@ public actor OCRQueueActor {
     }
 
     public func capacityDidChange() async {
-        if await scheduleAvailableJobs() {
-            await publishQueueState()
-        }
+        _ = await scheduleAvailableJobs()
+        await publishQueueState()
     }
 
     private func start(
         job: Job,
         reservedCPUs: Int,
         localReservationCPUs: Int,
-        executionPreference: OCRDispatchPreference
+        executionPreference: OCRDispatchPreference,
+        niceLevel: Int?
     ) {
         let identifier = UUID()
         let started = Date()
@@ -631,7 +644,8 @@ public actor OCRQueueActor {
                 identifier: identifier,
                 job: job,
                 jobs: reservedCPUs,
-                executionPreference: executionPreference
+                executionPreference: executionPreference,
+                niceLevel: niceLevel
             )
             await self.finish(identifier: identifier, completion: completion)
         }
@@ -648,19 +662,21 @@ public actor OCRQueueActor {
         queueState.input = job.inputPath
         queueState.output = ""
         queueState.error = ""
-        queueState.niceLevel = configuration.niceLevel(for: job.environment)
+        queueState.niceLevel = niceLevel
     }
 
     private func run(
         identifier: UUID,
         job: Job,
         jobs: Int,
-        executionPreference: OCRDispatchPreference
+        executionPreference: OCRDispatchPreference,
+        niceLevel: Int?
     ) async -> JobCompletion {
         if let deferredProcessing = job.deferredProcessing {
             return await runDeferredProcessing(
                 job: job,
-                deferredProcessing: deferredProcessing
+                deferredProcessing: deferredProcessing,
+                niceLevel: niceLevel
             )
         }
 
@@ -709,7 +725,8 @@ public actor OCRQueueActor {
                 job: job,
                 outputPath: outputPath,
                 jobs: jobs,
-                executionPreference: executionPreference
+                executionPreference: executionPreference,
+                niceLevel: niceLevel
             )
             let processOutput = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
             return JobCompletion(
@@ -840,22 +857,24 @@ public actor OCRQueueActor {
         }
     }
 
-    private func cpuReservation(for job: Job) -> Int {
+    private func cpuReservation(for job: Job, cpuLimit: Int) -> Int {
         if job.deferredProcessing != nil {
-            return cpuLimit(for: job)
+            return cpuLimit
         }
         if job.streamingPageWork != nil { return 1 }
         let pageMode = job.environment?["SCAN_PAGE_MODE"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        return pageMode == "single" ? 1 : cpuLimit(for: job)
+        return pageMode == "single" ? 1 : cpuLimit
     }
 
     private func nextSchedulableJob(
         workerCapacity: OCRQueueWorkerCapacity
     ) async -> ScheduleCandidate? {
+        let internalCPULimit = cpuLimit(for: workerCapacity)
+        let internalNiceLevel = niceLevel(for: workerCapacity)
         for (index, job) in queue.enumerated() {
-            let reservedCPUs = cpuReservation(for: job)
+            let reservedCPUs = cpuReservation(for: job, cpuLimit: internalCPULimit)
             if canUseDistributedCapacity(job) {
                 let activeDistributedJobs = activeJobs.values.filter {
                     canUseDistributedCapacity($0.job)
@@ -872,11 +891,12 @@ public actor OCRQueueActor {
                         index: index,
                         reservedCPUs: reservedCPUs,
                         localReservationCPUs: 0,
-                        executionPreference: .remoteFirst
+                        executionPreference: .remoteFirst,
+                        niceLevel: internalNiceLevel
                     )
                 }
 
-                let localLimit = workerCapacity.internalOCREnabled ? cpuLimit(for: job) : 0
+                let localLimit = workerCapacity.internalOCREnabled ? internalCPULimit : 0
                 let activeLocalJobs = activeDistributedJobs.filter {
                     $0.executionPreference == .reservedInternal
                 }
@@ -889,7 +909,8 @@ public actor OCRQueueActor {
                         index: index,
                         reservedCPUs: reservedCPUs,
                         localReservationCPUs: 0,
-                        executionPreference: .reservedInternal
+                        executionPreference: .reservedInternal,
+                        niceLevel: internalNiceLevel
                     )
                 }
                 continue
@@ -901,7 +922,7 @@ public actor OCRQueueActor {
                         && !canUseDistributedCapacity($0.job)
                 }
                 .reduce(0) { $0 + $1.localReservationCPUs }
-            guard batchUsage + reservedCPUs <= cpuLimit(for: job),
+            guard batchUsage + reservedCPUs <= internalCPULimit,
                   let localReservation = await localCapacity.tryAcquire(reservedCPUs) else {
                 continue
             }
@@ -909,7 +930,8 @@ public actor OCRQueueActor {
                 index: index,
                 reservedCPUs: reservedCPUs,
                 localReservationCPUs: localReservation,
-                executionPreference: .remoteFirst
+                executionPreference: .remoteFirst,
+                niceLevel: internalNiceLevel
             )
         }
         return nil
@@ -930,15 +952,16 @@ public actor OCRQueueActor {
             .lowercased()
     }
 
-    private func cpuLimit(for job: Job) -> Int {
-        guard let rawValue = job.environment?["SCAN_OCR_CPU_LIMIT"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            let requested = Int(rawValue),
-            requested > 0
-        else {
-            return configuration.cpuLimit
+    private func cpuLimit(for workerCapacity: OCRQueueWorkerCapacity) -> Int {
+        min(workerCapacity.internalCPULimit ?? configuration.cpuLimit, configuration.cpuLimit)
+    }
+
+    private func niceLevel(for workerCapacity: OCRQueueWorkerCapacity) -> Int? {
+        if workerCapacity.internalCPULimit == nil,
+           workerCapacity.internalNiceLevel == nil {
+            return configuration.niceLevel
         }
-        return min(requested, configuration.cpuLimit)
+        return workerCapacity.internalNiceLevel
     }
 
     private func publishQueueState() async {
@@ -1013,14 +1036,16 @@ public actor OCRQueueActor {
         job: Job,
         outputPath: String,
         jobs: Int,
-        executionPreference: OCRDispatchPreference
+        executionPreference: OCRDispatchPreference,
+        niceLevel: Int?
     ) async throws -> JobExecutionResult {
         if job.streamingPageWork != nil {
             return try await executeStreamingPage(
                 job: job,
                 outputPath: outputPath,
                 jobs: jobs,
-                executionPreference: executionPreference
+                executionPreference: executionPreference,
+                niceLevel: niceLevel
             )
         }
         guard job.removeBlankPages || job.cropPages else {
@@ -1033,7 +1058,8 @@ public actor OCRQueueActor {
                 inputURL: URL(fileURLWithPath: job.inputPath),
                 outputURL: URL(fileURLWithPath: outputPath),
                 jobs: jobs,
-                executionPreference: executionPreference
+                executionPreference: executionPreference,
+                niceLevel: niceLevel
             )))
         }
 
@@ -1054,7 +1080,7 @@ public actor OCRQueueActor {
 
         let environment = job.environment ?? [:]
         let options = try DocumentProcessingOptions(environment: environment)
-        let documentExecutor = prioritizedDocumentExecutor(for: job)
+        let documentExecutor = prioritizedDocumentExecutor(niceLevel: niceLevel)
         if job.removeBlankPages {
             let result = try await documentExecutor.execute(
                 options.removeBlankPagesRequest(pdfPath: stagedInput.path).command.processRequest(
@@ -1082,7 +1108,8 @@ public actor OCRQueueActor {
                 outputURL: URL(fileURLWithPath: outputPath),
                 jobs: jobs,
                 executionPreference: executionPreference,
-                workingDirectory: workspace
+                workingDirectory: workspace,
+                niceLevel: niceLevel
             )))
         }
 
@@ -1108,7 +1135,8 @@ public actor OCRQueueActor {
         job: Job,
         outputPath: String,
         jobs: Int,
-        executionPreference: OCRDispatchPreference
+        executionPreference: OCRDispatchPreference,
+        niceLevel: Int?
     ) async throws -> JobExecutionResult {
         let environment = job.environment ?? [:]
         let cropConfiguration = job.cropPages
@@ -1129,6 +1157,7 @@ public actor OCRQueueActor {
             outputURL: URL(fileURLWithPath: outputPath),
             jobs: jobs,
             executionPreference: executionPreference,
+            niceLevel: niceLevel,
             cropConfiguration: cropConfiguration,
             blankPageConfiguration: blankPageConfiguration
         )))
@@ -1141,6 +1170,7 @@ public actor OCRQueueActor {
         jobs: Int,
         executionPreference: OCRDispatchPreference,
         workingDirectory: URL? = nil,
+        niceLevel: Int? = nil,
         cropConfiguration: OCRWorkerCropConfiguration? = nil,
         blankPageConfiguration: OCRWorkerBlankPageConfiguration? = nil
     ) -> OCRExecutionRequest {
@@ -1151,7 +1181,7 @@ public actor OCRQueueActor {
             context: OCRProcessContext(
                 environment: job.environment,
                 workingDirectory: workingDirectory ?? job.workingDirectory,
-                niceLevel: configuration.niceLevel(for: job.environment)
+                niceLevel: niceLevel
             ),
             metadata: workerMetadata(for: job),
             cropConfiguration: cropConfiguration,
@@ -1162,7 +1192,8 @@ public actor OCRQueueActor {
 
     private func runDeferredProcessing(
         job: Job,
-        deferredProcessing: DeferredScanProcessing
+        deferredProcessing: DeferredScanProcessing,
+        niceLevel: Int?
     ) async -> JobCompletion {
         if let validationError = deferredProcessing.validationError {
             return JobCompletion(
@@ -1184,7 +1215,7 @@ public actor OCRQueueActor {
 
         do {
             let result = try await DocumentProcessingOrchestrator(
-                executor: prioritizedDocumentExecutor(for: job)
+                executor: prioritizedDocumentExecutor(niceLevel: niceLevel)
             )
                 .process(deferredProcessing.plan)
             guard result.outputPaths.allSatisfy(regularFileExists) else {
@@ -1269,8 +1300,8 @@ public actor OCRQueueActor {
         }
     }
 
-    private func prioritizedDocumentExecutor(for job: Job) -> any ProcessExecutor {
-        guard let niceLevel = configuration.niceLevel(for: job.environment) else {
+    private func prioritizedDocumentExecutor(niceLevel: Int?) -> any ProcessExecutor {
+        guard let niceLevel else {
             return documentExecutor
         }
         return NiceProcessExecutor(executor: documentExecutor, niceLevel: niceLevel)
