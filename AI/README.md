@@ -24,13 +24,11 @@ Use [docs/index.md](../docs/index.md) as the authoritative documentation map. Th
 | Versioning, release validation, Git tags, GitHub Releases, and GHCR promotion | [docs/releasing.md](../docs/releasing.md) |
 | ScanSnap iX500 discovery, pairing, transport, and button behavior | [docs/protocol.md](../docs/protocol.md) |
 | Real-hardware acceptance | [docs/swift-hardware-validation.md](../docs/swift-hardware-validation.md) |
-| Completed Python-to-Swift migration evidence | [docs/history/swift-migration.md](../docs/history/swift-migration.md) |
 
 ## Current State And Scope
 
 The Python-to-Swift service migration is complete. Read the current architecture document before
-broad implementation changes. The historical migration record contains completed task lists and
-must not be interpreted as work still to perform.
+broad implementation changes.
 
 If a request's premise conflicts with the current tree, verify recent history and report the
 mismatch before changing code. An unqualified cleanup is behavior-preserving and does not authorize

@@ -12,8 +12,7 @@ status: current
 server and helper scripts are gone. Python remains in the container only as a transitive runtime for
 OCRmyPDF, which is an intentional external-tool dependency.
 
-This document is normative for current implementation work. The completed migration record under
-[`history/swift-migration.md`](history/swift-migration.md) is evidence and history, not a backlog.
+This document is normative for current implementation work.
 
 ## Scope Gate
 

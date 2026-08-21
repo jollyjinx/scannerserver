@@ -247,7 +247,6 @@ checks, see [configuration troubleshooting](docs/configuration.md#troubleshootin
 - [ScanSnap iX500 protocol notes](docs/protocol.md)
 - [Current Swift architecture](docs/architecture.md)
 - [Real-hardware validation](docs/swift-hardware-validation.md)
-- [Completed Python-to-Swift migration history](docs/history/swift-migration.md)
 
 ## Implementation
 

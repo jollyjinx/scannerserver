@@ -24,7 +24,6 @@ Use this page as the entry point for repository documentation. The root [`README
 | [`releasing.md`](releasing.md) | Release validation, version selection, Git tags, GitHub Releases, and GHCR verification | Maintainers |
 | [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, directed port map, startup advertisements, heartbeat, and physical-button session lifecycle | Maintainers |
 | [`swift-hardware-validation.md`](swift-hardware-validation.md) | Manual acceptance testing with a real scanner | Maintainers |
-| [`history/swift-migration.md`](history/swift-migration.md) | Completed Python-to-Swift migration evidence and historical milestones | Maintainers |
 | [`../AGENTS.md`](../AGENTS.md) | Repository-wide instructions that coding agents must follow | Agents |
 
 ## Front Matter Convention

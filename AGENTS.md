@@ -15,7 +15,7 @@ Load [`AI/skills/scannerserver-ocr-api/SKILL.md`](AI/skills/scannerserver-ocr-ap
 changing the versioned OCR HTTP/OpenAPI interface, its authentication or text extraction, or an
 LLM/MCP adapter over that interface.
 
-Read `docs/architecture.md` before broad source changes. It is the normative description of the current service. `docs/history/swift-migration.md` is historical evidence only and must not be treated as an active plan or backlog.
+Read `docs/architecture.md` before broad source changes. It is the normative description of the current service.
 
 ## Task Interpretation
 
@@ -39,11 +39,11 @@ Read `docs/architecture.md` before broad source changes. It is the normative des
 - Prefer actors or isolated runtime types for mutable service state: scan job state, OCR queue, discovery state, scanner config, settings, and button arming.
 - Use Swift Testing for package tests. Keep hardware/network integration tests opt-in.
 
-## Current Architecture And History
+## Current Architecture
 
 Use `docs/architecture.md` for current package boundaries, dependency strategy, compatibility contracts, and validation requirements.
 
-Use `docs/history/swift-migration.md` only when historical migration evidence is relevant. The migration milestones are complete. ScanSnap Wi-Fi acquisition and PDF assembly are native Swift. The service intentionally retains SANE, Tesseract, OCRmyPDF, qpdf, Poppler, libvips, ExifTool, and `img2pdf` for optional-backend, OCR, and document-processing work; replacing them is separate follow-up work.
+The migration is complete. ScanSnap Wi-Fi acquisition and PDF assembly are native Swift. The service intentionally retains SANE, Tesseract, OCRmyPDF, qpdf, Poppler, libvips, ExifTool, and `img2pdf` for optional-backend, OCR, and document-processing work; replacing them is separate follow-up work.
 
 ## Validation
 
