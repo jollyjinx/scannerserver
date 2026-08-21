@@ -116,6 +116,8 @@ for an Ethernet/MAC address or generated pairing key.
   detection, bounded per-page concurrency, configurable caps, and optional reduced-priority nice mode.
 - Optional approved OCR worker containers that use their assigned CPUs and automatically fall back
   to local OCR when unavailable.
+- An asynchronous, OpenAPI-described PDF OCR interface for LLM tools and other services, with
+  searchable-PDF and UTF-8 text results.
 - Runs as a non-root user while still binding the web UI to port `80`.
 
 ## Optional OCR Worker Container
@@ -207,6 +209,7 @@ container is not required.
 - [Current Swift architecture](docs/architecture.md)
 - [Deployment and builds](docs/deployment.md)
 - [Configuration and scan behavior](docs/configuration.md)
+- [OCR HTTP API for LLMs and services](docs/ocr-api.md)
 - [Distributed OCR workers](docs/ocr-workers.md)
 - [ScanSnap protocol notes](docs/protocol.md)
 - [Swift hardware validation](docs/swift-hardware-validation.md)

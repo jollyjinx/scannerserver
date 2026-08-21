@@ -4,7 +4,7 @@ description: Routing index for the Swift service architecture, compatibility con
 type: index
 audience: agents and maintainers
 status: current
-last_updated: 2026-08-12
+last_updated: 2026-08-21
 ---
 
 # Agent documentation
@@ -18,6 +18,7 @@ Use [docs/index.md](../docs/index.md) as the authoritative documentation map. Th
 | Operator setup and first scan | [README.md](../README.md) |
 | Current architecture, package boundaries, compatibility, and validation | [docs/architecture.md](../docs/architecture.md) |
 | Environment variables, filenames, modes, and post-processing | [docs/configuration.md](../docs/configuration.md) |
+| OCR HTTP/OpenAPI integration for LLMs and services | [docs/ocr-api.md](../docs/ocr-api.md) |
 | Distributed OCR workers and remote-processing roadmap | [docs/ocr-workers.md](../docs/ocr-workers.md) |
 | Images, host networking, Compose, builds, and publishing | [docs/deployment.md](../docs/deployment.md) |
 | ScanSnap iX500 discovery, pairing, transport, and button behavior | [docs/protocol.md](../docs/protocol.md) |

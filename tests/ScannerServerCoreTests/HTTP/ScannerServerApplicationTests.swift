@@ -1104,6 +1104,130 @@ struct ScannerServerApplicationTests {
         #expect(try Data(contentsOf: existingURL) == Data("original".utf8))
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("outside.pdf").path))
     }
+
+    @Test("OCR API exposes OpenAPI, presets, asynchronous status, PDF, text, and deletion")
+    func ocrAPIWorkflow() async throws {
+        let executor = SlowCapturingExecutor(delay: .seconds(30))
+        let fixture = try HTTPFixture(
+            environment: ["SCAN_BACKEND": "sane", "SCAN_LANGUAGE": "eng"],
+            executor: executor,
+            documentExecutor: ImportedPDFDocumentExecutor(pageCount: 2),
+            ocrTextExtractor: StubOCRTextExtractor(text: "Invoice 42\nTotal: 19.95\n")
+        )
+        defer { fixture.remove() }
+        let application = try fixture.application()
+        let filename = "LLM Input.pdf"
+        let jobID = Data(filename.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/api/v1/openapi.json", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "application/json; charset=utf-8")
+                let document = try JSONSerialization.jsonObject(with: Data(body.utf8))
+                let root = try #require(document as? [String: Any])
+                #expect(root["openapi"] as? String == "3.1.0")
+                #expect(body.contains(#""operationId": "createOCRJob""#))
+                #expect(body.contains("/api/v1/ocr/jobs/{job}/text"))
+            }
+
+            try await client.execute(uri: "/api/v1/ocr/presets", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains(#""id":"duplex-pdf-ocr""#))
+                #expect(body.contains(#""language":"eng""#))
+            }
+
+            try await client.execute(
+                uri: "/api/v1/ocr/jobs?filename=LLM%20Input.pdf",
+                method: .post,
+                headers: [.contentType: "application/pdf"],
+                body: ByteBuffer(string: "%PDF-1.7\nAPI upload\n")
+            ) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .accepted)
+                #expect(response.headers[.location] == "/api/v1/ocr/jobs/\(jobID)")
+                #expect(body.contains(#""state":"processing""#))
+                #expect(body.contains(#""filename":"LLM Input.pdf""#))
+                #expect(body.contains(#""page_count":2"#))
+                #expect(body.contains(jobID))
+            }
+
+            try await client.execute(uri: "/api/v1/ocr/jobs/\(jobID)", method: .get) { response in
+                let body = String(buffer: response.body)
+                #expect(response.status == .ok)
+                #expect(body.contains(#""state":"processing""#))
+                #expect(body.contains(#""processing_pages":"#))
+                #expect(body.contains(#""queued_pages":"#))
+            }
+
+            try await client.execute(
+                uri: "/api/v1/ocr/jobs/\(jobID)/text",
+                method: .get
+            ) { response in
+                #expect(response.status == .conflict)
+                #expect(String(buffer: response.body).contains("OCR output is not ready"))
+            }
+
+            let outputURL = fixture.outputDirectory.appendingPathComponent("LLM Input.ocr.pdf")
+            try Data("%PDF-1.7\nsearchable\n".utf8).write(to: outputURL)
+
+            try await client.execute(uri: "/api/v1/ocr/jobs/\(jobID)", method: .get) { response in
+                #expect(String(buffer: response.body).contains(#""state":"completed""#))
+            }
+            try await client.execute(
+                uri: "/api/v1/ocr/jobs/\(jobID)/document",
+                method: .get
+            ) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "application/pdf")
+                #expect(String(buffer: response.body).contains("searchable"))
+            }
+            try await client.execute(uri: "/api/v1/ocr/jobs/\(jobID)/text", method: .get) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[.contentType] == "text/plain; charset=utf-8")
+                #expect(String(buffer: response.body) == "Invoice 42\nTotal: 19.95\n")
+            }
+            try await client.execute(uri: "/api/v1/ocr/jobs/\(jobID)", method: .delete) { response in
+                #expect(response.status == .noContent)
+            }
+        }
+
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.outputDirectory.appendingPathComponent(filename).path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: fixture.outputDirectory.appendingPathComponent("LLM Input.ocr.pdf").path
+        ))
+        await fixture.ocrQueue.cancelAll()
+    }
+
+    @Test("OCR API optionally requires a bearer token")
+    func ocrAPIBearerToken() async throws {
+        let fixture = try HTTPFixture(environment: [
+            "SCAN_BACKEND": "sane",
+            "SCAN_OCR_API_TOKEN": "test-secret-token",
+        ])
+        defer { fixture.remove() }
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/api/v1/ocr/presets", method: .get) { response in
+                #expect(response.status == .unauthorized)
+                #expect(response.headers[.wwwAuthenticate] == "Bearer")
+            }
+            try await client.execute(
+                uri: "/api/v1/ocr/presets",
+                method: .get,
+                headers: [.authorization: "Bearer test-secret-token"]
+            ) { response in
+                #expect(response.status == .ok)
+            }
+        }
+    }
 }
 
 private struct HTTPFixture: Sendable {
@@ -1116,12 +1240,14 @@ private struct HTTPFixture: Sendable {
     let ocrWorkerRegistry: OCRWorkerRegistry
     let ocrWorkerJobs: OCRWorkerJobStore
     let executor: SlowCapturingExecutor
+    let ocrTextExtractor: any OCRTextExtracting
     let environment: [String: String]
 
     init(
         environment additions: [String: String],
         executor: SlowCapturingExecutor = SlowCapturingExecutor(delay: .zero),
-        documentExecutor: (any ProcessExecutor)? = nil
+        documentExecutor: (any ProcessExecutor)? = nil,
+        ocrTextExtractor: any OCRTextExtracting = StubOCRTextExtractor(text: "")
     ) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         outputDirectory = root.appendingPathComponent("scans", isDirectory: true)
@@ -1155,6 +1281,7 @@ private struct HTTPFixture: Sendable {
             leaseTokenProvider: { "test-lease-token" }
         )
         self.executor = executor
+        self.ocrTextExtractor = ocrTextExtractor
     }
 
     func application(
@@ -1173,6 +1300,7 @@ private struct HTTPFixture: Sendable {
             scannerSetup: scannerSetup ?? StoredScannerSetupService(
                 store: ScannerConfigStore(environment: environment)
             ),
+            ocrTextExtractor: ocrTextExtractor,
             scannerReachability: scannerReachability,
             environment: environment
         )
@@ -1189,6 +1317,14 @@ private struct HTTPFixture: Sendable {
 
 private struct AcceptingOCRWorkerResultValidator: OCRWorkerResultValidating {
     func validate(fileURL: URL) async throws {}
+}
+
+private struct StubOCRTextExtractor: OCRTextExtracting {
+    let text: String
+
+    func extractText(from pdfURL: URL) async throws -> String {
+        text
+    }
 }
 
 private actor RunningDiscoverySetupService: ScannerSetupServing {

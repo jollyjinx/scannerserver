@@ -124,6 +124,13 @@ persisted stores, reachability, and physical-button session state.
   complete source has been split. Imports explicitly preserve their visible source on processing
   failure; Wi-Fi OCR-only scans explicitly publish `raw.pdf` as fallback. That difference is a typed
   creation policy rather than a cleanup-time environment check.
+- The versioned OCR HTTP API is an OpenAPI-described adapter over that same imported-PDF path. It
+  accepts raw PDF request bodies, derives status from actor-isolated queue snapshots and atomic
+  source/result publication, returns the searchable PDF, and extracts UTF-8 text from the completed
+  PDF with Poppler without rerunning OCR. Optional bearer authentication is controlled by
+  `SCAN_OCR_API_TOKEN`. API uploads do not introduce a second scheduler or durable job database;
+  completed results remain discoverable after restart, while interrupted jobs retain their source
+  and report failure.
 - `OCRWorkerRegistry` is the persistent control-plane registry for optional remote OCR workers. It
   owns registration authentication, explicit approval, enablement, heartbeat state, and UI
   snapshots.

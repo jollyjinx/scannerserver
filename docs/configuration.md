@@ -126,7 +126,8 @@ execution failure retains local fallback; task cancellation does not fall back.
 | `SCAN_OCR_REMOTE_ASSIGNMENT_WAIT_SECONDS` | `30` | Time an eligible remote job may remain unclaimed (including after lease expiry) before local fallback |
 | `SCAN_OCR_REMOTE_COMPLETION_TIMEOUT_SECONDS` | `3600` | Maximum total remote job duration before cancellation and local fallback |
 | `SCAN_OCR_WORKER_MAX_RESULT_BYTES` | `1073741824` | Maximum PDF upload size accepted from an authenticated worker |
-| `SCAN_PDF_UPLOAD_MAX_BYTES` | `1073741824` | Maximum size of a PDF dropped onto the Documents page for OCR |
+| `SCAN_PDF_UPLOAD_MAX_BYTES` | `1073741824` | Maximum size of a PDF uploaded through the Documents page or OCR API |
+| `SCAN_OCR_API_TOKEN` | empty | Optional bearer token required by OCR API operations; leave empty only on a trusted network |
 | `SCAN_OCR_WORKER_BONJOUR_ENABLED` | `false` | Publish `_scannerserver._tcp` for OCR worker discovery through `avahi-publish-service` |
 | `SCANNERSERVER_BONJOUR_NAME` | `scannerserver` | Bonjour service instance name |
 | `SCANNERSERVER_BONJOUR_HOST` | process hostname | Host used to derive the advertised URL when no complete URL is configured |

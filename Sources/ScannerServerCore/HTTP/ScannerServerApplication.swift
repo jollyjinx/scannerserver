@@ -204,6 +204,7 @@ public struct ScannerServerDependencies: Sendable {
     public let documentCollection: ScanDocumentCollection
     public let scannerSetup: any ScannerSetupServing
     public let previewProvider: any ScanPreviewProviding
+    public let ocrTextExtractor: any OCRTextExtracting
     public let webUpdates: WebUpdateNotifier
     public let scannerReachability: ScanSnapReachabilityState
     public let environment: [String: String]
@@ -223,6 +224,7 @@ public struct ScannerServerDependencies: Sendable {
         outputPathResolver: ScanOutputPathResolver,
         scannerSetup: any ScannerSetupServing,
         previewProvider: any ScanPreviewProviding = CompatibleScanPreviewProvider(),
+        ocrTextExtractor: any OCRTextExtracting = PDFToTextExtractor(),
         webUpdates: WebUpdateNotifier? = nil,
         scannerReachability: ScanSnapReachabilityState? = nil,
         environment: [String: String],
@@ -299,6 +301,7 @@ public struct ScannerServerDependencies: Sendable {
         )
         self.scannerSetup = scannerSetup
         self.previewProvider = previewProvider
+        self.ocrTextExtractor = ocrTextExtractor
         self.webUpdates = webUpdates
         self.ocrWorkerRegistry = ocrWorkerRegistry
         self.ocrWorkerJobs = ocrWorkerJobs
@@ -444,6 +447,8 @@ public enum ScannerServerApplication {
         }
         let buildInformation = ScannerServerBuildInformation(environment: dependencies.environment)
         let router = Router()
+
+        registerOCRAPIRoutes(router, dependencies: dependencies)
 
         router.get("/") { request, _ in
             await webPageResponse(
