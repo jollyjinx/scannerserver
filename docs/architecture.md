@@ -79,13 +79,16 @@ persisted stores, reachability, and physical-button session state.
   published keeps the workspace and reports the error. Multipage OCR gives the budget to OCRmyPDF's page workers, while page analysis and
   single-page OCR are bounded concurrently. Remote-capable OCR admission uses the sum of every
   online approved worker's advertised concurrent page slots plus the internal OCR capacity when it
-  is unpaused. Remote slots are assigned first and any added internal slots are explicitly kept
-  local, avoiding remote queueing while scanner-host CPUs sit idle. A shared weighted local-capacity
+  is unpaused and configured for normal or niced parallel use. Remote slots are assigned first and
+  any added internal slots are explicitly kept local. In fallback-only mode, no internal slots are
+  reserved while remote capacity is online; local niced execution remains available when remote
+  capacity is absent or an attempted remote execution fails. A shared weighted local-capacity
   pool gates queue-owned processing and typed OCR local fallback, so losing remote workers cannot
   oversubscribe the scanner host. When preprocessing hands a job to OCR, the queue releases its
   reservation before the OCR execution module acquires the same shared pool; ownership is never
   duplicated. The persisted internal-worker control owns the scanner host's CPU limit and
-  normal/reduced priority independently of scan presets. When reduced priority is enabled, the
+  normal/niced/fallback-only priority independently of scan presets. In niced and fallback-only
+  modes, the
   queue applies the configured nice level to every external document-processing subprocess; the
   service and scanner acquisition remain at normal priority. The queue owns FIFO admission, CPU and
   worker-capacity selection, page-process task cancellation, and recent per-page timing, but not
@@ -197,7 +200,7 @@ persisted stores, reachability, and physical-button session state.
   and stderr only. They carry no OCR routing, worker metadata, document-operation configuration,
   execution location, or scan-finalization state.
 - The Workers page combines persisted remote lease state with actor-isolated local queue snapshots.
-  It always exposes the internal fallback worker and its CPU/priority settings, current
+  It always exposes the internal fallback worker and its immediately applied CPU/priority settings, current
   waiting/running work, compact terminal
   history, and successful pages-per-minute measurements without exposing authentication or lease
   tokens.
@@ -207,7 +210,8 @@ persisted stores, reachability, and physical-button session state.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for
-  state already covered by that notifier. The Documents page uses the same revision source through
+  state already covered by that notifier. The Workers page refreshes only its replaceable panel and
+  preserves an active settings form instead of reloading the page. The Documents page uses the same revision source through
   `/documents/updates`, which renders only the replaceable results region after a change. Its browser
   client applies that fragment in the background and restores checked files, keyboard focus, and
   scroll position instead of navigating or rebuilding the complete page.

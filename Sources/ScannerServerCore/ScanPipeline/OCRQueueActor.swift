@@ -153,17 +153,20 @@ public struct ImportedPDFOCRRequest: Sendable {
 public struct OCRQueueWorkerCapacity: Equatable, Sendable {
     public let remoteJobSlots: Int
     public let internalOCREnabled: Bool
+    public let internalOCRFallbackOnly: Bool
     public let internalCPULimit: Int?
     public let internalNiceLevel: Int?
 
     public init(
         remoteJobSlots: Int = 0,
         internalOCREnabled: Bool = true,
+        internalOCRFallbackOnly: Bool = false,
         internalCPULimit: Int? = nil,
         internalNiceLevel: Int? = nil
     ) {
         self.remoteJobSlots = max(0, remoteJobSlots)
         self.internalOCREnabled = internalOCREnabled
+        self.internalOCRFallbackOnly = internalOCRFallbackOnly
         self.internalCPULimit = internalCPULimit.map { max(1, $0) }
         self.internalNiceLevel = internalNiceLevel.map { min(max(1, $0), 19) }
     }
@@ -903,7 +906,11 @@ public actor OCRQueueActor {
                     )
                 }
 
-                let localLimit = workerCapacity.internalOCREnabled ? internalCPULimit : 0
+                let remoteCapacityHasPriority = workerCapacity.internalOCRFallbackOnly
+                    && workerCapacity.remoteJobSlots > 0
+                let localLimit = workerCapacity.internalOCREnabled && !remoteCapacityHasPriority
+                    ? internalCPULimit
+                    : 0
                 let activeLocalJobs = activeDistributedJobs.filter {
                     $0.executionPreference == .reservedInternal
                 }

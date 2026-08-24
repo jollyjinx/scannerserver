@@ -219,7 +219,11 @@ struct ScannerServerApplicationTests {
                 #expect(body.contains("action=\"/internal-worker/pause\""))
                 #expect(body.contains("action=\"/internal-worker/settings\""))
                 #expect(body.contains(#"<select name="cpu_limit">"#))
-                #expect(body.contains(#"<select name="reduced_priority">"#))
+                #expect(body.contains(#"<select name="priority">"#))
+                #expect(body.contains(#"data-workers-panel"#))
+                #expect(body.contains(#"data-instant-worker-settings"#))
+                #expect(!body.contains("Save worker settings"))
+                #expect(!body.contains(#"<meta http-equiv="refresh""#))
                 #expect(body.contains("Mac Studio &amp; OCR"))
                 #expect(body.contains("12 CPUs · 1 concurrent page max"))
                 #expect(body.contains("Approval required"))
@@ -241,12 +245,12 @@ struct ScannerServerApplicationTests {
             try await postForm(
                 client,
                 uri: "/internal-worker/settings",
-                body: "cpu_limit=2&reduced_priority=true"
+                body: "cpu_limit=2&priority=fallback-only"
             ) { response in
                 expectRedirect(response, to: "/workers")
             }
             #expect(await fixture.internalOCRWorker.settings.configuredCPULimit == 2)
-            #expect(await fixture.internalOCRWorker.settings.reducedPriority)
+            #expect(await fixture.internalOCRWorker.settings.priority == .fallbackOnly)
             try await client.execute(
                 uri: "/workers/mac-studio-1/approve",
                 method: .post

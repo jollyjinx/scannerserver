@@ -1471,6 +1471,39 @@ struct OCRQueueActorTests {
         await queue.cancelAll()
     }
 
+    @Test("Fallback-only internal worker waits while remote capacity is available")
+    func fallbackOnlyWorkerConcurrency() async {
+        let executor = FakeProcessExecutor(stubs: Array(
+            repeating: .suspended(ProcessResult(exitStatus: 0)),
+            count: 8
+        ))
+        let queue = OCRQueueActor(
+            ocrExecutor: executor,
+            configuration: OCRQueueConfiguration(cpuLimit: 3),
+            workerCapacityProvider: {
+                OCRQueueWorkerCapacity(
+                    remoteJobSlots: 4,
+                    internalOCREnabled: true,
+                    internalOCRFallbackOnly: true
+                )
+            }
+        )
+        let environment = ["SCAN_PAGE_MODE": "single"]
+
+        for page in 1...8 {
+            await queue.enqueue("/scans/page-\(page).pdf", environment: environment)
+        }
+        await executor.waitForRequestCount(4)
+
+        #expect(await queue.state.running == 4)
+        #expect(await queue.state.queued == 4)
+        #expect(await executor.ocrRequests().allSatisfy {
+            $0.dispatchPreference == .remoteFirst
+        })
+
+        await queue.cancelAll()
+    }
+
     @Test("The internal worker CPU limit controls multipage OCRmyPDF workers")
     func multipageCPULimit() async {
         let executor = FakeProcessExecutor(stubs: [

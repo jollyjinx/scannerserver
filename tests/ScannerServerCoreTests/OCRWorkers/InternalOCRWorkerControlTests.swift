@@ -20,7 +20,7 @@ struct InternalOCRWorkerControlTests {
         #expect(await first.isPaused == false)
         #expect(await first.settings.cpuLimit == 8)
         try await first.setPaused(true)
-        try await first.setSettings(cpuLimit: 3, reducedPriority: true)
+        try await first.setSettings(cpuLimit: 3, priority: .fallbackOnly)
         #expect(await first.isPaused)
 
         let reloaded = InternalOCRWorkerControl(
@@ -33,7 +33,7 @@ struct InternalOCRWorkerControlTests {
         #expect(await reloaded.settings == InternalOCRWorkerSettings(
             configuredCPULimit: 3,
             maximumCPUs: 8,
-            reducedPriority: true,
+            priority: .fallbackOnly,
             niceLevel: 14
         ))
         try await reloaded.setPaused(false)
@@ -58,6 +58,28 @@ struct InternalOCRWorkerControlTests {
         #expect(await control.isPaused)
         #expect(await control.settings.cpuLimit == 6)
         #expect(await control.settings.configuredCPULimit == nil)
+        #expect(await control.settings.priority == .niced)
         #expect(await control.settings.niceLevel == 11)
+    }
+
+    @Test("Legacy reduced-priority state migrates to niced priority")
+    func legacyReducedPriorityPersistence() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = root.appendingPathComponent("internal-worker.json")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(#"{"paused":false,"cpuLimit":2,"reducedPriority":true}"#.utf8)
+            .write(to: fileURL)
+
+        let control = InternalOCRWorkerControl(
+            fileURL: fileURL,
+            maximumCPUs: 6,
+            defaultReducedPriority: false,
+            niceLevel: 11
+        )
+
+        #expect(await control.settings.configuredCPULimit == 2)
+        #expect(await control.settings.priority == .niced)
     }
 }

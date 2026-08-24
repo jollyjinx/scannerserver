@@ -286,6 +286,7 @@ public struct ScannerServerDependencies: Sendable {
                     return OCRQueueWorkerCapacity(
                         remoteJobSlots: remoteJobSlots,
                         internalOCREnabled: !(await internalOCRWorker.isPaused),
+                        internalOCRFallbackOnly: internalSettings.fallbackOnly,
                         internalCPULimit: internalSettings.cpuLimit,
                         internalNiceLevel: internalSettings.niceLevel
                     )
@@ -384,6 +385,7 @@ public struct ScannerServerDependencies: Sendable {
                 return OCRQueueWorkerCapacity(
                     remoteJobSlots: remoteJobSlots,
                     internalOCREnabled: !(await internalOCRWorker.isPaused),
+                    internalOCRFallbackOnly: internalSettings.fallbackOnly,
                     internalCPULimit: internalSettings.cpuLimit,
                     internalNiceLevel: internalSettings.niceLevel
                 )
@@ -689,9 +691,11 @@ public enum ScannerServerApplication {
                 let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
                 return value.isEmpty ? nil : Int(value)
             }
+            let priority = form.priority.flatMap(InternalOCRWorkerPriority.init(rawValue:))
+                ?? (form.reducedPriority == "true" ? .niced : .normal)
             try await dependencies.internalOCRWorker.setSettings(
                 cpuLimit: cpuLimit,
-                reducedPriority: form.reducedPriority == "true"
+                priority: priority
             )
             await dependencies.ocrQueue.capacityDidChange()
             return .redirect(to: "/workers")
@@ -1041,10 +1045,12 @@ private struct ModeIDForm: Decodable {
 
 private struct InternalWorkerSettingsForm: Decodable {
     let cpuLimit: String?
+    let priority: String?
     let reducedPriority: String?
 
     enum CodingKeys: String, CodingKey {
         case cpuLimit = "cpu_limit"
+        case priority
         case reducedPriority = "reduced_priority"
     }
 }
@@ -1457,9 +1463,8 @@ private func indexResponse(
         groups: groups,
         localTime: localTime
     )
-    let refresh = page == .workers ? "<meta http-equiv=\"refresh\" content=\"10\">" : ""
     let html = template
-        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: refresh)
+        .replacingOccurrences(of: "<!-- SCANNER_SERVER_REFRESH -->", with: "")
         .replacingOccurrences(of: "SCANNER_SERVER_REVISION", with: "\(webRevision)")
         .replacingOccurrences(
             of: "<!-- SCANNER_SERVER_VERSION -->",
@@ -1554,7 +1559,7 @@ private func renderWorkers(
     internalWorkerSettings: InternalOCRWorkerSettings,
     localTime: ScannerServerLocalTime
 ) -> String {
-    var html = "<section class=\"workers-panel\"><div class=\"section-heading\"><div>"
+    var html = "<section class=\"workers-panel\" data-workers-panel><div class=\"section-heading\"><div>"
     html += "<p class=\"eyebrow\">Distributed processing</p><h2>OCR workers</h2>"
     html += "<p class=\"muted\">Register, approve, and monitor remote OCR capacity. Approved enabled workers get first refusal on compatible queued PDFs before local OCR.</p>"
     html += "</div></div>"
@@ -1664,7 +1669,12 @@ private func renderInternalWorker(
     html += "</div><dl class=\"worker-facts\"><div><dt>Capacity</dt><dd>\(settings.cpuLimit) CPUs</dd></div>"
     html += "<div><dt>Running</dt><dd>\(localRunning)</dd></div>"
     html += "<div><dt>Speed</dt><dd>\(localSpeed(localPages))</dd></div>"
-    html += "<div><dt>Priority</dt><dd>\(settings.reducedPriority ? "Reduced" : "Normal")</dd></div></dl>"
+    let priorityLabel = switch settings.priority {
+    case .normal: "Normal"
+    case .niced: "Niced"
+    case .fallbackOnly: "Fallback only"
+    }
+    html += "<div><dt>Priority</dt><dd>\(priorityLabel)</dd></div></dl>"
     if paused {
         html += "<p class=\"muted\">Local OCR is stopped. Waiting work remains available to remote workers.</p>"
         html += "<div class=\"button-row\"><form class=\"inline-form\" method=\"post\" action=\"/internal-worker/resume\"><button>Resume</button></form></div>"
@@ -1674,7 +1684,7 @@ private func renderInternalWorker(
     }
     var cpuChoices = [("", "Automatic (up to \(settings.maximumCPUs))")]
     cpuChoices += (1...settings.maximumCPUs).map { (String($0), "\($0)") }
-    html += "<form method=\"post\" action=\"/internal-worker/settings\"><fieldset class=\"setting-group\"><legend>Built-in worker settings</legend>"
+    html += "<form method=\"post\" action=\"/internal-worker/settings\" data-instant-worker-settings><fieldset class=\"setting-group\"><legend>Built-in worker settings</legend>"
     html += "<div class=\"settings-grid settings-grid-two\">"
     html += select(
         name: "cpu_limit",
@@ -1684,13 +1694,18 @@ private func renderInternalWorker(
         help: "Automatic uses the scanner host's background CPU allowance while reserving one processor for scanning and the web service."
     )
     html += select(
-        name: "reduced_priority",
+        name: "priority",
         label: "Post-scan priority",
-        values: [("false", "Normal"), ("true", "Niced (reduced)")],
-        selected: settings.reducedPriority ? "true" : "false",
-        help: "Reduced priority lets scanning and the web service take precedence over local document processing."
+        values: [
+            (InternalOCRWorkerPriority.normal.rawValue, "Normal"),
+            (InternalOCRWorkerPriority.niced.rawValue, "Niced (reduced)"),
+            (InternalOCRWorkerPriority.fallbackOnly.rawValue, "Fallback only"),
+        ],
+        selected: settings.priority.rawValue,
+        help: "Normal and niced use local capacity alongside remote workers. Fallback only waits while remote capacity is available and uses niced local processing only if remote work is unavailable or fails."
     )
-    html += "</div><div class=\"button-row\"><button type=\"submit\">Save worker settings</button></div></fieldset></form>"
+    html += "</div><p class=\"setting-help\" data-worker-settings-status>Changes apply immediately.</p>"
+    html += "<noscript><div class=\"button-row\"><button type=\"submit\">Apply worker settings</button></div></noscript></fieldset></form>"
     html += "</article>"
     return html
 }

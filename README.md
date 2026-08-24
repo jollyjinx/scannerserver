@@ -58,7 +58,8 @@ documents and persistent service settings, so replacing the container does not l
    password from the product serial number automatically.
 3. Open **Scan Settings** to choose the physical-button default or create presets for duplex,
    simplex, PDF, PNG, OCR, crop, and blank removal.
-4. Open **Workers** to set the built-in worker's processing CPU allowance and post-scan priority.
+4. Open **Workers** to set the built-in worker's processing CPU allowance and choose **Normal**,
+   **Niced**, or **Fallback only** priority. Changes apply immediately.
 5. Start a scan in the browser or press the iX500's physical scan button.
 
 The header shows the configured scanner and a live reachability indicator. The page also reports

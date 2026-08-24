@@ -1,16 +1,29 @@
 import Foundation
 
+public enum InternalOCRWorkerPriority: String, Codable, CaseIterable, Equatable, Sendable {
+    case normal
+    case niced
+    case fallbackOnly = "fallback-only"
+
+    public var usesReducedProcessPriority: Bool {
+        self != .normal
+    }
+}
+
 public struct InternalOCRWorkerSettings: Equatable, Sendable {
     public let configuredCPULimit: Int?
     public let cpuLimit: Int
     public let maximumCPUs: Int
-    public let reducedPriority: Bool
+    public let priority: InternalOCRWorkerPriority
     public let niceLevel: Int?
+
+    public var reducedPriority: Bool { priority.usesReducedProcessPriority }
+    public var fallbackOnly: Bool { priority == .fallbackOnly }
 
     public init(
         configuredCPULimit: Int?,
         maximumCPUs: Int,
-        reducedPriority: Bool,
+        priority: InternalOCRWorkerPriority,
         niceLevel: Int
     ) {
         let maximumCPUs = max(1, maximumCPUs)
@@ -18,8 +31,24 @@ public struct InternalOCRWorkerSettings: Equatable, Sendable {
         self.configuredCPULimit = configuredCPULimit
         self.cpuLimit = configuredCPULimit ?? maximumCPUs
         self.maximumCPUs = maximumCPUs
-        self.reducedPriority = reducedPriority
-        self.niceLevel = reducedPriority ? min(max(niceLevel, 1), 19) : nil
+        self.priority = priority
+        self.niceLevel = priority.usesReducedProcessPriority
+            ? min(max(niceLevel, 1), 19)
+            : nil
+    }
+
+    public init(
+        configuredCPULimit: Int?,
+        maximumCPUs: Int,
+        reducedPriority: Bool,
+        niceLevel: Int
+    ) {
+        self.init(
+            configuredCPULimit: configuredCPULimit,
+            maximumCPUs: maximumCPUs,
+            priority: reducedPriority ? .niced : .normal,
+            niceLevel: niceLevel
+        )
     }
 }
 
@@ -27,6 +56,7 @@ public actor InternalOCRWorkerControl {
     private struct StoredState: Codable, Sendable {
         let paused: Bool
         let cpuLimit: Int?
+        let priority: InternalOCRWorkerPriority?
         let reducedPriority: Bool?
     }
 
@@ -35,7 +65,7 @@ public actor InternalOCRWorkerControl {
 
     private var paused: Bool
     private var configuredCPULimit: Int?
-    private var reducedPriority: Bool
+    private var priority: InternalOCRWorkerPriority
     private let maximumCPUs: Int
     private let niceLevel: Int
 
@@ -56,11 +86,12 @@ public actor InternalOCRWorkerControl {
            let stored = try? JSONDecoder().decode(StoredState.self, from: data) {
             paused = stored.paused
             configuredCPULimit = stored.cpuLimit.map { min(max(1, $0), resolvedMaximumCPUs) }
-            reducedPriority = stored.reducedPriority ?? defaultReducedPriority
+            priority = stored.priority
+                ?? ((stored.reducedPriority ?? defaultReducedPriority) ? .niced : .normal)
         } else {
             paused = false
             configuredCPULimit = nil
-            reducedPriority = defaultReducedPriority
+            priority = defaultReducedPriority ? .niced : .normal
         }
     }
 
@@ -81,7 +112,7 @@ public actor InternalOCRWorkerControl {
         InternalOCRWorkerSettings(
             configuredCPULimit: configuredCPULimit,
             maximumCPUs: maximumCPUs,
-            reducedPriority: reducedPriority,
+            priority: priority,
             niceLevel: niceLevel
         )
     }
@@ -101,24 +132,31 @@ public actor InternalOCRWorkerControl {
 
     public func setSettings(
         cpuLimit: Int?,
-        reducedPriority newReducedPriority: Bool
+        priority newPriority: InternalOCRWorkerPriority
     ) async throws {
         let newCPULimit = cpuLimit.map { min(max(1, $0), maximumCPUs) }
-        guard configuredCPULimit != newCPULimit || reducedPriority != newReducedPriority else {
+        guard configuredCPULimit != newCPULimit || priority != newPriority else {
             return
         }
         let previousCPULimit = configuredCPULimit
-        let previousReducedPriority = reducedPriority
+        let previousPriority = priority
         configuredCPULimit = newCPULimit
-        reducedPriority = newReducedPriority
+        priority = newPriority
         do {
             try persist()
         } catch {
             configuredCPULimit = previousCPULimit
-            reducedPriority = previousReducedPriority
+            priority = previousPriority
             throw error
         }
         await webUpdates.notify()
+    }
+
+    public func setSettings(cpuLimit: Int?, reducedPriority: Bool) async throws {
+        try await setSettings(
+            cpuLimit: cpuLimit,
+            priority: reducedPriority ? .niced : .normal
+        )
     }
 
     /// Waits for any scheduler-visible change while the internal worker is paused.
@@ -153,7 +191,8 @@ public actor InternalOCRWorkerControl {
         var data = try encoder.encode(StoredState(
             paused: paused,
             cpuLimit: configuredCPULimit,
-            reducedPriority: reducedPriority
+            priority: priority,
+            reducedPriority: nil
         ))
         data.append(0x0A)
         try data.write(to: fileURL, options: .atomic)

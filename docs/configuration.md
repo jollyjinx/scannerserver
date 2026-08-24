@@ -127,7 +127,7 @@ execution failure retains local fallback; task cancellation does not fall back.
 | `SCAN_OCR_ENABLED` | `true` | Queue OCR for PDF output after scanning |
 | `SCAN_OCR_ONLY` | `false` | Publish only the OCR result for PDF scans. The raw PDF stays in the private scan workspace and is deleted after OCR succeeds; on OCR/processing failure it is published as a fallback, while cancellation publishes nothing. If the fallback publication fails, the raw PDF remains in the private scan workspace and the error is reported. PNG output and imported PDFs are unaffected |
 | `SCAN_OCR_CPU_LIMIT` | detected CPUs minus one | Startup cap/default for the built-in worker's processing CPUs; the persisted Workers-page setting may lower it |
-| `SCAN_OCR_NICE` | `false` | Initial reduced-priority setting for the built-in worker when no persisted worker preference exists |
+| `SCAN_OCR_NICE` | `false` | Selects initial **Niced** rather than **Normal** priority when no persisted worker preference exists |
 | `SCAN_OCR_NICE_LEVEL` | `10` | Nice increment from `1` through `19` when the built-in worker uses reduced priority |
 | `SCAN_OCR_WORKERS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-workers.json` | Registered OCR worker identities, approvals, and last-known state |
 | `SCAN_OCR_WORKER_JOBS_PATH` | `<SCAN_OUTPUT_DIR>/.scannerserver-ocr-jobs.json` | Durable remote OCR job manifests, lease state, and terminal results |
@@ -208,12 +208,18 @@ worker CLI `--max-concurrent-jobs` lowers concurrency for memory- or thermally c
 Whole-document remote jobs remain supported but use one CPU per document; streaming ScanSnap scans
 and imported PDFs avoid that limitation by scheduling individual pages.
 
-Post-scan processing runs at normal process priority by default so a busy service host cannot starve
-background work. Reduced-priority mode remains available as an explicit opt-in through the built-in
-worker's **Post-scan priority** setting on the **Workers** page. `SCAN_OCR_NICE` supplies its initial
-value when no worker preference has been persisted. When enabled, the
-nice level applies to every external tool launched after scanner acquisition releases its foreground
-lifecycle, including blank removal, autocrop, final output conversion, metadata updates, and OCR.
+Post-scan processing runs at normal process priority by default. The built-in worker's
+**Post-scan priority** setting on the **Workers** page has three immediately applied choices:
+
+- **Normal** adds local capacity alongside remote workers and runs local subprocesses normally.
+- **Niced** adds the same local capacity but lowers the OS priority of local subprocesses.
+- **Fallback only** does not reserve local slots while compatible remote capacity is available; if
+  remote capacity is unavailable or remote execution fails, it runs the local fallback niced.
+
+`SCAN_OCR_NICE` chooses **Niced** rather than **Normal** initially when no worker preference has
+been persisted. In both niced modes, the nice level applies to every external tool launched after
+scanner acquisition releases its foreground lifecycle, including blank removal, autocrop, final
+output conversion, metadata updates, and OCR.
 The scannerserver process and scanner acquisition remain at normal priority. The global nice level
 controls the increment used by the niced internal worker. To make four CPUs the maximum/default and
 use a nice level of `+15` initially:

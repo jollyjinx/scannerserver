@@ -28,8 +28,9 @@ do not need a fixed address or an inbound firewall rule.
 - Registration reports its name, hostname, architecture, CPU capacity, derived concurrency limit,
   version, and OCR languages.
 - New workers require approval on the scannerserver **Workers** page.
-- The same page owns the built-in worker's persisted processing CPU allowance and normal/reduced
-  post-scan priority. These are worker-wide settings, not scan-preset fields.
+- The same page owns the built-in worker's persisted processing CPU allowance and post-scan
+  priority: **Normal**, **Niced**, or **Fallback only**. These are worker-wide settings, not
+  scan-preset fields, and selector changes apply immediately.
 - Heartbeats report liveness and running-job count. Approved workers become offline after missed
   heartbeats. They can be paused temporarily or disabled without forgetting their approval.
 - Registrations and approvals are stored atomically in
@@ -54,9 +55,11 @@ do not need a fixed address or an inbound firewall rule.
   Its finalizer creates only a private staging file; an actor generation check guards the exclusive
   publication commit against cancellation and late results.
 - The OCR scheduler fills the aggregate page capacity announced by all online, approved, enabled,
-  unpaused workers. When the internal worker is enabled, its local CPU allowance is added to that
-  total after remote slots are filled; pausing it removes those slower scanner-host slots without
-  reducing remote concurrency.
+  unpaused workers. With **Normal** or **Niced** priority, the internal worker's local CPU allowance
+  is added to that total after remote slots are filled. With **Fallback only**, local slots are not
+  reserved while compatible remote capacity is online; local niced processing is used when no
+  remote capacity is available or a remote attempt fails. Pausing the internal worker removes local
+  fallback altogether without reducing remote concurrency.
   Local fallback and queue-owned preprocessing use one shared CPU permit pool. The queue releases
   preprocessing capacity at the typed OCR handoff and the execution module acquires and releases
   the local OCR reservation, so a worker outage cannot oversubscribe the scanner host.
@@ -176,7 +179,9 @@ The internal worker has its own **Pause** and **Resume** controls. Pausing it ca
 OCR and keeps that page in the scheduler so a compatible remote worker can take over. While it is
 paused, new remote registrations and approvals are detected immediately; if no remote capacity is
 available, work waits instead of consuming scannerserver CPU. Resuming permits local fallback
-again. This state survives a scannerserver restart.
+again. This state survives a scannerserver restart. Worker activity refreshes only the live Workers
+panel and preserves an active settings control; CPU and priority changes are posted immediately
+without a separate Save action.
 
 Deleting a worker removes its persisted registration and approval. If that worker process is still
 running, it registers again with the same identity and must be approved again.
