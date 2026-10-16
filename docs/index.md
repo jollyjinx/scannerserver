@@ -22,7 +22,8 @@ Use this page as the entry point for repository documentation. The root [`README
 | [`ocr-workers.md`](ocr-workers.md) | Built-in and remote worker setup, registration, approval, scheduling, status, and protocol | Operators and maintainers |
 | [`deployment.md`](deployment.md) | Published images, host networking, Compose, local builds, and image publishing | Operators |
 | [`releasing.md`](releasing.md) | Release validation, version selection, Git tags, GitHub Releases, and GHCR verification | Maintainers |
-| [`protocol.md`](protocol.md) | ScanSnap iX500 discovery, pairing, directed port map, startup advertisements, heartbeat, and physical-button session lifecycle | Maintainers |
+| [`protocol.md`](protocol.md) | ScanSnap iX500 capabilities, discovery, pairing, directed port map, physical-button sessions, and protocol regression transcripts | Maintainers |
+| [`scan-project-comparison.md`](scan-project-comparison.md) | Assessment of holgerkrupp/Scan, USB model knowledge, multiple-device work, and proposed improvements | Maintainers and agents |
 | [`swift-hardware-validation.md`](swift-hardware-validation.md) | Manual acceptance testing with a real scanner | Maintainers |
 | [`../AGENTS.md`](../AGENTS.md) | Repository-wide instructions that coding agents must follow | Agents |
 

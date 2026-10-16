@@ -823,6 +823,42 @@ struct ScannerServerApplicationTests {
         }
     }
 
+    @Test("Preset descriptions show actual backend quality while preserving saved SANE values",
+          arguments: ["wifi", "sane"])
+    func backendCapabilityDescriptions(backend: String) async throws {
+        let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": backend])
+        defer { fixture.remove() }
+        var settings = try await fixture.settingsStore.load()
+        settings.modes[0].settings.resolution = "600"
+        settings.modes[0].settings.mode = "Gray"
+        let saved = try await fixture.settingsStore.save(settings)
+        let settingsURL = await fixture.settingsStore.fileURL
+        let storedBytes = try Data(contentsOf: settingsURL)
+        let application = try fixture.application()
+
+        try await application.test(.router) { client in
+            try await client.execute(uri: "/presets", method: .get) { response in
+                #expect(response.status == .ok)
+                let body = String(buffer: response.body)
+                #expect(body.contains(#"<option value="600" selected>600 dpi</option>"#))
+                #expect(body.contains(#"<option value="Gray" selected>Gray</option>"#))
+                if backend == "wifi" {
+                    #expect(body.contains("The ScanSnap iX500 Wi-Fi backend captures 300 dpi RGB color pages."))
+                    #expect(body.contains("Resolution and color selections below apply to the SANE backend."))
+                    #expect(body.contains("Duplex keeps both sides; simplex keeps only the front pages."))
+                    #expect(!body.contains("600 dpi Gray"))
+                } else {
+                    #expect(body.contains("600 dpi Gray"))
+                    #expect(!body.contains("Wi-Fi backend captures"))
+                    #expect(body.contains("Duplex scans both sides; simplex scans only the front."))
+                }
+            }
+        }
+
+        #expect(try await fixture.settingsStore.load() == saved)
+        #expect(try Data(contentsOf: settingsURL) == storedBytes)
+    }
+
     @Test("Wi-Fi scans require truthful setup state")
     func scanRequiresSetup() async throws {
         let fixture = try HTTPFixture(environment: ["SCAN_BACKEND": "wifi"])

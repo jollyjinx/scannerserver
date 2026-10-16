@@ -29,6 +29,26 @@ Important ports and packet directions:
 `53220` is the startup-advertisement destination port. `52217` is the scanner's registration and
 heartbeat destination; the similar numbers represent different directions and responsibilities.
 
+## Implemented Wi-Fi Capabilities
+
+[`ScanSnapWiFiCapabilities.ix500`](../Sources/ScannerServerCore/ScanSnap/ScanSnapWiFiCapabilities.swift)
+describes the current backend, independently of the physical scanner's USB features:
+
+| Capability | Current implementation |
+| --- | --- |
+| Model and transport | ScanSnap iX500, VENS Wi-Fi protocol |
+| Acquisition | Fixed 300 dpi RGB color JPEG sides |
+| Duplex | Both sides are acquired and retained in source order |
+| Simplex | Both sides are transferred; back sides are discarded during acquisition |
+| Resolution and color selection | Not exposed by the Wi-Fi command sequence; persisted settings remain available for SANE |
+| Physical scan button | Retained notification session, heartbeat, and acquisition handoff |
+
+This is immutable descriptive metadata, used by preset help and summaries. It does not select or
+rewrite packets, change session ownership, probe capabilities, or advertise another model. The
+existing acquisition commands and 300 dpi RGB PDF embedding remain unchanged. The preset editor
+preserves saved resolution/color values, while Wi-Fi summaries show the actual fixed acquisition
+quality; SANE summaries continue to show the saved selections.
+
 ## First-Run Discovery
 
 The iX500 exposes a 132-byte VENS UDP device-info response before TCP pairing. That response is unauthenticated and includes:
@@ -271,6 +291,39 @@ Started scan from scanner button notice from <scanner-ip>
 
 The expected idle traffic after `ScanSnap button client armed` is one heartbeat approximately
 every 500 ms from the configured client address/UDP `55264` to the scanner on UDP `52217`.
+
+## Hardware-Free Protocol Regression Transcripts
+
+[`ScanSnapWiFiProtocolTranscriptTests`](../tests/ScannerServerCoreTests/ScanSnap/ScanSnapWiFiProtocolTranscriptTests.swift)
+drives the real pairing actor, button session armer, and acquisition client through a shared scripted
+UDP/TCP transport. It checks full frames, cross-connection ordering, endpoint addresses and ports,
+registration counts, retention delays, complete acknowledgements, half-close, and peer-close
+draining. Read and write fragmentation include single-byte transfers.
+
+The suite covers fresh versus retained sessions, unchanged duplex commands for simplex output,
+nonterminal status tails, transfer-batch continuation with ordered page callbacks, first and later
+transfer rejection, malformed setup responses, and cancellation during a partial image. Received
+pages must reach callbacks before the final PDF is written; incomplete or rejected first transfers
+must not publish it. The later-transfer failure case pins the existing partial-document policy.
+
+The literal frames in
+[`ScanSnapWiFiProtocolFixtures.swift`](../tests/ScannerServerCoreTests/ScanSnap/ScanSnapWiFiProtocolFixtures.swift)
+were frozen from the implementation at `83ea0d4`. They are synthetic regression baselines, not raw
+hardware captures or independent proof of protocol correctness. Addresses, client MAC, timestamp,
+pairing identity, acknowledgements, and small JPEG envelopes are test values. Expected bytes are
+never rebuilt with production packet builders while the tests run. Do not automatically regenerate
+these fixtures when implementation changes: review the proposed wire difference against hardware
+evidence and the compatibility contract first. No upstream USB fixtures were imported.
+
+Run the focused tests without a scanner:
+
+```sh
+swift test --filter ScanSnapWiFi
+```
+
+These transcripts complement the existing discovery, pairing, exact-I/O, button lifecycle,
+heartbeat/recovery, and PDF tests. Actual wire/session changes still require the
+[opt-in hardware checklist](swift-hardware-validation.md).
 
 ## Security Notes
 

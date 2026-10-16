@@ -1515,7 +1515,7 @@ private func renderIndexContent(
     switch page {
     case .scan:
         if !wifiBackend || setup.configured {
-            html += renderScan(settings: settings, job: job)
+            html += renderScan(settings: settings, job: job, wifiBackend: wifiBackend)
             html += renderStatus(job: job, ocr: ocr, localTime: localTime)
         } else {
             html += "<section class=\"empty-state\"><p class=\"eyebrow\">Setup required</p>"
@@ -1529,7 +1529,8 @@ private func renderIndexContent(
         html += renderBlankPageSettings(settings.blankPageSettings)
         html += renderModes(
             settings: settings,
-            selectedMode: selectedMode
+            selectedMode: selectedMode,
+            wifiBackend: wifiBackend
         )
     case .workers:
         html += renderWorkers(
@@ -1913,7 +1914,7 @@ private func renderNavigation(active: ScannerServerPage) -> String {
     return html + "</nav>"
 }
 
-private func renderScan(settings: ScanSettings, job: ScanJobState) -> String {
+private func renderScan(settings: ScanSettings, job: ScanJobState, wifiBackend: Bool) -> String {
     let buttonMode = settings.defaultMode
     var html = "<section class=\"scan-panel\"><div class=\"section-heading\">"
     html += "<div><p class=\"eyebrow\">Scanner controls</p><h2>Start a new scan</h2>"
@@ -1922,9 +1923,9 @@ private func renderScan(settings: ScanSettings, job: ScanJobState) -> String {
     html += "<label>Preset<select name=\"mode_id\" data-preset-select>"
     for mode in settings.modes {
         let selected = mode.id == settings.defaultModeID ? " selected" : ""
-        html += "<option value=\"\(htmlEscape(mode.id))\" data-summary=\"\(htmlEscape(modeSummary(mode)))\"\(selected)>\(htmlEscape(mode.name))</option>"
+        html += "<option value=\"\(htmlEscape(mode.id))\" data-summary=\"\(htmlEscape(modeSummary(mode, wifiBackend: wifiBackend)))\"\(selected)>\(htmlEscape(mode.name))</option>"
     }
-    html += "</select><span class=\"setting-help\" data-preset-summary>\(htmlEscape(modeSummary(buttonMode)))</span></label>"
+    html += "</select><span class=\"setting-help\" data-preset-summary>\(htmlEscape(modeSummary(buttonMode, wifiBackend: wifiBackend)))</span></label>"
     let scanDisabled = job.status == "running" ? " disabled" : ""
     html += "<button class=\"primary-action\"\(scanDisabled)>Start scan</button>"
     html += "</form>"
@@ -2051,7 +2052,8 @@ private func renderBlankPageSettings(_ settings: BlankPageSettings) -> String {
 
 private func renderModes(
     settings: ScanSettings,
-    selectedMode: ScanMode
+    selectedMode: ScanMode,
+    wifiBackend: Bool
 ) -> String {
     var html = "<section class=\"preset-workspace\"><div class=\"section-heading\"><div>"
     html += "<p class=\"eyebrow\">Reusable configurations</p><h2>Scan presets</h2>"
@@ -2062,7 +2064,7 @@ private func renderModes(
         let selected = mode.id == selectedMode.id ? " aria-current=\"true\"" : ""
         let badge = mode.id == settings.defaultModeID ? " <span class=\"default-badge\">Button</span>" : ""
         html += "<li><a href=\"/presets?edit_mode=\(urlQueryValue(mode.id))\"\(selected)>"
-        html += "<strong>\(htmlEscape(mode.name))</strong>\(badge)<span class=\"muted\">\(htmlEscape(modeSummary(mode)))</span></a></li>"
+        html += "<strong>\(htmlEscape(mode.name))</strong>\(badge)<span class=\"muted\">\(htmlEscape(modeSummary(mode, wifiBackend: wifiBackend)))</span></a></li>"
     }
     html += "</ul></aside><div class=\"preset-editor\"><div class=\"editor-heading\">"
     html += "<p class=\"eyebrow\">\(selectedMode.id.isEmpty ? "New preset" : "Edit preset")</p>"
@@ -2082,7 +2084,9 @@ private func renderModes(
         label: "Sides",
         values: [("false", "Duplex"), ("true", "Simplex")],
         selected: selectedMode.settings.simplexText,
-        help: "Duplex scans both sides; simplex scans only the front."
+        help: wifiBackend
+            ? ScanSnapWiFiCapabilities.ix500.sidesDescription
+            : "Duplex scans both sides; simplex scans only the front."
     )
     html += select(
         name: "SCAN_FORMAT",
@@ -2100,6 +2104,9 @@ private func renderModes(
     )
     html += "</div></fieldset>"
     html += "<fieldset class=\"setting-group\"><legend>Scan quality</legend>"
+    if wifiBackend {
+        html += "<p class=\"muted\">\(htmlEscape(ScanSnapWiFiCapabilities.ix500.acquisitionDescription))</p>"
+    }
     html += "<div class=\"settings-grid settings-grid-two\">"
     html += select(
         name: "SCAN_RESOLUTION",
@@ -2301,7 +2308,7 @@ private func statusPill(_ status: String) -> String {
     return "<span class=\"status-pill \(style)\">\(htmlEscape(status.capitalized))</span>"
 }
 
-private func modeSummary(_ mode: ScanMode) -> String {
+private func modeSummary(_ mode: ScanMode, wifiBackend: Bool) -> String {
     let value = mode.settings
     let sides = value.simplex ? "Simplex" : "Duplex"
     let output = value.format == "png" ? "PNG pages" : "PDF"
@@ -2310,7 +2317,10 @@ private func modeSummary(_ mode: ScanMode) -> String {
     let crop = value.cropPages
         ? "autocrop on (\(value.cropMarginPointsText) pt margin)"
         : "autocrop off"
-    return "\(sides), \(output), \(pages), \(ocr), \(crop), \(value.resolution) dpi \(value.mode)"
+    let acquisition = wifiBackend
+        ? ScanSnapWiFiCapabilities.ix500.acquisitionSummary
+        : "\(value.resolution) dpi \(value.mode)"
+    return "\(sides), \(output), \(pages), \(ocr), \(crop), \(acquisition)"
 }
 
 private func elapsedTime(_ interval: TimeInterval) -> String {

@@ -207,6 +207,11 @@ persisted stores, reachability, and physical-button session state.
 - `OCRWorkerBonjourPublisher` optionally owns a cancellable `avahi-publish-service` subprocess for
   `_scannerserver._tcp`. The macOS worker uses Network.framework to browse compatible TXT records;
   an explicit server URL remains available and takes precedence over Bonjour.
+- `ScanSnapWiFiCapabilities.ix500` is immutable metadata for the existing fixed 300 dpi RGB JPEG
+  Wi-Fi acquisition path, simplex filtering, and physical-button support. Preset descriptions and
+  summaries use it without changing persisted SANE settings or choosing protocol commands. The
+  hardware-free Wi-Fi transcript suite pins full frames and UDP/TCP ordering using synthetic
+  baselines frozen from `83ea0d4`; it complements, rather than replaces, real-hardware validation.
 - The ScanSnap button lifecycle retains the scanner notification session, coordinates heartbeat
   handoff during scans, and performs recovery after failed or cancelled acquisition.
 - `/updates` uses a revision-backed long poll; do not add an independent browser polling loop for

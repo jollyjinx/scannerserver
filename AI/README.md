@@ -23,6 +23,7 @@ Use [docs/index.md](../docs/index.md) as the authoritative documentation map. Th
 | Images, host networking, Compose, builds, and publishing | [docs/deployment.md](../docs/deployment.md) |
 | Versioning, release validation, Git tags, GitHub Releases, and GHCR promotion | [docs/releasing.md](../docs/releasing.md) |
 | ScanSnap iX500 discovery, pairing, transport, and button behavior | [docs/protocol.md](../docs/protocol.md) |
+| USB model knowledge, multiple-scanner proposals, and comparison with holgerkrupp/Scan | [Scan project comparison](../docs/scan-project-comparison.md) |
 | Real-hardware acceptance | [docs/swift-hardware-validation.md](../docs/swift-hardware-validation.md) |
 
 ## Current State And Scope

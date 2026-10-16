@@ -99,8 +99,11 @@ blank-page removal, autocrop, and the extra margin kept around cropped content. 
 capacity and post-scan process priority belong to the built-in worker and are configured once on the
 **Workers** page rather than repeated in every preset. The reverse-engineered Wi-Fi scanner command
 does not expose resolution or color controls. `SCAN_RESOLUTION`, `SCAN_MODE`, and `SCAN_SOURCE` are
-mainly for the SANE fallback backend. The web UI shows a short explanation beneath every mode
-setting.
+mainly for the SANE fallback backend. Wi-Fi preset summaries report the actual fixed 300 dpi RGB
+color acquisition, and the editor explains that simplex keeps the front pages after both sides are
+transferred. Saved resolution and color values remain available for SANE. See the
+[implemented Wi-Fi capabilities](protocol.md#implemented-wi-fi-capabilities) for the complete
+description.
 
 Older `.scanner-settings.json` files that contain `SCAN_OCR_CPU_LIMIT` or `SCAN_OCR_NICE` inside a
 preset remain readable. Those legacy per-preset values are ignored when a scan starts; saving a
